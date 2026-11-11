@@ -1,0 +1,219 @@
+{
+  "id": "devops-cicd",
+  "title": "DevOps, Cloud-Native CI/CD & DORA Delivery Excellence",
+  "category": "Kubernetes & CNCF",
+  "trackId": "track-k8s-admin",
+  "version": "1.0.0",
+  "difficulty": "Intermediate",
+  "estimatedHours": 7,
+  "summary": "Build cloud-native CI/CD pipelines, execute zero-downtime rolling updates and rollbacks, and optimize Elite DORA engineering metrics.",
+  "prerequisites": ["containers-runtime", "kubernetes-core"],
+  "learningObjectives": [
+    "Execute controlled zero-downtime rolling image updates and instant rollbacks on Kubernetes Deployments.",
+    "Provision ephemeral Kubernetes-native CI runner workloads.",
+    "Measure and optimize the four DORA metrics (Deployment Frequency, Lead Time, Change Failure Rate, MTTR)."
+  ],
+  "curriculumModules": [
+    {
+      "id": "mod-cicd-01",
+      "title": "Immutable Artifact Promotion & Zero-Downtime Rolling Updates",
+      "conceptSummary": "Build container images once at commit SHA, scan and sign them, and promote the identical digest across Dev -> Staging -> Production using `RollingUpdate` maxSurge/maxUnavailable.",
+      "productionArchitecturePattern": "Configure `maxUnavailable: 0` and `maxSurge: 25%` with a `readinessProbe` so old pods are never terminated until new pods pass health checks.",
+      "keyCommands": [
+        "kubectl set image deployment/<name> <container>=<image>",
+        "kubectl rollout status deployment/<name>",
+        "kubectl rollout undo deployment/<name>"
+      ]
+    },
+    {
+      "id": "mod-cicd-02",
+      "title": "DORA Metrics & Ephemeral Kubernetes CI Runners",
+      "conceptSummary": "Elite engineering teams measure Lead Time for Changes, Deployment Frequency, Change Failure Rate, and Mean Time to Recovery (MTTR) using ephemeral Kubernetes runner pods.",
+      "productionArchitecturePattern": "Run self-hosted GitHub Actions Runner Controller (ARC) or Tekton Pipelines in an isolated namespace with rootless buildkit builds.",
+      "keyCommands": [
+        "kubectl get pods -n production",
+        "cosign verify"
+      ]
+    }
+  ],
+  "labs": [
+    {
+      "id": "lab-cicd-01",
+      "title": "Zero-Downtime Rolling Release & Artifact Verification",
+      "difficulty": "Intermediate",
+      "durationMinutes": 20,
+      "xpReward": 175,
+      "scenario": "Promote release `ghcr.io/kubelabs/frontend:v2.5.0` to the `web-frontend` deployment in `production` and verify its cryptographic signature.",
+      "productionContext": "Every production deployment should verify image signatures (`cosign`) and confirm rollout completion across all replicas.",
+      "prerequisites": ["lab-k8s-01"],
+      "objectives": [
+        "Verify the artifact signature using `cosign verify`",
+        "Update `deployment/web-frontend` container `web` to `ghcr.io/kubelabs/frontend:v2.5.0` in `production`"
+      ],
+      "initialClusterState": {
+        "resources": [
+          {
+            "apiVersion": "apps/v1",
+            "kind": "Deployment",
+            "metadata": { "name": "web-frontend", "namespace": "production" },
+            "spec": {
+              "replicas": 3,
+              "selector": { "matchLabels": { "app": "web-frontend" } },
+              "template": {
+                "metadata": { "labels": { "app": "web-frontend" } },
+                "spec": {
+                  "containers": [
+                    { "name": "web", "image": "ghcr.io/kubelabs/frontend:v2.4.0" }
+                  ]
+                }
+              }
+            }
+          }
+        ]
+      },
+      "starterManifest": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: web-frontend\n  namespace: production\nspec:\n  replicas: 3\n  selector:\n    matchLabels:\n      app: web-frontend\n  template:\n    metadata:\n      labels:\n        app: web-frontend\n    spec:\n      containers:\n        - name: web\n          image: ghcr.io/kubelabs/frontend:v2.5.0",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Verify OCI Image Signature",
+          "instruction": "Run `cosign verify ghcr.io/kubelabs/frontend:v2.5.0` to verify SLSA provenance.",
+          "commandHint": "cosign verify ghcr.io/kubelabs/frontend:v2.5.0"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Promote Image to Production Deployment",
+          "instruction": "Update `deployment/web-frontend` container `web` to `ghcr.io/kubelabs/frontend:v2.5.0` in `production`.",
+          "commandHint": "kubectl set image deployment/web-frontend web=ghcr.io/kubelabs/frontend:v2.5.0 -n production"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "val-cicd-01-a",
+          "description": "Verified artifact signature with cosign",
+          "type": "command_executed",
+          "commandSubstring": "cosign verify",
+          "remediation": "Run `cosign verify ghcr.io/kubelabs/frontend:v2.5.0`."
+        },
+        {
+          "id": "val-cicd-01-b",
+          "description": "Deployment production/web-frontend updated to ghcr.io/kubelabs/frontend:v2.5.0",
+          "type": "resource_field_equals",
+          "kind": "Deployment",
+          "name": "web-frontend",
+          "namespace": "production",
+          "fieldPath": "spec.template.spec.containers[0].image",
+          "expectedValue": "ghcr.io/kubelabs/frontend:v2.5.0",
+          "remediation": "Run `kubectl set image deployment/web-frontend web=ghcr.io/kubelabs/frontend:v2.5.0 -n production`."
+        }
+      ],
+      "solutionCommands": [
+        "cosign verify ghcr.io/kubelabs/frontend:v2.5.0",
+        "kubectl set image deployment/web-frontend web=ghcr.io/kubelabs/frontend:v2.5.0 -n production"
+      ],
+      "troubleshootingGuide": "Check `kubectl rollout status deployment/web-frontend -n production`."
+    },
+    {
+      "id": "lab-cicd-02",
+      "title": "Emergency Rollback of Defective Production Deployment",
+      "difficulty": "Intermediate",
+      "durationMinutes": 15,
+      "xpReward": 175,
+      "scenario": "A defective release (`ghcr.io/kubelabs/cart:v3.0-broken`) was pushed to `cart-service` in `production`. Execute an immediate rollback to restore service health.",
+      "productionContext": "Minimizing Mean Time to Recovery (MTTR) requires immediate rollback via `kubectl rollout undo` when a bad release slips into production.",
+      "prerequisites": ["lab-cicd-01"],
+      "objectives": [
+        "Roll back `deployment/cart-service` in `production` using `kubectl rollout undo`",
+        "Verify all `cart-service` pods return to `Running` state"
+      ],
+      "initialClusterState": {
+        "resources": [
+          {
+            "apiVersion": "apps/v1",
+            "kind": "Deployment",
+            "metadata": { "name": "cart-service", "namespace": "production" },
+            "spec": {
+              "replicas": 2,
+              "selector": { "matchLabels": { "app": "cart-service" } },
+              "template": {
+                "metadata": { "labels": { "app": "cart-service" } },
+                "spec": {
+                  "containers": [
+                    { "name": "cart", "image": "ghcr.io/kubelabs/cart:v3.0-broken" }
+                  ]
+                }
+              }
+            }
+          }
+        ]
+      },
+      "starterManifest": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: cart-service\n  namespace: production\nspec:\n  replicas: 2\n  selector:\n    matchLabels:\n      app: cart-service\n  template:\n    metadata:\n      labels:\n        app: cart-service\n    spec:\n      containers:\n        - name: cart\n          image: ghcr.io/kubelabs/cart:v3.0-stable",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Observe Broken Rollout",
+          "instruction": "Run `kubectl get pods -n production` to see `cart-service` failing.",
+          "commandHint": "kubectl get pods -n production"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Rollback to Previous Stable Revision",
+          "instruction": "Execute `kubectl rollout undo deployment/cart-service -n production`.",
+          "commandHint": "kubectl rollout undo deployment/cart-service -n production"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "val-cicd-02-a",
+          "description": "Deployment production/cart-service rolled back to stable image",
+          "type": "resource_field_equals",
+          "kind": "Deployment",
+          "name": "cart-service",
+          "namespace": "production",
+          "fieldPath": "spec.template.spec.containers[0].image",
+          "expectedValue": "ghcr.io/kubelabs/cart:v3.0-stable",
+          "remediation": "Run `kubectl rollout undo deployment/cart-service -n production`."
+        },
+        {
+          "id": "val-cicd-02-b",
+          "description": "All cart-service pods are Running",
+          "type": "pod_status_running",
+          "kind": "Pod",
+          "name": "cart-service",
+          "namespace": "production",
+          "remediation": "Confirm pods are Running after rollback."
+        }
+      ],
+      "solutionCommands": [
+        "kubectl rollout undo deployment/cart-service -n production"
+      ],
+      "troubleshootingGuide": "Run `kubectl rollout undo deployment/cart-service -n production` and verify with `kubectl get pods -n production`."
+    }
+  ],
+  "assessmentQuestions": [
+    {
+      "id": "q-cicd-01",
+      "question": "Which four metrics constitute the standard DORA software delivery performance metrics?",
+      "options": [
+        "Lines of Code, Story Points, Sprint Velocity, Bug Count",
+        "Deployment Frequency, Lead Time for Changes, Change Failure Rate, Mean Time to Recovery (MTTR)",
+        "CPU Usage, Memory Usage, Disk IOPS, Network Bandwidth",
+        "Number of Microservices, Number of Clusters, Number of Engineers, Cloud Spend"
+      ],
+      "correctIndex": 1,
+      "explanation": "DORA research established Deployment Frequency, Lead Time for Changes, Change Failure Rate, and Time to Restore Service (MTTR) as the four key indicators of software delivery performance."
+    },
+    {
+      "id": "q-cicd-02",
+      "question": "Which RollingUpdate settings ensure zero capacity loss during a deployment upgrade?",
+      "options": [
+        "maxUnavailable: 100%, maxSurge: 0%",
+        "maxUnavailable: 0, maxSurge: 25% (paired with a readinessProbe)",
+        "strategy.type: Recreate",
+        "terminationGracePeriodSeconds: 0"
+      ],
+      "correctIndex": 1,
+      "explanation": "Setting `maxUnavailable: 0` with positive `maxSurge` guarantees old pods remain serving traffic until newly surged pods pass their `readinessProbe`."
+    }
+  ]
+}
+

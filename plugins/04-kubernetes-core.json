@@ -1,0 +1,204 @@
+{
+  "id": "kubernetes-core",
+  "title": "Kubernetes Core Architecture, Workloads & RBAC",
+  "category": "Kubernetes & CNCF",
+  "trackId": "track-k8s-admin",
+  "version": "1.0.0",
+  "difficulty": "Intermediate",
+  "estimatedHours": 12,
+  "summary": "Master control plane components (apiserver, etcd, scheduler, controller-manager), Deployments, StatefulSets, ConfigMaps, Secrets, Probes, Scaling, and RBAC.",
+  "prerequisites": ["containers-runtime", "cloud-networking"],
+  "learningObjectives": [
+    "Deploy, scale, and roll out high-availability multi-replica Deployments with zero downtime.",
+    "Configure least-privilege Role-Based Access Control (ServiceAccount, Role, RoleBinding).",
+    "Manage workload configuration via ConfigMaps, Secrets, and resource requests/limits."
+  ],
+  "curriculumModules": [
+    {
+      "id": "mod-k8s-01",
+      "title": "Control Plane Reconciliation & Workload Controllers",
+      "conceptSummary": "kube-apiserver is the sole component talking to etcd. Controllers watch API state and reconcile desired state: Deployment manages ReplicaSets, which manage Pods scheduled by kube-scheduler.",
+      "productionArchitecturePattern": "Always run stateless services with `replicas >= 3` spread across availability zones, paired with readinessProbes and CPU/Memory requests.",
+      "keyCommands": [
+        "kubectl create deployment",
+        "kubectl scale deployment",
+        "kubectl rollout status"
+      ]
+    },
+    {
+      "id": "mod-k8s-02",
+      "title": "Kubernetes RBAC Least-Privilege Authorization",
+      "conceptSummary": "Kubernetes has no static user objects; it binds Subjects (User, Group, ServiceAccount) to Roles (namespace-scoped) or ClusterRoles (cluster-wide) via RoleBindings.",
+      "productionArchitecturePattern": "Disable `automountServiceAccountToken` by default and grant each workload a dedicated `ServiceAccount` bound to a namespace-scoped `Role`.",
+      "keyCommands": [
+        "kubectl create serviceaccount",
+        "kubectl create role",
+        "kubectl create rolebinding",
+        "kubectl auth can-i"
+      ]
+    }
+  ],
+  "labs": [
+    {
+      "id": "lab-k8s-01",
+      "title": "High-Availability Deployment Scaling & Service Exposure",
+      "difficulty": "Beginner",
+      "durationMinutes": 20,
+      "xpReward": 175,
+      "scenario": "Your e-commerce platform is preparing for a flash sale. Deploy `payments-api` in `production`, scale it to 3 replicas for multi-AZ resilience, and expose it on port 8080.",
+      "productionContext": "Production tiers require at least 3 replicas across zones and a backing Service to survive single-node failures without dropping requests.",
+      "prerequisites": ["lab-net-01"],
+      "objectives": [
+        "Create deployment `payments-api` in `production` using image `nginx:1.27-alpine`",
+        "Scale `payments-api` to 3 replicas in `production`",
+        "Expose `payments-api` as a Service on port 8080 in `production`"
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: payments-api\n  namespace: production\nspec:\n  replicas: 3\n  selector:\n    matchLabels:\n      app: payments-api\n  template:\n    metadata:\n      labels:\n        app: payments-api\n    spec:\n      containers:\n        - name: payments-api\n          image: nginx:1.27-alpine",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Create Payments Deployment",
+          "instruction": "Create deployment `payments-api` in `production` with image `nginx:1.27-alpine`.",
+          "commandHint": "kubectl create deployment payments-api --image=nginx:1.27-alpine -n production"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Scale to 3 High-Availability Replicas",
+          "instruction": "Scale `deployment/payments-api` to 3 replicas in `production`.",
+          "commandHint": "kubectl scale deployment payments-api --replicas=3 -n production"
+        },
+        {
+          "stepNumber": 3,
+          "title": "Expose Payments Service on Port 8080",
+          "instruction": "Expose `deployment/payments-api` as a ClusterIP service on port 8080 in `production`.",
+          "commandHint": "kubectl expose deployment payments-api --port=8080 -n production"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "val-k8s-01-a",
+          "description": "Deployment production/payments-api has at least 3 ready replicas",
+          "type": "replica_count_min",
+          "kind": "Deployment",
+          "name": "payments-api",
+          "namespace": "production",
+          "expectedValue": 3,
+          "remediation": "Create and scale deployment payments-api to 3 replicas in namespace production."
+        },
+        {
+          "id": "val-k8s-01-b",
+          "description": "Service production/payments-api has 3 active endpoints",
+          "type": "service_has_endpoints",
+          "kind": "Service",
+          "name": "payments-api",
+          "namespace": "production",
+          "expectedValue": 3,
+          "remediation": "Run `kubectl expose deployment payments-api --port=8080 -n production`."
+        }
+      ],
+      "solutionCommands": [
+        "kubectl create deployment payments-api --image=nginx:1.27-alpine -n production",
+        "kubectl scale deployment payments-api --replicas=3 -n production",
+        "kubectl expose deployment payments-api --port=8080 -n production"
+      ],
+      "troubleshootingGuide": "Verify both `kubectl get deploy payments-api -n production` (3/3 READY) and `kubectl get svc payments-api -n production`."
+    },
+    {
+      "id": "lab-k8s-02",
+      "title": "Configuring Least-Privilege RBAC (ServiceAccount, Role & RoleBinding)",
+      "difficulty": "Intermediate",
+      "durationMinutes": 25,
+      "xpReward": 200,
+      "scenario": "An internal diagnostics pod in `production` needs read-only access to inspect pods without using the default cluster-admin credentials.",
+      "productionContext": "CIS Kubernetes Benchmark Section 5.1 mandates dedicated ServiceAccounts with minimal namespace-scoped Role permissions.",
+      "prerequisites": ["lab-k8s-01"],
+      "objectives": [
+        "Create ServiceAccount `diag-reader-sa` in `production`",
+        "Create Role `pod-reader-role` and RoleBinding `pod-reader-binding` in `production`"
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "apiVersion: v1\nkind: ServiceAccount\nmetadata:\n  name: diag-reader-sa\n  namespace: production\n---\napiVersion: rbac.authorization.k8s.io/v1\nkind: Role\nmetadata:\n  name: pod-reader-role\n  namespace: production\n---\napiVersion: rbac.authorization.k8s.io/v1\nkind: RoleBinding\nmetadata:\n  name: pod-reader-binding\n  namespace: production",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Create Dedicated ServiceAccount",
+          "instruction": "Create ServiceAccount `diag-reader-sa` in `production`.",
+          "commandHint": "kubectl create serviceaccount diag-reader-sa -n production"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Create Role and RoleBinding",
+          "instruction": "Create Role `pod-reader-role` and RoleBinding `pod-reader-binding` in `production`.",
+          "commandHint": "kubectl create role pod-reader-role -n production"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "val-k8s-02-a",
+          "description": "ServiceAccount production/diag-reader-sa exists",
+          "type": "resource_exists",
+          "kind": "ServiceAccount",
+          "name": "diag-reader-sa",
+          "namespace": "production",
+          "remediation": "Run `kubectl create serviceaccount diag-reader-sa -n production`."
+        },
+        {
+          "id": "val-k8s-02-b",
+          "description": "Role production/pod-reader-role exists",
+          "type": "resource_exists",
+          "kind": "Role",
+          "name": "pod-reader-role",
+          "namespace": "production",
+          "remediation": "Run `kubectl create role pod-reader-role -n production`."
+        },
+        {
+          "id": "val-k8s-02-c",
+          "description": "RoleBinding production/pod-reader-binding exists",
+          "type": "resource_exists",
+          "kind": "RoleBinding",
+          "name": "pod-reader-binding",
+          "namespace": "production",
+          "remediation": "Run `kubectl create rolebinding pod-reader-binding -n production`."
+        }
+      ],
+      "solutionCommands": [
+        "kubectl create serviceaccount diag-reader-sa -n production",
+        "kubectl create role pod-reader-role -n production",
+        "kubectl create rolebinding pod-reader-binding -n production"
+      ],
+      "troubleshootingGuide": "Ensure `diag-reader-sa`, `pod-reader-role`, and `pod-reader-binding` are all created inside namespace `production`."
+    }
+  ],
+  "assessmentQuestions": [
+    {
+      "id": "q-k8s-01",
+      "question": "Which Kubernetes control plane component is the ONLY service that communicates directly with the etcd key-value datastore?",
+      "options": [
+        "kube-scheduler",
+        "kube-apiserver",
+        "kube-controller-manager",
+        "kubelet"
+      ],
+      "correctIndex": 1,
+      "explanation": "Only kube-apiserver reads from and writes to etcd; all other components watch and mutate cluster state exclusively through kube-apiserver."
+    },
+    {
+      "id": "q-k8s-02",
+      "question": "What is the difference between a Kubernetes `Role` and a `ClusterRole`?",
+      "options": [
+        "A Role is scoped to a single namespace, whereas a ClusterRole can grant permissions across all namespaces or cluster-scoped resources",
+        "A Role only applies to human users, whereas a ClusterRole only applies to ServiceAccounts",
+        "A Role requires a restart of kube-apiserver to take effect",
+        "There is no difference; Role is just an alias for ClusterRole"
+      ],
+      "correctIndex": 0,
+      "explanation": "Roles are namespace-scoped RBAC definitions, whereas ClusterRoles define permissions for cluster-scoped objects (like Nodes) or across all namespaces."
+    }
+  ]
+}
+

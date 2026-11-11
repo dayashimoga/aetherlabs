@@ -1,0 +1,161 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kubelabs.io/schemas/plugin.schema.json",
+  "title": "KubeLabs Modular Curriculum & Lab Plugin Schema",
+  "type": "object",
+  "required": [
+    "id",
+    "title",
+    "category",
+    "trackId",
+    "version",
+    "difficulty",
+    "estimatedHours",
+    "summary",
+    "prerequisites",
+    "learningObjectives",
+    "curriculumModules",
+    "labs",
+    "assessmentQuestions"
+  ],
+  "properties": {
+    "id": { "type": "string", "pattern": "^[a-z0-9-]+$" },
+    "title": { "type": "string", "minLength": 5 },
+    "category": { "type": "string" },
+    "trackId": { "type": "string" },
+    "version": { "type": "string" },
+    "difficulty": { "enum": ["Beginner", "Intermediate", "Advanced", "Principal"] },
+    "estimatedHours": { "type": "number", "minimum": 1 },
+    "summary": { "type": "string", "minLength": 20 },
+    "prerequisites": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "learningObjectives": {
+      "type": "array",
+      "minItems": 3,
+      "items": { "type": "string", "minLength": 10 }
+    },
+    "curriculumModules": {
+      "type": "array",
+      "minItems": 2,
+      "items": {
+        "type": "object",
+        "required": ["id", "title", "conceptSummary", "productionArchitecturePattern", "keyCommands"],
+        "properties": {
+          "id": { "type": "string" },
+          "title": { "type": "string" },
+          "conceptSummary": { "type": "string" },
+          "productionArchitecturePattern": { "type": "string" },
+          "keyCommands": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    "labs": {
+      "type": "array",
+      "minItems": 2,
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "title",
+          "difficulty",
+          "durationMinutes",
+          "xpReward",
+          "scenario",
+          "productionContext",
+          "prerequisites",
+          "objectives",
+          "initialClusterState",
+          "starterManifest",
+          "steps",
+          "validationRules",
+          "solutionCommands",
+          "troubleshootingGuide"
+        ],
+        "properties": {
+          "id": { "type": "string" },
+          "title": { "type": "string" },
+          "difficulty": { "type": "string" },
+          "durationMinutes": { "type": "number" },
+          "xpReward": { "type": "number" },
+          "scenario": { "type": "string" },
+          "productionContext": { "type": "string" },
+          "prerequisites": { "type": "array", "items": { "type": "string" } },
+          "objectives": { "type": "array", "minItems": 2, "items": { "type": "string" } },
+          "initialClusterState": { "type": "object" },
+          "starterManifest": { "type": "string" },
+          "steps": {
+            "type": "array",
+            "minItems": 2,
+            "items": {
+              "type": "object",
+              "required": ["stepNumber", "title", "instruction", "commandHint"],
+              "properties": {
+                "stepNumber": { "type": "number" },
+                "title": { "type": "string" },
+                "instruction": { "type": "string" },
+                "commandHint": { "type": "string" }
+              }
+            }
+          },
+          "validationRules": {
+            "type": "array",
+            "minItems": 2,
+            "items": {
+              "type": "object",
+              "required": ["id", "description", "type", "remediation"],
+              "properties": {
+                "id": { "type": "string" },
+                "description": { "type": "string" },
+                "type": {
+                  "enum": [
+                    "resource_exists",
+                    "resource_field_equals",
+                    "resource_field_contains",
+                    "pod_status_running",
+                    "service_has_endpoints",
+                    "replica_count_min",
+                    "command_executed",
+                    "cloud_resource_exists",
+                    "helm_release_deployed",
+                    "argocd_app_synced"
+                  ]
+                },
+                "kind": { "type": "string" },
+                "name": { "type": "string" },
+                "namespace": { "type": "string" },
+                "fieldPath": { "type": "string" },
+                "expectedValue": {},
+                "commandSubstring": { "type": "string" },
+                "remediation": { "type": "string" }
+              }
+            }
+          },
+          "solutionCommands": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "type": "string" }
+          },
+          "troubleshootingGuide": { "type": "string" }
+        }
+      }
+    },
+    "assessmentQuestions": {
+      "type": "array",
+      "minItems": 2,
+      "items": {
+        "type": "object",
+        "required": ["id", "question", "options", "correctIndex", "explanation"],
+        "properties": {
+          "id": { "type": "string" },
+          "question": { "type": "string" },
+          "options": { "type": "array", "minItems": 4, "items": { "type": "string" } },
+          "correctIndex": { "type": "number", "minimum": 0, "maximum": 3 },
+          "explanation": { "type": "string" }
+        }
+      }
+    }
+  }
+}
+

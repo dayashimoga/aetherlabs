@@ -1,0 +1,37 @@
+{
+  "name": "kubelabs",
+  "version": "1.0.0",
+  "description": "Standalone, low-resource, cross-platform Learn-by-Doing Kubernetes, CNCF, DevSecOps, SRE, Platform Engineering, Multi-Cloud & AI-Ops Lab Platform",
+  "main": "src/server.js",
+  "bin": {
+    "kubelabs": "./src/server.js"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test tests/kubelabs.test.js",
+    "audit:self": "node scripts/self-audit.js",
+    "verify:subphases": "node scripts/verify-subphases.js"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "keywords": [
+    "kubernetes",
+    "cncf",
+    "gitops",
+    "devsecops",
+    "sre",
+    "platform-engineering",
+    "service-mesh",
+    "opentofu",
+    "terraform",
+    "aws",
+    "azure",
+    "gcp",
+    "aiops",
+    "interactive-labs"
+  ],
+  "license": "Apache-2.0",
+  "dependencies": {}
+}
+

@@ -1,0 +1,218 @@
+{
+  "id": "sre-incident-chaos",
+  "title": "Site Reliability Engineering (SRE), SLOs & Chaos Engineering",
+  "category": "SRE & Observability",
+  "trackId": "track-sre",
+  "version": "1.0.0",
+  "difficulty": "Advanced",
+  "estimatedHours": 10,
+  "summary": "Master SLIs/SLOs, Error Budgets, CrashLoopBackOff root-cause debugging, HorizontalPodAutoscalers, and Chaos Engineering resilience validation.",
+  "prerequisites": ["observability-stack", "kubernetes-core"],
+  "learningObjectives": [
+    "Diagnose and recover workloads stuck in CrashLoopBackOff or CreateContainerConfigError.",
+    "Configure HorizontalPodAutoscalers (HPA) to elastically absorb traffic spikes.",
+    "Apply SLI/SLO error budget policies and lead blameless incident response."
+  ],
+  "curriculumModules": [
+    {
+      "id": "mod-sre-01",
+      "title": "SLIs, SLOs, Error Budgets & Burn-Rate Alerting",
+      "conceptSummary": "An SLI is a quantitative measure of service quality (e.g. proportion of HTTP 2xx/3xx responses < 200ms). An SLO is the target (e.g. 99.9%), leaving a 0.1% Error Budget (43.2 minutes/month) for innovation and velocity.",
+      "productionArchitecturePattern": "Use multi-window, multi-burn-rate alerts (e.g. 2% budget consumed in 1 hour) to page on-call engineers only when the SLO is genuinely threatened.",
+      "keyCommands": [
+        "kubectl logs <pod> -n production",
+        "kubectl describe pod <pod> -n production"
+      ]
+    },
+    {
+      "id": "mod-sre-02",
+      "title": "Elastic Autoscaling (HPA) & Chaos Engineering",
+      "conceptSummary": "HorizontalPodAutoscaler scales replica counts dynamically based on CPU, memory, or custom Prometheus metrics, while Chaos Engineering proactively injects faults to verify self-healing.",
+      "productionArchitecturePattern": "Combine HPA (`minReplicas >= 2`) with PodDisruptionBudgets (`minAvailable: 50%`) so node drains and chaos experiments never cause outages.",
+      "keyCommands": [
+        "kubectl autoscale deployment <name> --min=2 --max=10 --cpu-percent=70 -n production",
+        "kubectl get hpa -n production"
+      ]
+    }
+  ],
+  "labs": [
+    {
+      "id": "lab-sre-01",
+      "title": "CrashLoopBackOff Root-Cause Debugging & Recovery",
+      "difficulty": "Advanced",
+      "durationMinutes": 25,
+      "xpReward": 225,
+      "scenario": "Critical deployment `order-processor` in `production` is failing in `CrashLoopBackOff` because environment variable `CRASH_ON_START` was set to `true`. Remediate the environment variable so all pods recover.",
+      "productionContext": "Misconfigured environment flags or feature toggles are among the top causes of production CrashLoopBackOff incidents.",
+      "prerequisites": ["lab-obs-01"],
+      "objectives": [
+        "Inspect logs or pod state for `order-processor` in `production`",
+        "Set `CRASH_ON_START=false` on `deployment/order-processor` in `production` so pods enter `Running` state"
+      ],
+      "initialClusterState": {
+        "resources": [
+          {
+            "apiVersion": "apps/v1",
+            "kind": "Deployment",
+            "metadata": { "name": "order-processor", "namespace": "production" },
+            "spec": {
+              "replicas": 2,
+              "selector": { "matchLabels": { "app": "order-processor" } },
+              "template": {
+                "metadata": { "labels": { "app": "order-processor" } },
+                "spec": {
+                  "containers": [
+                    {
+                      "name": "processor",
+                      "image": "ghcr.io/kubelabs/order-processor:v1.9.0",
+                      "env": [{ "name": "CRASH_ON_START", "value": "true" }]
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        ]
+      },
+      "starterManifest": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: order-processor\n  namespace: production\nspec:\n  replicas: 2\n  selector:\n    matchLabels:\n      app: order-processor\n  template:\n    metadata:\n      labels:\n        app: order-processor\n    spec:\n      containers:\n        - name: processor\n          image: ghcr.io/kubelabs/order-processor:v1.9.0\n          env:\n            - name: CRASH_ON_START\n              value: \"false\"",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Inspect Failing Pods",
+          "instruction": "Run `kubectl get pods -n production` to confirm `order-processor` is in `CrashLoopBackOff`.",
+          "commandHint": "kubectl get pods -n production"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Fix Environment Variable",
+          "instruction": "Update `CRASH_ON_START=false` on `deployment/order-processor` in `production`.",
+          "commandHint": "kubectl set env deployment/order-processor CRASH_ON_START=false -n production"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "val-sre-01-a",
+          "description": "Environment variable CRASH_ON_START set to false",
+          "type": "resource_field_equals",
+          "kind": "Deployment",
+          "name": "order-processor",
+          "namespace": "production",
+          "fieldPath": "spec.template.spec.containers[0].env[0].value",
+          "expectedValue": "false",
+          "remediation": "Run `kubectl set env deployment/order-processor CRASH_ON_START=false -n production`."
+        },
+        {
+          "id": "val-sre-01-b",
+          "description": "All order-processor pods are Running",
+          "type": "pod_status_running",
+          "kind": "Pod",
+          "name": "order-processor",
+          "namespace": "production",
+          "remediation": "Verify pods recover from CrashLoopBackOff to Running."
+        }
+      ],
+      "solutionCommands": [
+        "kubectl set env deployment/order-processor CRASH_ON_START=false -n production"
+      ],
+      "troubleshootingGuide": "Run `kubectl set env deployment/order-processor CRASH_ON_START=false -n production` and verify with `kubectl get pods -n production`."
+    },
+    {
+      "id": "lab-sre-02",
+      "title": "Configuring HorizontalPodAutoscaler for Elastic Resilience",
+      "difficulty": "Intermediate",
+      "durationMinutes": 20,
+      "xpReward": 200,
+      "scenario": "Configure an `HorizontalPodAutoscaler` for `api-gateway` in `production` scaling between `min=3` and `max=12` replicas at `70%` CPU utilization.",
+      "productionContext": "Elastic autoscaling prevents saturation cascading failures during unexpected traffic surges.",
+      "prerequisites": ["lab-sre-01"],
+      "objectives": [
+        "Configure `HorizontalPodAutoscaler` `api-gateway` in `production` with `minReplicas: 3` and `maxReplicas: 12`"
+      ],
+      "initialClusterState": {
+        "resources": [
+          {
+            "apiVersion": "apps/v1",
+            "kind": "Deployment",
+            "metadata": { "name": "api-gateway", "namespace": "production" },
+            "spec": {
+              "replicas": 3,
+              "selector": { "matchLabels": { "app": "api-gateway" } },
+              "template": {
+                "metadata": { "labels": { "app": "api-gateway" } },
+                "spec": { "containers": [{ "name": "gateway", "image": "nginx:1.27-alpine" }] }
+              }
+            }
+          }
+        ]
+      },
+      "starterManifest": "apiVersion: autoscaling/v2\nkind: HorizontalPodAutoscaler\nmetadata:\n  name: api-gateway\n  namespace: production\nspec:\n  scaleTargetRef:\n    kind: Deployment\n    name: api-gateway\n  minReplicas: 3\n  maxReplicas: 12\n  targetCPUUtilizationPercentage: 70",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Autoscale API Gateway Deployment",
+          "instruction": "Run `kubectl autoscale deployment api-gateway --min=3 --max=12 --cpu-percent=70 -n production`.",
+          "commandHint": "kubectl autoscale deployment api-gateway --min=3 --max=12 --cpu-percent=70 -n production"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Verify HPA Resource",
+          "instruction": "Verify the HPA resource in `production`.",
+          "commandHint": "kubectl get hpa -n production"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "val-sre-02-a",
+          "description": "HorizontalPodAutoscaler production/api-gateway exists",
+          "type": "resource_exists",
+          "kind": "HorizontalPodAutoscaler",
+          "name": "api-gateway",
+          "namespace": "production",
+          "remediation": "Run `kubectl autoscale deployment api-gateway --min=3 --max=12 --cpu-percent=70 -n production`."
+        },
+        {
+          "id": "val-sre-02-b",
+          "description": "HPA maxReplicas is set to 12",
+          "type": "resource_field_equals",
+          "kind": "HorizontalPodAutoscaler",
+          "name": "api-gateway",
+          "namespace": "production",
+          "fieldPath": "spec.maxReplicas",
+          "expectedValue": 12,
+          "remediation": "Ensure `--max=12` is set when autoscaling `api-gateway`."
+        }
+      ],
+      "solutionCommands": [
+        "kubectl autoscale deployment api-gateway --min=3 --max=12 --cpu-percent=70 -n production"
+      ],
+      "troubleshootingGuide": "Check `kubectl describe hpa api-gateway -n production` to confirm `minReplicas: 3` and `maxReplicas: 12`."
+    }
+  ],
+  "assessmentQuestions": [
+    {
+      "id": "q-sre-01",
+      "question": "If a service has a 99.9% monthly availability SLO, approximately how much total downtime (Error Budget) is permitted per 30-day month?",
+      "options": [
+        "43.2 minutes",
+        "7.2 hours",
+        "3.6 seconds",
+        "24 hours"
+      ],
+      "correctIndex": 0,
+      "explanation": "0.1% of 30 days (43,200 minutes) equals 43.2 minutes of allowable error budget per month."
+    },
+    {
+      "id": "q-sre-02",
+      "question": "What is the primary goal of a Blameless Postmortem in Site Reliability Engineering?",
+      "options": [
+        "Identifying which individual engineer to penalize for an outage",
+        "Uncovering systemic contributing factors, improving automated guardrails, and preventing recurrence without fear of punishment",
+        "Hiding outage details from executive leadership",
+        "Deleting logs after an incident is resolved"
+      ],
+      "correctIndex": 1,
+      "explanation": "Blameless postmortems focus on systemic architecture, tooling, and process improvements rather than individual blame, encouraging transparent reporting."
+    }
+  ]
+}
+

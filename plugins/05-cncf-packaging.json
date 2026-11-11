@@ -1,0 +1,182 @@
+{
+  "id": "cncf-packaging",
+  "title": "CNCF Ecosystem: Helm, Kustomize & Kubernetes Operators",
+  "category": "Kubernetes & CNCF",
+  "trackId": "track-k8s-admin",
+  "version": "1.0.0",
+  "difficulty": "Intermediate",
+  "estimatedHours": 8,
+  "summary": "Standardize application packaging with Helm v3 charts, Kustomize overlays, CustomResourceDefinitions (CRDs), and Kubernetes Operators.",
+  "prerequisites": ["kubernetes-core"],
+  "learningObjectives": [
+    "Install, upgrade, list, and roll back production Helm chart releases across namespaces.",
+    "Understand the Operator pattern combining CustomResourceDefinitions (CRDs) with custom reconciliation controllers.",
+    "Manage environment-specific configuration without template sprawl."
+  ],
+  "curriculumModules": [
+    {
+      "id": "mod-cncf-01",
+      "title": "Helm v3 Architecture & Release Lifecycle",
+      "conceptSummary": "Helm v3 is a client-side package manager that renders Go templates with `values.yaml` and stores release state as Secrets inside the target namespace.",
+      "productionArchitecturePattern": "Store verified Helm charts as OCI artifacts in a container registry and pin exact chart versions in GitOps manifests.",
+      "keyCommands": [
+        "helm install <release> <chart> -n <ns>",
+        "helm upgrade <release> <chart> -n <ns>",
+        "helm list -n <ns>",
+        "helm rollback <release>"
+      ]
+    },
+    {
+      "id": "mod-cncf-02",
+      "title": "CustomResourceDefinitions (CRDs) & The Operator Pattern",
+      "conceptSummary": "Operators encode domain-specific operational knowledge (backups, failover, schema migrations) into a Kubernetes controller watching custom API resources.",
+      "productionArchitecturePattern": "Use CNCF Operators (CloudNativePG, Strimzi Kafka, Prometheus Operator) to automate Day-2 stateful lifecycle management.",
+      "keyCommands": [
+        "kubectl get postgresinstances -A",
+        "kubectl describe postgresinstance"
+      ]
+    }
+  ],
+  "labs": [
+    {
+      "id": "lab-cncf-01",
+      "title": "Deploying & Upgrading Production Workloads with Helm v3",
+      "difficulty": "Intermediate",
+      "durationMinutes": 20,
+      "xpReward": 175,
+      "scenario": "Package and deploy the `ingress-gateway` release into the `production` namespace using Helm v3.",
+      "productionContext": "Helm standardizes third-party and internal microservice releases with atomic upgrades and instant revision rollback.",
+      "prerequisites": ["lab-k8s-01"],
+      "objectives": [
+        "Install Helm release `ingress-gateway` using chart `bitnami/nginx` in namespace `production`",
+        "Verify the backing `ingress-gateway` Deployment is running in `production`"
+      ],
+      "initialClusterState": {
+        "resources": [],
+        "helmReleases": []
+      },
+      "starterManifest": "# Helm Values Override\nreplicaCount: 2\nimage:\n  repository: nginx\n  tag: 1.27-alpine",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Install Helm Release in Production",
+          "instruction": "Run `helm install ingress-gateway bitnami/nginx -n production` to deploy the chart.",
+          "commandHint": "helm install ingress-gateway bitnami/nginx -n production"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Verify Helm Release Status",
+          "instruction": "Run `helm list -n production` to confirm the release status is `deployed`.",
+          "commandHint": "helm list -n production"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "val-cncf-01-a",
+          "description": "Helm release ingress-gateway is deployed",
+          "type": "helm_release_deployed",
+          "name": "ingress-gateway",
+          "namespace": "production",
+          "remediation": "Run `helm install ingress-gateway bitnami/nginx -n production`."
+        },
+        {
+          "id": "val-cncf-01-b",
+          "description": "Backing Deployment production/ingress-gateway is Running",
+          "type": "pod_status_running",
+          "kind": "Pod",
+          "name": "ingress-gateway",
+          "namespace": "production",
+          "remediation": "Ensure helm install created and reconciled the ingress-gateway deployment."
+        }
+      ],
+      "solutionCommands": [
+        "helm install ingress-gateway bitnami/nginx -n production"
+      ],
+      "troubleshootingGuide": "Run `helm list` to verify the release name is `ingress-gateway` and status is `deployed`."
+    },
+    {
+      "id": "lab-cncf-02",
+      "title": "Operator Reconciliation with Custom Resources",
+      "difficulty": "Intermediate",
+      "durationMinutes": 25,
+      "xpReward": 200,
+      "scenario": "Provision a managed database cluster in `production` by creating a `PostgresInstance` custom resource named `orders-ha-cluster`.",
+      "productionContext": "Database Operators watch Custom Resources (`PostgresInstance`) and automatically reconcile the underlying StatefulSet, Pods, and ClusterIP Services.",
+      "prerequisites": ["lab-cncf-01"],
+      "objectives": [
+        "Create `PostgresInstance` custom resource `orders-ha-cluster` in `production`",
+        "Verify the operator automatically reconciles Service `orders-ha-cluster-db` in `production`"
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "apiVersion: database.kubelabs.io/v1alpha1\nkind: PostgresInstance\nmetadata:\n  name: orders-ha-cluster\n  namespace: production\nspec:\n  storageGB: 100\n  highAvailability: true",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Create PostgresInstance Custom Resource",
+          "instruction": "Create `PostgresInstance` named `orders-ha-cluster` in `production`.",
+          "commandHint": "kubectl create postgresinstance orders-ha-cluster -n production"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Verify Operator-Reconciled Database Service",
+          "instruction": "Check that the Operator created Service `orders-ha-cluster-db` in `production`.",
+          "commandHint": "kubectl get svc orders-ha-cluster-db -n production"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "val-cncf-02-a",
+          "description": "Custom Resource PostgresInstance production/orders-ha-cluster exists",
+          "type": "resource_exists",
+          "kind": "PostgresInstance",
+          "name": "orders-ha-cluster",
+          "namespace": "production",
+          "remediation": "Run `kubectl create postgresinstance orders-ha-cluster -n production`."
+        },
+        {
+          "id": "val-cncf-02-b",
+          "description": "Operator reconciled Service production/orders-ha-cluster-db with active endpoint",
+          "type": "service_has_endpoints",
+          "kind": "Service",
+          "name": "orders-ha-cluster-db",
+          "namespace": "production",
+          "expectedValue": 1,
+          "remediation": "Ensure PostgresInstance orders-ha-cluster is created in namespace production."
+        }
+      ],
+      "solutionCommands": [
+        "kubectl create postgresinstance orders-ha-cluster -n production"
+      ],
+      "troubleshootingGuide": "Run `kubectl get postgresinstance -n production` and `kubectl get svc -n production`."
+    }
+  ],
+  "assessmentQuestions": [
+    {
+      "id": "q-cncf-01",
+      "question": "Where does Helm v3 store release metadata by default inside a Kubernetes cluster?",
+      "options": [
+        "In a Tiller Pod running inside kube-system",
+        "As Kubernetes Secrets in the same namespace where the release is deployed",
+        "In a local SQLite file on the worker node",
+        "In CoreDNS TXT records"
+      ],
+      "correctIndex": 1,
+      "explanation": "Helm v3 removed Tiller and stores release history as base64+gzipped Secrets (`sh.helm.release.v1.<name>.v<rev>`) in the release's target namespace."
+    },
+    {
+      "id": "q-cncf-02",
+      "question": "What two components combine to form a Kubernetes Operator?",
+      "options": [
+        "An Ingress resource and a LoadBalancer Service",
+        "A CustomResourceDefinition (CRD) and a custom Controller running a reconciliation loop",
+        "A Dockerfile and a bash script",
+        "A ConfigMap and a Secret"
+      ],
+      "correctIndex": 1,
+      "explanation": "An Operator extends the Kubernetes API via a CRD and pairs it with a custom Controller that watches CRD instances and reconciles external or cluster state."
+    }
+  ]
+}
+

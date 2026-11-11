@@ -1,0 +1,182 @@
+{
+  "id": "wasm-ebpf-edge",
+  "title": "Emerging Tech: WebAssembly (Wasm), eBPF Tetragon & Edge K3s",
+  "category": "Emerging Technologies",
+  "trackId": "track-multicloud-aiops",
+  "version": "1.0.0",
+  "difficulty": "Principal",
+  "estimatedHours": 8,
+  "summary": "Run sub-millisecond WebAssembly (WASI/SpinKube) serverless workloads alongside OCI containers, enforce kernel-level eBPF security with Cilium Tetragon, and operate K3s edge fleets.",
+  "prerequisites": ["containers-runtime", "cloud-networking", "devsecops-security"],
+  "learningObjectives": [
+    "Deploy WebAssembly (Wasm) workloads on Kubernetes using RuntimeClass `wasmtime-spin`.",
+    "Enforce kernel-level eBPF process and network policies using Cilium Tetragon `TracingPolicy`.",
+    "Operate lightweight, low-footprint K3s/KubeEdge workloads for disconnected retail and IoT edge sites."
+  ],
+  "curriculumModules": [
+    {
+      "id": "mod-wasm-01",
+      "title": "WebAssembly on Kubernetes (SpinKube, containerd-shim-wasm & RuntimeClass)",
+      "conceptSummary": "WebAssembly (Wasm) modules cold-start in under 1 millisecond with a memory footprint measured in kilobytes. containerd-shim-wasm allows kubelet to schedule Wasm workloads natively via Kubernetes `RuntimeClass`.",
+      "productionArchitecturePattern": "Use `runtimeClassName: wasmtime-spin` for bursty, scale-to-zero edge and serverless HTTP workloads while keeping stateful databases in standard OCI containers.",
+      "keyCommands": [
+        "kubectl create deployment <name> --image=ghcr.io/spinkube/wasm-api:v1.0.0 -n production",
+        "kubectl patch deployment <name> -n production"
+      ]
+    },
+    {
+      "id": "mod-wasm-02",
+      "title": "eBPF Kernel Security Enforcement with Cilium Tetragon",
+      "conceptSummary": "Unlike user-space or asynchronous syscall monitors, Cilium Tetragon uses eBPF in-kernel LSM/kprobe hooks to block unauthorized binary execution or file access synchronously before the syscall completes.",
+      "productionArchitecturePattern": "Deploy Tetragon `TracingPolicy` resources to prevent container breakout attempts and block unexpected outbound raw socket connections in kernel space.",
+      "keyCommands": [
+        "kubectl create configmap tetragon-policy -n security"
+      ]
+    }
+  ],
+  "labs": [
+    {
+      "id": "lab-wasm-01",
+      "title": "Deploying Sub-Millisecond WebAssembly Workloads with RuntimeClass",
+      "difficulty": "Principal",
+      "durationMinutes": 20,
+      "xpReward": 250,
+      "scenario": "Deploy a high-density serverless WebAssembly microservice (`wasm-edge-fn`) in `production` and configure its Pod template to use `runtimeClassName: wasmtime-spin`.",
+      "productionContext": "Kubernetes `RuntimeClass` routes Wasm pods to the `containerd-shim-spin` runtime on worker nodes for sub-millisecond cold starts.",
+      "prerequisites": ["lab-containers-01"],
+      "objectives": [
+        "Create deployment `wasm-edge-fn` in `production` using image `ghcr.io/spinkube/wasm-api:v1.0.0`",
+        "Patch `deployment/wasm-edge-fn` in `production` so `spec.template.spec.runtimeClassName` is `wasmtime-spin`"
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: wasm-edge-fn\n  namespace: production\nspec:\n  replicas: 2\n  selector:\n    matchLabels:\n      app: wasm-edge-fn\n  template:\n    metadata:\n      labels:\n        app: wasm-edge-fn\n    spec:\n      runtimeClassName: wasmtime-spin\n      containers:\n        - name: wasm-fn\n          image: ghcr.io/spinkube/wasm-api:v1.0.0",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Create Wasm Edge Deployment",
+          "instruction": "Create deployment `wasm-edge-fn` in `production` with image `ghcr.io/spinkube/wasm-api:v1.0.0`.",
+          "commandHint": "kubectl create deployment wasm-edge-fn --image=ghcr.io/spinkube/wasm-api:v1.0.0 -n production"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Bind Wasm RuntimeClass",
+          "instruction": "Patch `deployment/wasm-edge-fn` in `production` with `{\"spec\":{\"template\":{\"spec\":{\"runtimeClassName\":\"wasmtime-spin\"}}}}`.",
+          "commandHint": "kubectl patch deployment wasm-edge-fn -n production -p '{\"spec\":{\"template\":{\"spec\":{\"runtimeClassName\":\"wasmtime-spin\"}}}}'"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "val-wasm-01-a",
+          "description": "Deployment production/wasm-edge-fn is Running",
+          "type": "pod_status_running",
+          "kind": "Pod",
+          "name": "wasm-edge-fn",
+          "namespace": "production",
+          "remediation": "Run `kubectl create deployment wasm-edge-fn --image=ghcr.io/spinkube/wasm-api:v1.0.0 -n production`."
+        },
+        {
+          "id": "val-wasm-01-b",
+          "description": "Deployment uses runtimeClassName=wasmtime-spin",
+          "type": "resource_field_equals",
+          "kind": "Deployment",
+          "name": "wasm-edge-fn",
+          "namespace": "production",
+          "fieldPath": "spec.template.spec.runtimeClassName",
+          "expectedValue": "wasmtime-spin",
+          "remediation": "Run `kubectl patch deployment wasm-edge-fn -n production -p '{\"spec\":{\"template\":{\"spec\":{\"runtimeClassName\":\"wasmtime-spin\"}}}}'`."
+        }
+      ],
+      "solutionCommands": [
+        "kubectl create deployment wasm-edge-fn --image=ghcr.io/spinkube/wasm-api:v1.0.0 -n production",
+        "kubectl patch deployment wasm-edge-fn -n production -p '{\"spec\":{\"template\":{\"spec\":{\"runtimeClassName\":\"wasmtime-spin\"}}}}'"
+      ],
+      "troubleshootingGuide": "Check `kubectl get deploy wasm-edge-fn -n production -o json` to verify `spec.template.spec.runtimeClassName` is `wasmtime-spin`."
+    },
+    {
+      "id": "lab-wasm-02",
+      "title": "Enforcing eBPF Kernel TracingPolicy with Cilium Tetragon",
+      "difficulty": "Principal",
+      "durationMinutes": 20,
+      "xpReward": 250,
+      "scenario": "Configure an eBPF kernel security policy ConfigMap `tetragon-ebpf-policy` in the `security` namespace with `enforcement=SIGKILL` to block unauthorized binary execution inside containers.",
+      "productionContext": "Cilium Tetragon enforces security policies directly in the Linux kernel using eBPF, terminating malicious processes before they can exfiltrate data.",
+      "prerequisites": ["lab-wasm-01"],
+      "objectives": [
+        "Audit runtime security status using `falco status`",
+        "Create ConfigMap `tetragon-ebpf-policy` in namespace `security` with `enforcement=SIGKILL`"
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: tetragon-ebpf-policy\n  namespace: security\ndata:\n  enforcement: SIGKILL",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Verify Kernel Runtime Security Status",
+          "instruction": "Run `falco status` to verify kernel eBPF probes are active.",
+          "commandHint": "falco status"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Deploy Tetragon eBPF Enforcement ConfigMap",
+          "instruction": "Create ConfigMap `tetragon-ebpf-policy` in `security` with `--from-literal=enforcement=SIGKILL`.",
+          "commandHint": "kubectl create configmap tetragon-ebpf-policy --from-literal=enforcement=SIGKILL -n security"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "val-wasm-02-a",
+          "description": "Verified runtime security status",
+          "type": "command_executed",
+          "commandSubstring": "falco status",
+          "remediation": "Run `falco status`."
+        },
+        {
+          "id": "val-wasm-02-b",
+          "description": "ConfigMap security/tetragon-ebpf-policy has enforcement=SIGKILL",
+          "type": "resource_field_equals",
+          "kind": "ConfigMap",
+          "name": "tetragon-ebpf-policy",
+          "namespace": "security",
+          "fieldPath": "data.enforcement",
+          "expectedValue": "SIGKILL",
+          "remediation": "Run `kubectl create configmap tetragon-ebpf-policy --from-literal=enforcement=SIGKILL -n security`."
+        }
+      ],
+      "solutionCommands": [
+        "falco status",
+        "kubectl create configmap tetragon-ebpf-policy --from-literal=enforcement=SIGKILL -n security"
+      ],
+      "troubleshootingGuide": "Confirm `tetragon-ebpf-policy` exists in namespace `security` with `data.enforcement=SIGKILL`."
+    }
+  ],
+  "assessmentQuestions": [
+    {
+      "id": "q-wasm-01",
+      "question": "Which Kubernetes resource field allows scheduling a WebAssembly (Wasm) Pod alongside standard Linux OCI containers on the same cluster?",
+      "options": [
+        "spec.runtimeClassName (pointing to a containerd-shim-wasm RuntimeClass)",
+        "metadata.deletionTimestamp",
+        "spec.hostNetwork: true",
+        "spec.dnsPolicy: Default"
+      ],
+      "correctIndex": 0,
+      "explanation": "Kubernetes `RuntimeClass` selects which CRI runtime handler (such as `runc`, `crun`, `kata`, or `wasmtime-spin`) kubelet and containerd use to run a Pod."
+    },
+    {
+      "id": "q-wasm-02",
+      "question": "How does Cilium Tetragon differ from user-space log-based intrusion detection tools?",
+      "options": [
+        "It only runs on Windows XP",
+        "It uses eBPF in-kernel hooks to observe and synchronously block (`SIGKILL` / `Override`) policy violations directly inside the kernel before the system call completes",
+        "It emails log files once a week",
+        "It requires recompiling the Linux kernel from scratch on every pod restart"
+      ],
+      "correctIndex": 1,
+      "explanation": "Tetragon performs synchronous in-kernel enforcement via eBPF without suffering from user-space TOCTOU (Time-of-Check to Time-of-Use) race conditions."
+    }
+  ]
+}
+

@@ -1,0 +1,230 @@
+{
+  "id": "aiops-autonomous",
+  "title": "AI-Ops, Autonomous Remediation & GPU Inference Workloads",
+  "category": "Multi-Cloud & AI-Ops",
+  "trackId": "track-multicloud-aiops",
+  "version": "1.0.0",
+  "difficulty": "Principal",
+  "estimatedHours": 10,
+  "summary": "Schedule GPU workloads (`nvidia.com/gpu`) with taints/tolerations, deploy distributed LLM inference services (vLLM), and run AI-Ops automated root-cause analysis and self-healing.",
+  "prerequisites": ["observability-stack", "sre-incident-chaos"],
+  "learningObjectives": [
+    "Schedule GPU-accelerated LLM inference pods onto tainted NVIDIA GPU worker nodes.",
+    "Execute AI-Ops diagnostic analysis (`aiops analyze`) to pinpoint cluster anomalies.",
+    "Trigger policy-guarded autonomous remediation (`aiops remediate`) and verify cluster recovery."
+  ],
+  "curriculumModules": [
+    {
+      "id": "mod-aiops-01",
+      "title": "Kubernetes GPU Scheduling, Device Plugins & Taints/Tolerations",
+      "conceptSummary": "GPU worker nodes run the NVIDIA Device Plugin exposing `nvidia.com/gpu` allocatable capacity and are tainted (`nvidia.com/gpu=present:NoSchedule`) so CPU-only pods do not waste expensive accelerators.",
+      "productionArchitecturePattern": "Configure LLM inference deployments (vLLM, Triton) with explicit `limits: { \"nvidia.com/gpu\": 1 }` and a matching `NoSchedule` toleration.",
+      "keyCommands": [
+        "kubectl get nodes",
+        "kubectl describe node kubelabs-worker-gpu-02"
+      ]
+    },
+    {
+      "id": "mod-aiops-02",
+      "title": "AI-Ops Root-Cause Analysis (K8sGPT) & Autonomous Self-Healing",
+      "conceptSummary": "AI-Ops controllers correlate Kubernetes Events, Prometheus metrics, and pod statuses to synthesize human-readable Root-Cause Analysis (RCA) and execute policy-approved remediations.",
+      "productionArchitecturePattern": "Run continuous AI-Ops analyzers (`aiops analyze`) with human-in-the-loop or GitOps-guarded `aiops remediate` actions.",
+      "keyCommands": [
+        "aiops analyze",
+        "aiops remediate",
+        "aiops predict"
+      ]
+    }
+  ],
+  "labs": [
+    {
+      "id": "lab-aiops-01",
+      "title": "Scheduling LLM Inference Workloads onto Tainted GPU Nodes",
+      "difficulty": "Principal",
+      "durationMinutes": 25,
+      "xpReward": 250,
+      "scenario": "Deployment `vllm-inference` in `production` requests `nvidia.com/gpu: 1` and is stuck `Pending` because node `kubelabs-worker-gpu-02` has taint `nvidia.com/gpu=present:NoSchedule`. Add the required toleration so the LLM pod schedules and runs.",
+      "productionContext": "GPU node pools are always tainted in production to prevent general web workloads from consuming $30/hr GPU instances.",
+      "prerequisites": ["lab-sre-01"],
+      "objectives": [
+        "Patch `deployment/vllm-inference` in `production` to add a toleration for key `nvidia.com/gpu`",
+        "Verify `vllm-inference` pod transitions from `Pending` to `Running` on `kubelabs-worker-gpu-02`"
+      ],
+      "initialClusterState": {
+        "resources": [
+          {
+            "apiVersion": "apps/v1",
+            "kind": "Deployment",
+            "metadata": { "name": "vllm-inference", "namespace": "production" },
+            "spec": {
+              "replicas": 1,
+              "selector": { "matchLabels": { "app": "vllm-inference" } },
+              "template": {
+                "metadata": { "labels": { "app": "vllm-inference" } },
+                "spec": {
+                  "containers": [
+                    {
+                      "name": "vllm",
+                      "image": "ghcr.io/kubelabs/vllm-openai:v0.6.3",
+                      "resources": { "limits": { "nvidia.com/gpu": 1 } }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        ]
+      },
+      "starterManifest": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: vllm-inference\n  namespace: production\nspec:\n  replicas: 1\n  selector:\n    matchLabels:\n      app: vllm-inference\n  template:\n    metadata:\n      labels:\n        app: vllm-inference\n    spec:\n      tolerations:\n        - key: nvidia.com/gpu\n          operator: Exists\n          effect: NoSchedule\n      containers:\n        - name: vllm\n          image: ghcr.io/kubelabs/vllm-openai:v0.6.3\n          resources:\n            limits:\n              nvidia.com/gpu: 1",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Observe Pending GPU Pod",
+          "instruction": "Run `kubectl get pods -n production` to see `vllm-inference` stuck `Pending` (`Unschedulable`).",
+          "commandHint": "kubectl get pods -n production"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Patch Deployment with GPU Toleration",
+          "instruction": "Patch `deployment/vllm-inference` in `production` to tolerate `nvidia.com/gpu`.",
+          "commandHint": "kubectl patch deployment vllm-inference -n production -p '{\"spec\":{\"template\":{\"spec\":{\"tolerations\":[{\"key\":\"nvidia.com/gpu\",\"operator\":\"Exists\",\"effect\":\"NoSchedule\"}]}}}}'"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "val-aiops-01-a",
+          "description": "Deployment production/vllm-inference has nvidia.com/gpu toleration",
+          "type": "resource_field_equals",
+          "kind": "Deployment",
+          "name": "vllm-inference",
+          "namespace": "production",
+          "fieldPath": "spec.template.spec.tolerations[0].key",
+          "expectedValue": "nvidia.com/gpu",
+          "remediation": "Run `kubectl patch deployment vllm-inference -n production -p '{\"spec\":{\"template\":{\"spec\":{\"tolerations\":[{\"key\":\"nvidia.com/gpu\",\"operator\":\"Exists\",\"effect\":\"NoSchedule\"}]}}}}'`."
+        },
+        {
+          "id": "val-aiops-01-b",
+          "description": "Pod for production/vllm-inference is Running on GPU worker node",
+          "type": "pod_status_running",
+          "kind": "Pod",
+          "name": "vllm-inference",
+          "namespace": "production",
+          "remediation": "Ensure vllm-inference pod transitions to Running."
+        }
+      ],
+      "solutionCommands": [
+        "kubectl patch deployment vllm-inference -n production -p '{\"spec\":{\"template\":{\"spec\":{\"tolerations\":[{\"key\":\"nvidia.com/gpu\",\"operator\":\"Exists\",\"effect\":\"NoSchedule\"}]}}}}'"
+      ],
+      "troubleshootingGuide": "Verify with `kubectl get pods -n production` that `vllm-inference` is `Running` on `kubelabs-worker-gpu-02`."
+    },
+    {
+      "id": "lab-aiops-02",
+      "title": "AI-Ops Automated Root-Cause Analysis & Self-Healing",
+      "difficulty": "Principal",
+      "durationMinutes": 20,
+      "xpReward": 250,
+      "scenario": "A broken deployment (`anomaly-detector`) in `production` is failing in `ImagePullBackOff`. Run `aiops analyze` to diagnose the anomaly and `aiops remediate` to trigger autonomous remediation.",
+      "productionContext": "AI-Ops agents accelerate incident triage by correlating pod faults and executing pre-approved remediation runbooks.",
+      "prerequisites": ["lab-aiops-01"],
+      "objectives": [
+        "Run `aiops analyze` to generate an automated Root-Cause Analysis report",
+        "Run `aiops remediate` to heal the broken deployment and record `monitoring/aiops-remediation-report`"
+      ],
+      "initialClusterState": {
+        "resources": [
+          {
+            "apiVersion": "apps/v1",
+            "kind": "Deployment",
+            "metadata": { "name": "anomaly-detector", "namespace": "production" },
+            "spec": {
+              "replicas": 2,
+              "selector": { "matchLabels": { "app": "anomaly-detector" } },
+              "template": {
+                "metadata": { "labels": { "app": "anomaly-detector" } },
+                "spec": {
+                  "containers": [
+                    { "name": "detector", "image": "ghcr.io/kubelabs/detector:v1.0-broken" }
+                  ]
+                }
+              }
+            }
+          }
+        ]
+      },
+      "starterManifest": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: aiops-remediation-report\n  namespace: monitoring\ndata:\n  status: remediated",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Run AI-Ops Root-Cause Analysis",
+          "instruction": "Execute `aiops analyze` to inspect cluster anomalies.",
+          "commandHint": "aiops analyze"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Trigger Autonomous Remediation",
+          "instruction": "Execute `aiops remediate` to heal the broken image and record the remediation report.",
+          "commandHint": "aiops remediate"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "val-aiops-02-a",
+          "description": "Executed aiops analyze diagnostic scan",
+          "type": "command_executed",
+          "commandSubstring": "aiops analyze",
+          "remediation": "Run `aiops analyze`."
+        },
+        {
+          "id": "val-aiops-02-b",
+          "description": "Pods for production/anomaly-detector healed and Running",
+          "type": "pod_status_running",
+          "kind": "Pod",
+          "name": "anomaly-detector",
+          "namespace": "production",
+          "remediation": "Run `aiops remediate`."
+        },
+        {
+          "id": "val-aiops-02-c",
+          "description": "ConfigMap monitoring/aiops-remediation-report recorded",
+          "type": "resource_exists",
+          "kind": "ConfigMap",
+          "name": "aiops-remediation-report",
+          "namespace": "monitoring",
+          "remediation": "Run `aiops remediate`."
+        }
+      ],
+      "solutionCommands": [
+        "aiops analyze",
+        "aiops remediate"
+      ],
+      "troubleshootingGuide": "Run `aiops analyze` followed by `aiops remediate` and verify `kubectl get pods -n production`."
+    }
+  ],
+  "assessmentQuestions": [
+    {
+      "id": "q-aiops-01",
+      "question": "Why are Kubernetes GPU worker nodes tainted with `nvidia.com/gpu=present:NoSchedule` in production?",
+      "options": [
+        "To prevent general CPU-only workloads from scheduling onto expensive GPU nodes and starving ML/LLM workloads",
+        "To disable container networking on GPU nodes",
+        "Because kube-scheduler cannot schedule more than 1 pod per cluster without a taint",
+        "To force containers to run in privileged mode"
+      ],
+      "correctIndex": 0,
+      "explanation": "Tainting GPU nodes with `NoSchedule` ensures only Pods that explicitly declare a matching `toleration` (such as ML training or LLM inference pods) can be placed on GPU hardware."
+    },
+    {
+      "id": "q-aiops-02",
+      "question": "What is the safest architectural pattern for deploying autonomous AI-Ops remediation in production?",
+      "options": [
+        "Granting an unconstrained LLM raw root SSH access to all production database servers",
+        "Policy-guarded remediation where AI-Ops diagnostics propose or trigger bounded, declarative controller/GitOps actions audited by RBAC and admission policies",
+        "Turning off Prometheus alerts and letting AI guess when outages happen",
+        "Deleting any namespace that emits a warning event"
+      ],
+      "correctIndex": 1,
+      "explanation": "Production AI-Ops combines deterministic telemetry correlation with bounded, RBAC-scoped, policy-validated remediation actions."
+    }
+  ]
+}
+

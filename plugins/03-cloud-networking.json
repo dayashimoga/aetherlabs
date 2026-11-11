@@ -1,0 +1,223 @@
+{
+  "id": "cloud-networking",
+  "title": "Cloud-Native Networking, CNI, eBPF & Ingress Routing",
+  "category": "Foundations",
+  "trackId": "track-foundations",
+  "version": "1.0.0",
+  "difficulty": "Intermediate",
+  "estimatedHours": 8,
+  "summary": "Master Kubernetes Pod-to-Pod networking, Cilium eBPF dataplanes, CoreDNS service discovery, ClusterIP/LoadBalancer EndpointSlices, and Ingress / Gateway API routing.",
+  "prerequisites": ["linux-fundamentals", "containers-runtime"],
+  "learningObjectives": [
+    "Understand the Kubernetes network model where every Pod receives a routable IP without NAT.",
+    "Diagnose and repair broken Services with 0 endpoints caused by label selector mismatches.",
+    "Configure L7 Ingress resources routing external HTTPS traffic to internal ClusterIP services."
+  ],
+  "curriculumModules": [
+    {
+      "id": "mod-net-01",
+      "title": "CNI Architecture, Cilium eBPF & EndpointSlices",
+      "conceptSummary": "Container Network Interface (CNI) plugins allocate Pod IPs and program node routing. Modern eBPF CNIs like Cilium replace linear iptables chains with O(1) kernel socket-level hash maps.",
+      "productionArchitecturePattern": "Run Cilium in kube-proxy-less eBPF mode with EndpointSlices enabled to scale clusters beyond 5,000 services with sub-millisecond service routing.",
+      "keyCommands": [
+        "kubectl get svc -n production",
+        "kubectl describe svc <name> -n production",
+        "ip route"
+      ]
+    },
+    {
+      "id": "mod-net-02",
+      "title": "CoreDNS Service Discovery & Ingress / Gateway API",
+      "conceptSummary": "CoreDNS resolves `<service>.<namespace>.svc.cluster.local` to ClusterIP VIPs, while Ingress and Gateway API controllers terminate TLS and route L7 HTTP/gRPC traffic.",
+      "productionArchitecturePattern": "Expose internal microservices as `ClusterIP` Services and route external north-south traffic through a redundant Ingress/Gateway controller protected by WAF.",
+      "keyCommands": [
+        "dig kubernetes.default.svc.cluster.local",
+        "kubectl get ingress -n production"
+      ]
+    }
+  ],
+  "labs": [
+    {
+      "id": "lab-net-01",
+      "title": "Repairing Zero-Endpoint Service Selector Drift",
+      "difficulty": "Intermediate",
+      "durationMinutes": 20,
+      "xpReward": 175,
+      "scenario": "Deployment `catalog-api` in `production` has 2 running pods labeled `app=catalog-api`, but Service `catalog-svc` has `0 endpoints` because its selector points to `app=catalog-v1-old`.",
+      "productionContext": "Service selector drift silently drops traffic (`503 Bad Gateway`) even when all backing pods report `1/1 Running`.",
+      "prerequisites": ["lab-containers-01"],
+      "objectives": [
+        "Patch Service `production/catalog-svc` so `spec.selector.app` equals `catalog-api`",
+        "Verify `catalog-svc` populates 2 active endpoints"
+      ],
+      "initialClusterState": {
+        "resources": [
+          {
+            "apiVersion": "apps/v1",
+            "kind": "Deployment",
+            "metadata": { "name": "catalog-api", "namespace": "production" },
+            "spec": {
+              "replicas": 2,
+              "selector": { "matchLabels": { "app": "catalog-api" } },
+              "template": {
+                "metadata": { "labels": { "app": "catalog-api" } },
+                "spec": { "containers": [{ "name": "catalog", "image": "nginx:1.27-alpine" }] }
+              }
+            }
+          },
+          {
+            "apiVersion": "v1",
+            "kind": "Service",
+            "metadata": { "name": "catalog-svc", "namespace": "production" },
+            "spec": {
+              "type": "ClusterIP",
+              "selector": { "app": "catalog-v1-old" },
+              "ports": [{ "port": 80, "targetPort": 80 }]
+            }
+          }
+        ]
+      },
+      "starterManifest": "apiVersion: v1\nkind: Service\nmetadata:\n  name: catalog-svc\n  namespace: production\nspec:\n  type: ClusterIP\n  selector:\n    app: catalog-api\n  ports:\n    - port: 80\n      targetPort: 80",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Inspect Service Endpoints",
+          "instruction": "Run `kubectl get svc catalog-svc -n production` to observe that ENDPOINTS is `<none>`.",
+          "commandHint": "kubectl get svc catalog-svc -n production"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Fix Service Label Selector",
+          "instruction": "Patch `catalog-svc` in `production` to select `app: catalog-api`.",
+          "commandHint": "kubectl patch svc catalog-svc -n production -p '{\"spec\":{\"selector\":{\"app\":\"catalog-api\"}}}'"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "val-net-01-a",
+          "description": "Service production/catalog-svc selector set to app=catalog-api",
+          "type": "resource_field_equals",
+          "kind": "Service",
+          "name": "catalog-svc",
+          "namespace": "production",
+          "fieldPath": "spec.selector.app",
+          "expectedValue": "catalog-api",
+          "remediation": "Run `kubectl patch svc catalog-svc -n production -p '{\"spec\":{\"selector\":{\"app\":\"catalog-api\"}}}'`."
+        },
+        {
+          "id": "val-net-01-b",
+          "description": "Service production/catalog-svc has 2 active endpoints",
+          "type": "service_has_endpoints",
+          "kind": "Service",
+          "name": "catalog-svc",
+          "namespace": "production",
+          "expectedValue": 2,
+          "remediation": "Ensure catalog-api pods are Running and matched by catalog-svc."
+        }
+      ],
+      "solutionCommands": [
+        "kubectl patch svc catalog-svc -n production -p '{\"spec\":{\"selector\":{\"app\":\"catalog-api\"}}}'"
+      ],
+      "troubleshootingGuide": "Check `kubectl get svc catalog-svc -n production` to verify ENDPOINTS lists two Pod IPs."
+    },
+    {
+      "id": "lab-net-02",
+      "title": "Exposing Production Workloads via L7 Ingress Controller",
+      "difficulty": "Intermediate",
+      "durationMinutes": 25,
+      "xpReward": 175,
+      "scenario": "Expose the `storefront` deployment in `production` via a `ClusterIP` service and create an `Ingress` resource named `storefront-ingress`.",
+      "productionContext": "Production clusters avoid creating a cloud LoadBalancer per microservice; instead, a single Ingress/Gateway routes host/path traffic to internal ClusterIP services.",
+      "prerequisites": ["lab-net-01"],
+      "objectives": [
+        "Expose deployment `storefront` as service `storefront` on port 80 in `production`",
+        "Create Ingress `storefront-ingress` in `production`"
+      ],
+      "initialClusterState": {
+        "resources": [
+          {
+            "apiVersion": "apps/v1",
+            "kind": "Deployment",
+            "metadata": { "name": "storefront", "namespace": "production", "labels": { "app": "storefront" } },
+            "spec": {
+              "replicas": 2,
+              "selector": { "matchLabels": { "app": "storefront" } },
+              "template": {
+                "metadata": { "labels": { "app": "storefront" } },
+                "spec": { "containers": [{ "name": "web", "image": "nginx:1.27-alpine" }] }
+              }
+            }
+          }
+        ]
+      },
+      "starterManifest": "apiVersion: networking.k8s.io/v1\nkind: Ingress\nmetadata:\n  name: storefront-ingress\n  namespace: production\nspec:\n  ingressClassName: cilium\n  rules:\n    - host: shop.kubelabs.io",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Expose Storefront Deployment as ClusterIP Service",
+          "instruction": "Expose `deployment/storefront` in `production` on port 80.",
+          "commandHint": "kubectl expose deployment storefront --port=80 -n production"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Create L7 Ingress Resource",
+          "instruction": "Create Ingress `storefront-ingress` in `production`.",
+          "commandHint": "kubectl create ingress storefront-ingress -n production"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "val-net-02-a",
+          "description": "Service production/storefront has active endpoints",
+          "type": "service_has_endpoints",
+          "kind": "Service",
+          "name": "storefront",
+          "namespace": "production",
+          "expectedValue": 2,
+          "remediation": "Run `kubectl expose deployment storefront --port=80 -n production`."
+        },
+        {
+          "id": "val-net-02-b",
+          "description": "Ingress production/storefront-ingress exists",
+          "type": "resource_exists",
+          "kind": "Ingress",
+          "name": "storefront-ingress",
+          "namespace": "production",
+          "remediation": "Run `kubectl create ingress storefront-ingress -n production`."
+        }
+      ],
+      "solutionCommands": [
+        "kubectl expose deployment storefront --port=80 -n production",
+        "kubectl create ingress storefront-ingress -n production"
+      ],
+      "troubleshootingGuide": "Ensure both Service `storefront` and Ingress `storefront-ingress` exist in the `production` namespace."
+    }
+  ],
+  "assessmentQuestions": [
+    {
+      "id": "q-net-01",
+      "question": "What happens when a Kubernetes Service exists in a namespace, but its `spec.selector` labels do not match any running Pods?",
+      "options": [
+        "Kubernetes automatically relabels all pods in the namespace",
+        "The Service is created with a ClusterIP, but its EndpointSlice remains empty (`0 endpoints`), causing traffic to fail",
+        "kube-apiserver rejects the Service creation with HTTP 422",
+        "CoreDNS refuses to create an A record for the Service"
+      ],
+      "correctIndex": 1,
+      "explanation": "Services and Pods are loosely coupled via label selectors. If no running, ready pods match the selector, the Service has 0 endpoints."
+    },
+    {
+      "id": "q-net-02",
+      "question": "How does Cilium eBPF improve service load-balancing performance compared to legacy iptables kube-proxy?",
+      "options": [
+        "By disabling TCP checksums",
+        "By using O(1) eBPF kernel hash maps at the socket layer instead of traversing O(N) sequential iptables rules",
+        "By routing all traffic through a central NAT instance",
+        "By requiring static IP addresses for every container"
+      ],
+      "correctIndex": 1,
+      "explanation": "iptables rules grow linearly O(N) with service count, whereas Cilium eBPF performs O(1) hash table lookups directly at socket connect/sendmsg time."
+    }
+  ]
+}
+

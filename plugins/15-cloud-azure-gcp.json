@@ -1,0 +1,180 @@
+{
+  "id": "cloud-azure-gcp",
+  "title": "Azure (AKS) & Google Cloud (GKE) Multi-Cloud Architecture",
+  "category": "Multi-Cloud & AI-Ops",
+  "trackId": "track-multicloud-aiops",
+  "version": "1.0.0",
+  "difficulty": "Advanced",
+  "estimatedHours": 9,
+  "summary": "Operate multi-cloud Kubernetes fleets across Microsoft Azure Kubernetes Service (AKS) and Google Kubernetes Engine (GKE Autopilot/Standard) with federated workload identity.",
+  "prerequisites": ["kubernetes-core", "cloud-aws"],
+  "learningObjectives": [
+    "Provision and inspect Azure AKS and Google GKE clusters using `az aks` and `gcloud container` CLIs.",
+    "Configure Azure Entra Workload Identity and GKE Workload Identity Federation on ServiceAccounts.",
+    "Design resilient active-active multi-cloud deployments."
+  ],
+  "curriculumModules": [
+    {
+      "id": "mod-mc-01",
+      "title": "Azure Kubernetes Service (AKS) & Entra Workload Identity",
+      "conceptSummary": "AKS integrates Azure CNI Overlay, Cilium dataplanes, and Microsoft Entra Workload Identity using OIDC token federation (`azure.workload.identity/client-id`).",
+      "productionArchitecturePattern": "Deploy AKS across 3 Availability Zones with Entra Workload Identity and Azure Key Vault CSI Secret Store Provider.",
+      "keyCommands": [
+        "az aks show --name kubelabs-aks-prod",
+        "kubectl annotate serviceaccount"
+      ]
+    },
+    {
+      "id": "mod-mc-02",
+      "title": "Google Kubernetes Engine (GKE Autopilot) & Fleet Federation",
+      "conceptSummary": "GKE Autopilot manages node provisioning, security hardening, and bin-packing automatically while GKE Workload Identity binds Kubernetes ServiceAccounts to Google IAM Service Accounts.",
+      "productionArchitecturePattern": "Use Multi-Cluster Ingress / Gateway API and Workload Identity (`iam.gke.io/gcp-service-account`) for zero-key multi-region GKE fleets.",
+      "keyCommands": [
+        "gcloud container clusters list",
+        "kubectl get deploy -n production"
+      ]
+    }
+  ],
+  "labs": [
+    {
+      "id": "lab-mc-01",
+      "title": "Provisioning & Auditing Azure AKS and Google GKE Clusters",
+      "difficulty": "Advanced",
+      "durationMinutes": 20,
+      "xpReward": 225,
+      "scenario": "Verify multi-cloud control plane readiness across Azure AKS (`kubelabs-aks-prod`) and Google GKE (`kubelabs-gke-autopilot`) using `az` and `gcloud` CLIs.",
+      "productionContext": "Enterprise platform engineers manage multi-cloud Kubernetes control planes across AWS, Azure, and GCP to meet regulatory and availability mandates.",
+      "prerequisites": ["lab-aws-01"],
+      "objectives": [
+        "Inspect Azure AKS cluster `kubelabs-aks-prod` using `az aks show --name kubelabs-aks-prod`",
+        "Inspect Google GKE cluster `kubelabs-gke-autopilot` using `gcloud container clusters describe kubelabs-gke-autopilot`"
+      ],
+      "initialClusterState": {
+        "resources": [],
+        "cloudResources": []
+      },
+      "starterManifest": "# Multi-Cloud Fleet Target Inventory\nclusters:\n  - provider: azure\n    name: kubelabs-aks-prod\n  - provider: gcp\n    name: kubelabs-gke-autopilot",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Audit Azure AKS Control Plane",
+          "instruction": "Run `az aks show --name kubelabs-aks-prod`.",
+          "commandHint": "az aks show --name kubelabs-aks-prod"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Audit Google GKE Autopilot Control Plane",
+          "instruction": "Run `gcloud container clusters describe kubelabs-gke-autopilot`.",
+          "commandHint": "gcloud container clusters describe kubelabs-gke-autopilot"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "val-mc-01-a",
+          "description": "Azure AKS cluster kubelabs-aks-prod verified",
+          "type": "cloud_resource_exists",
+          "name": "kubelabs-aks-prod",
+          "remediation": "Run `az aks show --name kubelabs-aks-prod`."
+        },
+        {
+          "id": "val-mc-01-b",
+          "description": "Google GKE cluster kubelabs-gke-autopilot verified",
+          "type": "cloud_resource_exists",
+          "name": "kubelabs-gke-autopilot",
+          "remediation": "Run `gcloud container clusters describe kubelabs-gke-autopilot`."
+        }
+      ],
+      "solutionCommands": [
+        "az aks show --name kubelabs-aks-prod",
+        "gcloud container clusters describe kubelabs-gke-autopilot"
+      ],
+      "troubleshootingGuide": "Ensure both `az aks` and `gcloud container` commands have been executed."
+    },
+    {
+      "id": "lab-mc-02",
+      "title": "Configuring GKE & Azure Federated Workload Identity",
+      "difficulty": "Advanced",
+      "durationMinutes": 20,
+      "xpReward": 225,
+      "scenario": "Create a federated `ServiceAccount` (`multicloud-identity-sa`) in `production` annotated with `iam.gke.io/gcp-service-account=telemetry@kubelabs-gcp.iam.gserviceaccount.com`.",
+      "productionContext": "Workload Identity Federation allows Kubernetes pods to authenticate to Google Cloud and Azure APIs without downloading JSON service account keys.",
+      "prerequisites": ["lab-mc-01"],
+      "objectives": [
+        "Create ServiceAccount `multicloud-identity-sa` in `production`",
+        "Annotate `multicloud-identity-sa` with `iam.gke.io/gcp-service-account=telemetry@kubelabs-gcp.iam.gserviceaccount.com`"
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "apiVersion: v1\nkind: ServiceAccount\nmetadata:\n  name: multicloud-identity-sa\n  namespace: production\n  annotations:\n    iam.gke.io/gcp-service-account: telemetry@kubelabs-gcp.iam.gserviceaccount.com",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Create Multi-Cloud ServiceAccount",
+          "instruction": "Create ServiceAccount `multicloud-identity-sa` in `production`.",
+          "commandHint": "kubectl create serviceaccount multicloud-identity-sa -n production"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Bind GKE Workload Identity Annotation",
+          "instruction": "Annotate `multicloud-identity-sa` with `iam.gke.io/gcp-service-account=telemetry@kubelabs-gcp.iam.gserviceaccount.com` in `production`.",
+          "commandHint": "kubectl annotate serviceaccount multicloud-identity-sa iam.gke.io/gcp-service-account=telemetry@kubelabs-gcp.iam.gserviceaccount.com -n production"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "val-mc-02-a",
+          "description": "ServiceAccount production/multicloud-identity-sa exists",
+          "type": "resource_exists",
+          "kind": "ServiceAccount",
+          "name": "multicloud-identity-sa",
+          "namespace": "production",
+          "remediation": "Run `kubectl create serviceaccount multicloud-identity-sa -n production`."
+        },
+        {
+          "id": "val-mc-02-b",
+          "description": "ServiceAccount has iam.gke.io/gcp-service-account annotation",
+          "type": "resource_field_equals",
+          "kind": "ServiceAccount",
+          "name": "multicloud-identity-sa",
+          "namespace": "production",
+          "fieldPath": "metadata.annotations.iam.gke.io/gcp-service-account",
+          "expectedValue": "telemetry@kubelabs-gcp.iam.gserviceaccount.com",
+          "remediation": "Run `kubectl annotate serviceaccount multicloud-identity-sa iam.gke.io/gcp-service-account=telemetry@kubelabs-gcp.iam.gserviceaccount.com -n production`."
+        }
+      ],
+      "solutionCommands": [
+        "kubectl create serviceaccount multicloud-identity-sa -n production",
+        "kubectl annotate serviceaccount multicloud-identity-sa iam.gke.io/gcp-service-account=telemetry@kubelabs-gcp.iam.gserviceaccount.com -n production"
+      ],
+      "troubleshootingGuide": "Inspect `kubectl describe sa multicloud-identity-sa -n production`."
+    }
+  ],
+  "assessmentQuestions": [
+    {
+      "id": "q-mc-01",
+      "question": "What is the primary operational benefit of Google Kubernetes Engine (GKE) Autopilot mode compared to Standard mode?",
+      "options": [
+        "Google fully manages worker node provisioning, security hardening, and bin-packing, billing only for running Pod resource requests",
+        "It allows SSH root login to Google's physical routers",
+        "It disables Kubernetes RBAC",
+        "It only supports Windows 95 containers"
+      ],
+      "correctIndex": 0,
+      "explanation": "GKE Autopilot manages the entire node infrastructure lifecycle and security posture automatically based on Pod specifications."
+    },
+    {
+      "id": "q-mc-02",
+      "question": "Across AWS (IRSA), Azure (Entra Workload Identity), and GCP (Workload Identity Federation), what standard protocol underpins keyless Pod-to-Cloud IAM authentication?",
+      "options": [
+        "OpenID Connect (OIDC) federated token exchange",
+        "Telnet cleartext passwords",
+        "FTP anonymous login",
+        "Static IAM access keys committed to Git"
+      ],
+      "correctIndex": 0,
+      "explanation": "All three major cloud providers use OIDC federation to trust short-lived JWT tokens issued by the Kubernetes API server."
+    }
+  ]
+}
+

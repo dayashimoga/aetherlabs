@@ -1,0 +1,214 @@
+{
+  "id": "devsecops-security",
+  "title": "DevSecOps, Pod Security, NetworkPolicies & Supply Chain",
+  "category": "Security & Service Mesh",
+  "trackId": "track-devsecops",
+  "version": "1.0.0",
+  "difficulty": "Advanced",
+  "estimatedHours": 10,
+  "summary": "Harden Kubernetes clusters with Pod Security Standards, Zero-Trust NetworkPolicies, Trivy vulnerability scanning, Falco runtime eBPF detection, and Kyverno policies.",
+  "prerequisites": ["kubernetes-core", "cloud-networking"],
+  "learningObjectives": [
+    "Isolate sensitive workloads using Kubernetes NetworkPolicy ingress/egress micro-segmentation.",
+    "Harden pod security contexts (`runAsNonRoot: true`, `allowPrivilegeEscalation: false`, read-only rootfs).",
+    "Audit container images with Trivy and runtime syscall integrity with Falco."
+  ],
+  "curriculumModules": [
+    {
+      "id": "mod-sec-01",
+      "title": "Zero-Trust Micro-Segmentation with NetworkPolicies",
+      "conceptSummary": "By default, all Pods in a Kubernetes cluster can communicate with all other Pods across namespaces. A NetworkPolicy restricts L3/L4 traffic based on pod and namespace label selectors.",
+      "productionArchitecturePattern": "Apply a default-deny ingress/egress NetworkPolicy in every namespace and explicitly allowlist only required microservice-to-database paths.",
+      "keyCommands": [
+        "kubectl get networkpolicy -n production",
+        "kubectl describe networkpolicy -n production"
+      ]
+    },
+    {
+      "id": "mod-sec-02",
+      "title": "Pod Security Standards, Trivy & Falco Runtime Defense",
+      "conceptSummary": "Defense-in-depth combines pre-deployment CVE scanning (`trivy`), admission control (`PodSecurity` restricted profile + `Kyverno`), and kernel eBPF syscall detection (`falco`).",
+      "productionArchitecturePattern": "Enforce `runAsNonRoot: true`, `readOnlyRootFilesystem: true`, `seccompProfile: RuntimeDefault`, and drop `ALL` Linux capabilities.",
+      "keyCommands": [
+        "trivy image nginx:1.27-alpine",
+        "falco status"
+      ]
+    }
+  ],
+  "labs": [
+    {
+      "id": "lab-sec-01",
+      "title": "Enforcing Zero-Trust NetworkPolicy Database Isolation",
+      "difficulty": "Advanced",
+      "durationMinutes": 25,
+      "xpReward": 225,
+      "scenario": "Sensitive customer records live in `vault-db` in namespace `production`. Create a `NetworkPolicy` named `vault-db-netpol` selecting `app=vault-db` to enforce ingress micro-segmentation.",
+      "productionContext": "PCI-DSS and SOC2 audits require strict L3/L4 network segmentation around all database pods.",
+      "prerequisites": ["lab-net-01"],
+      "objectives": [
+        "Create NetworkPolicy `vault-db-netpol` in namespace `production`",
+        "Configure `spec.podSelector.matchLabels.app` to `vault-db`"
+      ],
+      "initialClusterState": {
+        "resources": [
+          {
+            "apiVersion": "apps/v1",
+            "kind": "StatefulSet",
+            "metadata": { "name": "vault-db", "namespace": "production" },
+            "spec": {
+              "replicas": 1,
+              "selector": { "matchLabels": { "app": "vault-db" } },
+              "template": {
+                "metadata": { "labels": { "app": "vault-db" } },
+                "spec": { "containers": [{ "name": "postgres", "image": "postgres:16-alpine" }] }
+              }
+            }
+          }
+        ]
+      },
+      "starterManifest": "apiVersion: networking.k8s.io/v1\nkind: NetworkPolicy\nmetadata:\n  name: vault-db-netpol\n  namespace: production\nspec:\n  podSelector:\n    matchLabels:\n      app: vault-db\n  policyTypes:\n    - Ingress",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Create NetworkPolicy Object",
+          "instruction": "Create NetworkPolicy `vault-db-netpol` in `production`.",
+          "commandHint": "kubectl create networkpolicy vault-db-netpol -n production"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Bind Pod Selector to vault-db",
+          "instruction": "Patch `vault-db-netpol` to target `podSelector.matchLabels.app=vault-db`.",
+          "commandHint": "kubectl patch networkpolicy vault-db-netpol -n production -p '{\"spec\":{\"podSelector\":{\"matchLabels\":{\"app\":\"vault-db\"}}}}'"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "val-sec-01-a",
+          "description": "NetworkPolicy production/vault-db-netpol exists",
+          "type": "resource_exists",
+          "kind": "NetworkPolicy",
+          "name": "vault-db-netpol",
+          "namespace": "production",
+          "remediation": "Run `kubectl create networkpolicy vault-db-netpol -n production`."
+        },
+        {
+          "id": "val-sec-01-b",
+          "description": "NetworkPolicy vault-db-netpol selects app=vault-db",
+          "type": "resource_field_equals",
+          "kind": "NetworkPolicy",
+          "name": "vault-db-netpol",
+          "namespace": "production",
+          "fieldPath": "spec.podSelector.matchLabels.app",
+          "expectedValue": "vault-db",
+          "remediation": "Patch vault-db-netpol with `{\"spec\":{\"podSelector\":{\"matchLabels\":{\"app\":\"vault-db\"}}}}`."
+        }
+      ],
+      "solutionCommands": [
+        "kubectl create networkpolicy vault-db-netpol -n production",
+        "kubectl patch networkpolicy vault-db-netpol -n production -p '{\"spec\":{\"podSelector\":{\"matchLabels\":{\"app\":\"vault-db\"}}}}'"
+      ],
+      "troubleshootingGuide": "Inspect `kubectl describe networkpolicy vault-db-netpol -n production` to confirm `spec.podSelector.matchLabels.app` is `vault-db`."
+    },
+    {
+      "id": "lab-sec-02",
+      "title": "Pod Security Hardening (Non-Root Execution & Trivy Image Scan)",
+      "difficulty": "Advanced",
+      "durationMinutes": 25,
+      "xpReward": 225,
+      "scenario": "Scan `nginx:1.27-alpine` with `trivy` and harden deployment `token-signer` in `production` so its Pod `securityContext.runAsNonRoot` is set to `true`.",
+      "productionContext": "Running containers as root (UID 0) allows container-escape vulnerabilities to gain root privileges on the underlying Linux host.",
+      "prerequisites": ["lab-sec-01"],
+      "objectives": [
+        "Scan `nginx:1.27-alpine` for CVEs using `trivy image nginx:1.27-alpine`",
+        "Patch `deployment/token-signer` in `production` to set `spec.template.spec.securityContext.runAsNonRoot=true`"
+      ],
+      "initialClusterState": {
+        "resources": [
+          {
+            "apiVersion": "apps/v1",
+            "kind": "Deployment",
+            "metadata": { "name": "token-signer", "namespace": "production" },
+            "spec": {
+              "replicas": 2,
+              "selector": { "matchLabels": { "app": "token-signer" } },
+              "template": {
+                "metadata": { "labels": { "app": "token-signer" } },
+                "spec": {
+                  "securityContext": { "runAsNonRoot": false },
+                  "containers": [{ "name": "signer", "image": "nginx:1.27-alpine" }]
+                }
+              }
+            }
+          }
+        ]
+      },
+      "starterManifest": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: token-signer\n  namespace: production\nspec:\n  replicas: 2\n  selector:\n    matchLabels:\n      app: token-signer\n  template:\n    metadata:\n      labels:\n        app: token-signer\n    spec:\n      securityContext:\n        runAsNonRoot: true\n      containers:\n        - name: signer\n          image: nginx:1.27-alpine",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Scan Container Image with Trivy",
+          "instruction": "Run `trivy image nginx:1.27-alpine` to verify zero critical CVEs.",
+          "commandHint": "trivy image nginx:1.27-alpine"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Enforce Non-Root SecurityContext",
+          "instruction": "Patch `deployment/token-signer` in `production` so `spec.template.spec.securityContext.runAsNonRoot` is `true`.",
+          "commandHint": "kubectl patch deployment token-signer -n production -p '{\"spec\":{\"template\":{\"spec\":{\"securityContext\":{\"runAsNonRoot\":true}}}}}'"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "val-sec-02-a",
+          "description": "Executed Trivy vulnerability scan",
+          "type": "command_executed",
+          "commandSubstring": "trivy image",
+          "remediation": "Run `trivy image nginx:1.27-alpine`."
+        },
+        {
+          "id": "val-sec-02-b",
+          "description": "Deployment production/token-signer enforces runAsNonRoot=true",
+          "type": "resource_field_equals",
+          "kind": "Deployment",
+          "name": "token-signer",
+          "namespace": "production",
+          "fieldPath": "spec.template.spec.securityContext.runAsNonRoot",
+          "expectedValue": true,
+          "remediation": "Run `kubectl patch deployment token-signer -n production -p '{\"spec\":{\"template\":{\"spec\":{\"securityContext\":{\"runAsNonRoot\":true}}}}}'`."
+        }
+      ],
+      "solutionCommands": [
+        "trivy image nginx:1.27-alpine",
+        "kubectl patch deployment token-signer -n production -p '{\"spec\":{\"template\":{\"spec\":{\"securityContext\":{\"runAsNonRoot\":true}}}}}'"
+      ],
+      "troubleshootingGuide": "Check `kubectl get deploy token-signer -n production -o json` to verify `spec.template.spec.securityContext.runAsNonRoot` is `true`."
+    }
+  ],
+  "assessmentQuestions": [
+    {
+      "id": "q-sec-01",
+      "question": "Which Kubernetes Pod Security Standard profile enforces the strictest controls (non-root execution, dropped capabilities, seccomp profile required)?",
+      "options": [
+        "Privileged",
+        "Baseline",
+        "Restricted",
+        "Permissive"
+      ],
+      "correctIndex": 2,
+      "explanation": "The `Restricted` Pod Security Standard enforces current pod hardening best practices including `runAsNonRoot: true`, `allowPrivilegeEscalation: false`, and dropping `ALL` capabilities."
+    },
+    {
+      "id": "q-sec-02",
+      "question": "What is the role of Falco in a cloud-native DevSecOps architecture?",
+      "options": [
+        "Formatting Terraform HCL files",
+        "Real-time runtime threat detection by monitoring Linux kernel syscalls via eBPF",
+        "Provisioning AWS Route53 DNS records",
+        "Compressing container image layers"
+      ],
+      "correctIndex": 1,
+      "explanation": "Falco is the CNCF runtime security project that inspects Linux kernel system calls via eBPF to detect abnormal behavior such as shell spawns inside containers or sensitive file reads."
+    }
+  ]
+}
+

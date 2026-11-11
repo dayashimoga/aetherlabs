@@ -1,0 +1,182 @@
+{
+  "id": "observability-stack",
+  "title": "Observability: Prometheus, Grafana, OpenTelemetry & Loki",
+  "category": "SRE & Observability",
+  "trackId": "track-sre",
+  "version": "1.0.0",
+  "difficulty": "Intermediate",
+  "estimatedHours": 9,
+  "summary": "Instrument cloud-native systems with OpenTelemetry (metrics, logs, traces), PromQL alerting rules, RED/USE telemetry methods, and Grafana/Loki.",
+  "prerequisites": ["kubernetes-core"],
+  "learningObjectives": [
+    "Deploy and configure OpenTelemetry Collector pipelines for unified metrics, logs, and distributed traces.",
+    "Author PrometheusRule alerting definitions monitoring Golden Signals (Latency, Traffic, Errors, Saturation).",
+    "Inspect live cluster resource utilization using kubectl top."
+  ],
+  "curriculumModules": [
+    {
+      "id": "mod-obs-01",
+      "title": "The Four Golden Signals, RED/USE & PromQL",
+      "conceptSummary": "Google SRE Golden Signals track Latency, Traffic, Errors, and Saturation. Prometheus scrapes `/metrics` endpoints and evaluates PromQL alerting rules via Prometheus Operator.",
+      "productionArchitecturePattern": "Alert on symptom-based SLO burn rates (e.g. HTTP 5xx ratio > 1% over 5m) rather than noisy host CPU spikes.",
+      "keyCommands": [
+        "kubectl top nodes",
+        "kubectl top pods -n production",
+        "kubectl get prometheusrule -n monitoring"
+      ]
+    },
+    {
+      "id": "mod-obs-02",
+      "title": "Unified Telemetry with OpenTelemetry Collector",
+      "conceptSummary": "OpenTelemetry (OTel) provides vendor-neutral SDKs and an OTel Collector agent/gateway (`receivers -> processors -> exporters`) for traces, metrics, and logs.",
+      "productionArchitecturePattern": "Run the OpenTelemetry Collector with `memory_limiter` and `batch` processors to protect backend storage from traffic spikes.",
+      "keyCommands": [
+        "kubectl get deploy -n monitoring",
+        "kubectl logs -n monitoring"
+      ]
+    }
+  ],
+  "labs": [
+    {
+      "id": "lab-obs-01",
+      "title": "Deploying Prometheus Alerting Rules & Inspecting Node Metrics",
+      "difficulty": "Intermediate",
+      "durationMinutes": 20,
+      "xpReward": 175,
+      "scenario": "Check cluster resource consumption with `kubectl top nodes` and deploy a `PrometheusRule` named `slo-error-budget-alert` in the `monitoring` namespace.",
+      "productionContext": "Prometheus Operator automatically loads `PrometheusRule` custom resources to evaluate recording and alerting rules.",
+      "prerequisites": ["lab-k8s-01"],
+      "objectives": [
+        "Check node CPU and memory metrics using `kubectl top nodes`",
+        "Create `PrometheusRule` `slo-error-budget-alert` in namespace `monitoring`"
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "apiVersion: monitoring.coreos.com/v1\nkind: PrometheusRule\nmetadata:\n  name: slo-error-budget-alert\n  namespace: monitoring\nspec:\n  groups:\n    - name: slo.rules",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Inspect Cluster Node Resource Usage",
+          "instruction": "Run `kubectl top nodes` to inspect live CPU and Memory usage across nodes.",
+          "commandHint": "kubectl top nodes"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Create PrometheusRule Alert Resource",
+          "instruction": "Create `PrometheusRule` `slo-error-budget-alert` in `monitoring`.",
+          "commandHint": "kubectl create prometheusrule slo-error-budget-alert -n monitoring"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "val-obs-01-a",
+          "description": "Inspected node metrics via kubectl top nodes",
+          "type": "command_executed",
+          "commandSubstring": "kubectl top nodes",
+          "remediation": "Run `kubectl top nodes`."
+        },
+        {
+          "id": "val-obs-01-b",
+          "description": "PrometheusRule monitoring/slo-error-budget-alert exists",
+          "type": "resource_exists",
+          "kind": "PrometheusRule",
+          "name": "slo-error-budget-alert",
+          "namespace": "monitoring",
+          "remediation": "Run `kubectl create prometheusrule slo-error-budget-alert -n monitoring`."
+        }
+      ],
+      "solutionCommands": [
+        "kubectl top nodes",
+        "kubectl create prometheusrule slo-error-budget-alert -n monitoring"
+      ],
+      "troubleshootingGuide": "Ensure `slo-error-budget-alert` is created in the `monitoring` namespace."
+    },
+    {
+      "id": "lab-obs-02",
+      "title": "Provisioning an OpenTelemetry Collector Gateway",
+      "difficulty": "Intermediate",
+      "durationMinutes": 25,
+      "xpReward": 200,
+      "scenario": "Deploy an OpenTelemetry Collector gateway (`otel-collector`) in `monitoring` with 2 replicas and expose it as a service on port 4317.",
+      "productionContext": "Microservices export OTLP gRPC telemetry to `otel-collector.monitoring.svc:4317` for centralized batching and routing.",
+      "prerequisites": ["lab-obs-01"],
+      "objectives": [
+        "Create deployment `otel-collector` in `monitoring` with 2 replicas using image `otel/opentelemetry-collector:0.114.0`",
+        "Expose `otel-collector` as a Service on port 4317 in `monitoring`"
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: otel-collector\n  namespace: monitoring\nspec:\n  replicas: 2\n  selector:\n    matchLabels:\n      app: otel-collector\n  template:\n    metadata:\n      labels:\n        app: otel-collector\n    spec:\n      containers:\n        - name: otel\n          image: otel/opentelemetry-collector:0.114.0",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Deploy OpenTelemetry Collector",
+          "instruction": "Create deployment `otel-collector` in `monitoring` with 2 replicas.",
+          "commandHint": "kubectl create deployment otel-collector --image=otel/opentelemetry-collector:0.114.0 --replicas=2 -n monitoring"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Expose OTLP gRPC Service Port 4317",
+          "instruction": "Expose `deployment/otel-collector` on port 4317 in `monitoring`.",
+          "commandHint": "kubectl expose deployment otel-collector --port=4317 -n monitoring"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "val-obs-02-a",
+          "description": "Deployment monitoring/otel-collector has 2 ready replicas",
+          "type": "replica_count_min",
+          "kind": "Deployment",
+          "name": "otel-collector",
+          "namespace": "monitoring",
+          "expectedValue": 2,
+          "remediation": "Run `kubectl create deployment otel-collector --image=otel/opentelemetry-collector:0.114.0 --replicas=2 -n monitoring`."
+        },
+        {
+          "id": "val-obs-02-b",
+          "description": "Service monitoring/otel-collector has active endpoints",
+          "type": "service_has_endpoints",
+          "kind": "Service",
+          "name": "otel-collector",
+          "namespace": "monitoring",
+          "expectedValue": 2,
+          "remediation": "Run `kubectl expose deployment otel-collector --port=4317 -n monitoring`."
+        }
+      ],
+      "solutionCommands": [
+        "kubectl create deployment otel-collector --image=otel/opentelemetry-collector:0.114.0 --replicas=2 -n monitoring",
+        "kubectl expose deployment otel-collector --port=4317 -n monitoring"
+      ],
+      "troubleshootingGuide": "Check `kubectl get deploy,svc -n monitoring` to confirm `otel-collector` is running and exposed."
+    }
+  ],
+  "assessmentQuestions": [
+    {
+      "id": "q-obs-01",
+      "question": "What are the three components of a standard OpenTelemetry Collector pipeline?",
+      "options": [
+        "Pods, Services, Ingresses",
+        "Receivers, Processors, Exporters",
+        "Tables, Views, Triggers",
+        "Branches, Tags, Releases"
+      ],
+      "correctIndex": 1,
+      "explanation": "OpenTelemetry Collector pipelines ingest telemetry via Receivers, transform/batch/filter via Processors, and send data to backends via Exporters."
+    },
+    {
+      "id": "q-obs-02",
+      "question": "In the RED observability methodology for request-driven services, what does RED stand for?",
+      "options": [
+        "Rate, Errors, Duration",
+        "Routing, Encryption, DNS",
+        "Replicas, Endpoints, Deployments",
+        "Readiness, Execution, Disk"
+      ],
+      "correctIndex": 0,
+      "explanation": "RED measures request Rate (requests/sec), Errors (failed requests/sec), and Duration (latency histogram/percentiles) for every microservice."
+    }
+  ]
+}
+

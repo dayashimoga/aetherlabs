@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="KubeLabs — Standalone Low-Resource Cross-Platform Learn-by-Doing Kubernetes, CNCF, GitOps, DevSecOps, SRE, Platform Engineering, Multi-Cloud & AI-Ops Lab Platform" />
+  <meta name="theme-color" content="#38bdf8" />
+  <title>KubeLabs — Cloud-Native & Kubernetes Learn-by-Doing Platform</title>
+  <link rel="manifest" href="/manifest.json" />
+  <link rel="stylesheet" href="/css/styles.css" />
+</head>
+<body>
+  <header class="top-header" role="banner">
+    <div class="brand-wrap">
+      <div class="brand-logo" aria-hidden="true">KL</div>
+      <div>
+        <span class="brand-title">KubeLabs</span>
+        <span class="brand-subtitle">Cloud-Native, Kubernetes, SRE, Platform &amp; Multi-Cloud Lab Engine</span>
+      </div>
+    </div>
+
+    <nav class="main-nav" role="navigation" aria-label="Primary Workspace Navigation">
+      <button class="nav-tab active" data-view="view-paths" type="button">1. Curriculum &amp; Paths (16 Domains)</button>
+      <button class="nav-tab" data-view="view-workbench" type="button">2. Interactive Lab Workbench</button>
+      <button class="nav-tab" data-view="view-incidents" type="button">3. Incident Simulator (8 Scenarios)</button>
+      <button class="nav-tab" data-view="view-architect" type="button">4. UI Architecture Designer</button>
+      <button class="nav-tab" data-view="view-certs" type="button">5. Exams &amp; Certifications</button>
+      <button class="nav-tab" data-view="view-governance" type="button">6. 11-Agent Quality Gate</button>
+    </nav>
+
+    <div class="telemetry-bar" aria-label="Learner Telemetry">
+      <span class="pill xp" id="header-xp">0 XP</span>
+      <span class="pill" id="header-labs-completed">0/32 Labs</span>
+      <span class="pill online" id="header-runtime-mode">Offline-Ready Engine</span>
+    </div>
+  </header>
+
+  <main class="app-container" role="main">
+    <!-- VIEW 1: GUIDED LEARNING PATHS & 16-DOMAIN CURRICULUM -->
+    <section id="view-paths" class="view-panel active" aria-labelledby="paths-heading">
+      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:1rem; margin-bottom:1.25rem;">
+        <div>
+          <h1 id="paths-heading" style="font-size:1.45rem;">Guided Cloud-Native Role Learning Paths &amp; Modular Plugin Catalog</h1>
+          <p style="color:var(--text-secondary); font-size:0.9rem;">
+            16 schema-validated technology plugins | 32 hands-on labs | 8 production outages | 8 enterprise reference architectures
+          </p>
+        </div>
+        <div style="display:flex; gap:0.5rem;">
+          <input id="domain-search-input" type="search" placeholder="Filter domains or labs (e.g. EKS, Istio, eBPF, GPU)..."
+            style="background:var(--bg-card); border:1px solid var(--border-subtle); color:var(--text-primary); padding:0.5rem 0.85rem; border-radius:6px; min-width:280px;" />
+        </div>
+      </div>
+
+      <h2 style="font-size:1.05rem; margin-bottom:0.75rem; color:var(--accent-blue);">6 Role-Based Career Tracks</h2>
+      <div id="tracks-container" class="grid-3" style="margin-bottom:1.75rem;"></div>
+
+      <h2 style="font-size:1.05rem; margin-bottom:0.75rem; color:var(--accent-green);">6 Multi-Milestone Production Capstone Projects</h2>
+      <div id="projects-container" class="grid-3" style="margin-bottom:1.75rem;"></div>
+
+      <h2 style="font-size:1.05rem; margin-bottom:0.75rem; color:var(--accent-blue);">All 18 Technology Domain Plugins &amp; 36 Interactive Labs</h2>
+      <div id="domains-container" class="grid-2"></div>
+    </section>
+
+    <!-- VIEW 2: INTERACTIVE LAB WORKBENCH -->
+    <section id="view-workbench" class="view-panel" aria-labelledby="workbench-heading">
+      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.75rem; margin-bottom:1rem;">
+        <div>
+          <span class="badge" id="wb-domain-badge">Kubernetes Core</span>
+          <h1 id="workbench-heading" style="font-size:1.3rem; display:inline; margin-left:0.5rem;">Loading Lab...</h1>
+        </div>
+        <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
+          <select id="wb-lab-selector" aria-label="Select Lab"
+            style="background:var(--bg-card); color:var(--text-primary); border:1px solid var(--border-subtle); border-radius:6px; padding:0.45rem 0.7rem; font-size:0.84rem;"></select>
+          <button class="btn" id="btn-reset-lab" type="button">Reset Lab Cluster</button>
+          <button class="btn btn-warning" id="btn-solve-lab" type="button">Run Guided Solution</button>
+          <button class="btn btn-success" id="btn-validate-lab" type="button">Validate Objectives</button>
+        </div>
+      </div>
+
+      <div class="workbench-layout">
+        <!-- Left Column: Scenario, Steps & Troubleshooting -->
+        <div class="workbench-pane">
+          <div>
+            <h2 style="font-size:0.95rem; color:var(--accent-blue);">Production Scenario &amp; Context</h2>
+            <p id="wb-scenario" style="font-size:0.84rem; color:var(--text-secondary); margin-top:0.3rem;"></p>
+            <p id="wb-prod-context" style="font-size:0.78rem; color:var(--text-muted); margin-top:0.35rem; font-style:italic;"></p>
+          </div>
+
+          <div>
+            <h3 style="font-size:0.9rem; margin-bottom:0.45rem;">Step-by-Step Instructions (Click command to run)</h3>
+            <div id="wb-steps-list"></div>
+          </div>
+
+          <div style="background:var(--bg-secondary); padding:0.7rem; border-radius:6px; border:1px solid var(--border-subtle);">
+            <h4 style="font-size:0.82rem; color:var(--accent-amber);">Troubleshooting &amp; Verification Hint</h4>
+            <p id="wb-troubleshooting" style="font-size:0.78rem; color:var(--text-secondary); margin-top:0.25rem;"></p>
+          </div>
+        </div>
+
+        <!-- Center Column: Built-in Terminal & YAML/HCL Manifest Editor -->
+        <div class="workbench-pane">
+          <div class="terminal-box">
+            <div class="terminal-topbar">
+              <span>Sandboxed Cloud-Native Shell (kubectl | helm | docker | argocd | istioctl | tofu | aws | az | gcloud | trivy | aiops)</span>
+              <button class="btn" id="btn-clear-terminal" type="button" style="padding:0.15rem 0.5rem; font-size:0.72rem;">Clear</button>
+            </div>
+            <div id="terminal-output" class="terminal-output" role="log" aria-live="polite"></div>
+            <form id="terminal-form" class="terminal-input-row">
+              <span class="terminal-prompt">learner@kubelabs:~$</span>
+              <input id="terminal-input" class="terminal-input" type="text" autocomplete="off" spellcheck="false"
+                placeholder="Type a command (e.g., kubectl get pods -A, help) and press Enter..." aria-label="Terminal Command Input" />
+              <button class="btn btn-primary" type="submit" style="padding:0.3rem 0.65rem;">Run</button>
+            </form>
+          </div>
+
+          <div style="display:flex; gap:0.4rem; flex-wrap:wrap;">
+            <button class="btn quick-cmd" data-cmd="kubectl get pods -A" type="button">kubectl get pods -A</button>
+            <button class="btn quick-cmd" data-cmd="kubectl get svc,deploy -n production" type="button">kubectl get svc,deploy -n production</button>
+            <button class="btn quick-cmd" data-cmd="kubectl top nodes" type="button">kubectl top nodes</button>
+            <button class="btn quick-cmd" data-cmd="aiops analyze" type="button">aiops analyze</button>
+            <button class="btn quick-cmd" data-cmd="help" type="button">help</button>
+          </div>
+
+          <div>
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.4rem;">
+              <label for="wb-manifest-editor" style="font-size:0.86rem; font-weight:600;">Declarative YAML / HCL Manifest Editor</label>
+              <button class="btn btn-primary" id="btn-apply-manifest" type="button" style="padding:0.3rem 0.75rem; font-size:0.78rem;">Apply Manifest to Cluster (kubectl apply -f)</button>
+            </div>
+            <textarea id="wb-manifest-editor" class="code-editor" spellcheck="false"></textarea>
+          </div>
+        </div>
+
+        <!-- Right Column: Live Cluster Visualizer, Validation Engine & AI Mentor -->
+        <div class="workbench-pane">
+          <div>
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.4rem;">
+              <h3 style="font-size:0.9rem; color:var(--accent-blue);">Live Virtual Cluster Topology</h3>
+              <span class="badge" id="cluster-resource-count">0 Resources</span>
+            </div>
+            <div id="cluster-topology-view" class="resource-list"></div>
+          </div>
+
+          <div>
+            <h3 style="font-size:0.9rem; margin-bottom:0.4rem;">Deterministic Validation Engine</h3>
+            <div id="wb-validation-results"></div>
+          </div>
+
+          <div style="border-top:1px solid var(--border-subtle); padding-top:0.75rem;">
+            <h3 style="font-size:0.9rem; color:var(--accent-purple); margin-bottom:0.4rem;">Contextual Socratic AI Mentor (Offline-Ready)</h3>
+            <div style="display:flex; gap:0.35rem; flex-wrap:wrap; margin-bottom:0.5rem;">
+              <button class="btn mentor-mode-btn" data-mode="hint" type="button" style="font-size:0.74rem; padding:0.3rem 0.55rem;">Socratic Hint</button>
+              <button class="btn mentor-mode-btn" data-mode="debug-error" type="button" style="font-size:0.74rem; padding:0.3rem 0.55rem;">Debug Cluster</button>
+              <button class="btn mentor-mode-btn" data-mode="explain" type="button" style="font-size:0.74rem; padding:0.3rem 0.55rem;">Explain Concept</button>
+              <button class="btn mentor-mode-btn" data-mode="security-audit" type="button" style="font-size:0.74rem; padding:0.3rem 0.55rem;">CIS Security Audit</button>
+            </div>
+            <div id="mentor-response-box" style="background:var(--bg-terminal); border:1px solid var(--border-subtle); border-radius:6px; padding:0.7rem; font-size:0.78rem; color:var(--text-secondary); white-space:pre-wrap; max-height:220px; overflow-y:auto;">Click any mentor coaching mode above to analyze your live cluster state and active objectives.</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- VIEW 3: PRODUCTION INCIDENT SIMULATOR & CHAOS COMMAND CENTER -->
+    <section id="view-incidents" class="view-panel" aria-labelledby="incidents-heading">
+      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:1rem; margin-bottom:1.25rem;">
+        <div>
+          <h1 id="incidents-heading" style="font-size:1.4rem;">Production Incident Simulations &amp; Chaos Troubleshooting Drills</h1>
+          <p style="color:var(--text-secondary); font-size:0.88rem;">
+            Inject real SEV-1/SEV-2 outages into the virtual cluster, diagnose root causes via CLI, and verify live service recovery.
+          </p>
+        </div>
+      </div>
+
+      <div id="active-incident-banner" class="card" style="display:none; border-color:var(--accent-red); margin-bottom:1.25rem;">
+        <div class="card-header">
+          <div>
+            <span class="badge sev1" id="inc-active-sev">SEV-1</span>
+            <h2 id="inc-active-title" style="display:inline; margin-left:0.5rem; font-size:1.1rem;"></h2>
+          </div>
+          <div style="display:flex; gap:0.5rem;">
+            <button class="btn" id="btn-inc-open-workbench" type="button">Open in Terminal Workbench</button>
+            <button class="btn btn-warning" id="btn-inc-solve" type="button">Auto-Remediate &amp; Walkthrough</button>
+            <button class="btn btn-success" id="btn-inc-verify" type="button">Verify Incident Recovery</button>
+          </div>
+        </div>
+        <p id="inc-active-alert" style="color:#fca5a5; font-size:0.86rem; font-weight:600;"></p>
+        <p id="inc-active-impact" style="color:var(--text-secondary); font-size:0.83rem;"></p>
+        <div id="inc-active-hints" style="font-size:0.8rem; color:var(--text-muted);"></div>
+        <div id="inc-verification-output"></div>
+      </div>
+
+      <div id="incidents-grid" class="grid-2"></div>
+    </section>
+
+    <!-- VIEW 4: UI-BASED ARCHITECTURE DESIGNER & ENTERPRISE REFERENCE ARCHITECTURES -->
+    <section id="view-architect" class="view-panel" aria-labelledby="architect-heading">
+      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.75rem; margin-bottom:1rem;">
+        <div>
+          <h1 id="architect-heading" style="font-size:1.35rem;">UI Cloud-Native Architecture Designer &amp; Enterprise Reference Blueprints</h1>
+          <p style="color:var(--text-secondary); font-size:0.86rem;">
+            Design visual topologies, run automated Well-Architected &amp; SPOF reviews, compile to Kubernetes YAML + OpenTofu HCL, and deploy directly to the virtual cluster.
+          </p>
+        </div>
+        <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
+          <select id="arch-blueprint-select" aria-label="Load Enterprise Reference Architecture"
+            style="background:var(--bg-card); color:var(--text-primary); border:1px solid var(--border-subtle); border-radius:6px; padding:0.45rem 0.75rem; font-size:0.84rem;"></select>
+          <button class="btn btn-primary" id="btn-arch-deploy" type="button">Deploy Topology to Virtual Cluster</button>
+          <button class="btn btn-success" id="btn-arch-save" type="button">Save Architecture</button>
+        </div>
+      </div>
+
+      <div style="display:flex; gap:0.45rem; flex-wrap:wrap; margin-bottom:1rem;">
+        <span style="font-size:0.8rem; color:var(--text-muted); align-self:center; margin-right:0.3rem;">Add Component Node:</span>
+        <button class="btn arch-add-btn" data-type="waf" data-label="Cloud WAF & Edge Shield" type="button">+ WAF</button>
+        <button class="btn arch-add-btn" data-type="ingress" data-label="Gateway API / Ingress" type="button">+ Ingress</button>
+        <button class="btn arch-add-btn" data-type="service" data-label="ClusterIP Service" type="button">+ Service</button>
+        <button class="btn arch-add-btn" data-type="deployment" data-label="Microservice Deployment (HA)" type="button">+ Deployment</button>
+        <button class="btn arch-add-btn" data-type="database" data-label="CloudNativePG HA Database" type="button">+ Database</button>
+        <button class="btn arch-add-btn" data-type="networkpolicy" data-label="Zero-Trust NetworkPolicy" type="button">+ NetworkPolicy</button>
+        <button class="btn arch-add-btn" data-type="mesh" data-label="Istio Strict mTLS Mesh" type="button">+ Service Mesh</button>
+        <button class="btn arch-add-btn" data-type="gitops" data-label="Argo CD GitOps Controller" type="button">+ Argo CD</button>
+        <button class="btn arch-add-btn" data-type="observability" data-label="Prometheus + OpenTelemetry" type="button">+ Observability</button>
+        <button class="btn arch-add-btn" data-type="gpu-pool" data-label="NVIDIA GPU Inference Pool" type="button">+ GPU Pool</button>
+      </div>
+
+      <div class="grid-2" style="margin-bottom:1rem;">
+        <div class="card">
+          <div class="card-header">
+            <h2 class="card-title" id="arch-current-title">Active Architecture Topology Canvas</h2>
+            <span class="badge" id="arch-score-badge">Well-Architected Score: 95/100</span>
+          </div>
+          <div id="arch-nodes-canvas" class="arch-canvas-grid"></div>
+          <div id="arch-review-findings" style="font-size:0.8rem; color:var(--text-secondary); margin-top:0.5rem;"></div>
+        </div>
+
+        <div class="card">
+          <h2 class="card-title">Bi-Directional Generated Kubernetes YAML &amp; OpenTofu HCL</h2>
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:0.75rem;">
+            <div>
+              <label for="arch-yaml-out" style="font-size:0.78rem; color:var(--accent-blue);">Kubernetes Manifests (YAML)</label>
+              <textarea id="arch-yaml-out" class="code-editor" style="min-height:250px;" readonly></textarea>
+            </div>
+            <div>
+              <label for="arch-hcl-out" style="font-size:0.78rem; color:var(--accent-green);">OpenTofu / Terraform (HCL)</label>
+              <textarea id="arch-hcl-out" class="code-editor" style="min-height:250px;" readonly></textarea>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- VIEW 5: ASSESSMENTS, VERIFIABLE CERTIFICATIONS & SKILL RADAR -->
+    <section id="view-certs" class="view-panel" aria-labelledby="certs-heading">
+      <h1 id="certs-heading" style="font-size:1.4rem; margin-bottom:0.35rem;">Role-Based Certification Exams, Cryptographic Credentials &amp; Skill Mastery</h1>
+      <p style="color:var(--text-secondary); font-size:0.88rem; margin-bottom:1.25rem;">
+        Pass role exams (75%+ threshold) to earn HMAC-SHA256 cryptographically signed credentials across all 6 cloud-native career tracks.
+      </p>
+
+      <div class="grid-2" style="margin-bottom:1.5rem;">
+        <div class="card">
+          <h2 class="card-title">6 Certification Tracks</h2>
+          <div id="cert-tracks-list" style="display:flex; flex-direction:column; gap:0.65rem;"></div>
+        </div>
+
+        <div class="card">
+          <h2 class="card-title">Active Exam / Earned Verifiable Certificates</h2>
+          <div id="exam-runner-area">
+            <p style="font-size:0.85rem; color:var(--text-secondary);">Select any certification track on the left to start an assessment.</p>
+          </div>
+          <div id="earned-certs-list" style="margin-top:1rem;"></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2 class="card-title">16-Domain Cloud-Native Skill Mastery Matrix</h2>
+        <div id="skill-radar-grid" class="grid-3" style="margin-top:0.5rem;"></div>
+      </div>
+    </section>
+
+    <!-- VIEW 6: 11-AGENT QUALITY GATE & LIVE SELF-AUDIT CONSOLE -->
+    <section id="view-governance" class="view-panel" aria-labelledby="gov-heading">
+      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.75rem; margin-bottom:1rem;">
+        <div>
+          <h1 id="gov-heading" style="font-size:1.4rem;">11-Agent Autonomous Engineering Framework &amp; Production Readiness Audit</h1>
+          <p style="color:var(--text-secondary); font-size:0.88rem;">
+            Real-time self-audit verifying Product, Architecture, Backend, Frontend, Kubernetes, Curriculum, DevOps, Security, QA Solver, Documentation, and Platform resource budgets.
+          </p>
+        </div>
+        <button class="btn btn-primary" id="btn-run-agent-audit" type="button">Run Full 11-Agent Self-Audit Now</button>
+      </div>
+
+      <div id="agent-audit-summary" class="card" style="margin-bottom:1rem;"></div>
+      <div id="agent-audit-grid" class="grid-3"></div>
+    </section>
+  </main>
+
+  <script src="/js/app.js"></script>
+</body>
+</html>
+

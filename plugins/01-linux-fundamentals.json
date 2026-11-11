@@ -1,0 +1,183 @@
+{
+  "id": "linux-fundamentals",
+  "title": "Linux Systems, Kernel Isolation & Node Hardening",
+  "category": "Foundations",
+  "trackId": "track-foundations",
+  "version": "1.0.0",
+  "difficulty": "Beginner",
+  "estimatedHours": 6,
+  "summary": "Master Linux kernel namespaces, cgroups v2 resource limits, systemd service management, sysctl networking parameters, and worker node diagnostics.",
+  "prerequisites": [],
+  "learningObjectives": [
+    "Configure Linux kernel sysctl networking parameters required for Kubernetes packet forwarding and bridge netfilter.",
+    "Diagnose running processes, memory utilization, listening TCP sockets, and systemd units on cloud-native Linux nodes.",
+    "Provision node-level kernel tuning ConfigMaps and DaemonSets for production Kubernetes worker fleets."
+  ],
+  "curriculumModules": [
+    {
+      "id": "mod-linux-01",
+      "title": "Kernel Namespaces, Cgroups v2 & Systemd Lifecycle",
+      "conceptSummary": "Containers are regular Linux processes isolated by 6 kernel namespaces (pid, net, mnt, uts, ipc, user) and governed by cgroups v2 hierarchies managed via systemd slices.",
+      "productionArchitecturePattern": "Place kubelet and containerd in dedicated systemd resource slices (system.slice / kubelet.slice) with --kube-reserved and --system-reserved CPU/memory protections so application bursts never starve node daemons.",
+      "keyCommands": [
+        "systemctl status kubelet",
+        "ps",
+        "free",
+        "df"
+      ]
+    },
+    {
+      "id": "mod-linux-02",
+      "title": "Linux Kernel Sysctl Tuning & Socket Diagnostics",
+      "conceptSummary": "Kubernetes CNI plugins require net.ipv4.ip_forward=1 and high ephemeral port/conntrack limits to route Pod-to-Pod and Service VIP traffic without packet drops.",
+      "productionArchitecturePattern": "Enforce sysctl parameters declaratively via node initialization ConfigMaps and privileged node-tuning DaemonSets across all worker pools.",
+      "keyCommands": [
+        "sysctl -w net.ipv4.ip_forward=1",
+        "ss -tulpn",
+        "ip route"
+      ]
+    }
+  ],
+  "labs": [
+    {
+      "id": "lab-linux-01",
+      "title": "Linux Node Diagnostics & Kubelet Systemd Hardening",
+      "difficulty": "Beginner",
+      "durationMinutes": 20,
+      "xpReward": 150,
+      "scenario": "A new bare-metal worker node is joining the production cluster. You must verify active systemd units and deploy a node-sysctl ConfigMap in kube-system to persist kernel forwarding parameters.",
+      "productionContext": "Every production Kubernetes node requires verified kubelet systemd state and persisted sysctl kernel parameters before scheduling workloads.",
+      "prerequisites": [],
+      "objectives": [
+        "Inspect the kubelet systemd unit status using systemctl",
+        "Create ConfigMap kube-system/node-sysctl-config with ip_forward=1"
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: node-sysctl-config\n  namespace: kube-system\ndata:\n  ip_forward: \"1\"\n  max_user_watches: \"524288\"",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Verify Kubelet Systemd Daemon",
+          "instruction": "Check the health of the kubelet systemd service on the control plane node.",
+          "commandHint": "systemctl status kubelet"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Provision Kernel Sysctl ConfigMap",
+          "instruction": "Create the node-sysctl-config ConfigMap in the kube-system namespace with ip_forward=1.",
+          "commandHint": "kubectl create configmap node-sysctl-config --from-literal=ip_forward=1 -n kube-system"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "val-linux-01-a",
+          "description": "Inspected kubelet service via systemctl",
+          "type": "command_executed",
+          "commandSubstring": "systemctl",
+          "remediation": "Run `systemctl status kubelet` in the terminal."
+        },
+        {
+          "id": "val-linux-01-b",
+          "description": "ConfigMap kube-system/node-sysctl-config exists with ip_forward=1",
+          "type": "resource_field_equals",
+          "kind": "ConfigMap",
+          "name": "node-sysctl-config",
+          "namespace": "kube-system",
+          "fieldPath": "data.ip_forward",
+          "expectedValue": "1",
+          "remediation": "Run `kubectl create configmap node-sysctl-config --from-literal=ip_forward=1 -n kube-system`."
+        }
+      ],
+      "solutionCommands": [
+        "systemctl status kubelet",
+        "kubectl create configmap node-sysctl-config --from-literal=ip_forward=1 -n kube-system"
+      ],
+      "troubleshootingGuide": "Ensure the ConfigMap is created in the `kube-system` namespace (`-n kube-system`) and contains key `ip_forward` set to `1`."
+    },
+    {
+      "id": "lab-linux-02",
+      "title": "Kernel Socket Auditing & Node Exporter Daemon Deployment",
+      "difficulty": "Beginner",
+      "durationMinutes": 25,
+      "xpReward": 150,
+      "scenario": "Security and SRE teams require visibility into listening kernel sockets and host-level hardware metrics in the monitoring namespace.",
+      "productionContext": "Auditing listening sockets (`ss`) and running a node-exporter workload ensures kernel-level network and CPU saturation anomalies are caught early.",
+      "prerequisites": ["lab-linux-01"],
+      "objectives": [
+        "Audit listening TCP sockets on the host using ss",
+        "Deploy the node-exporter workload in the monitoring namespace"
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: node-exporter\n  namespace: monitoring\nspec:\n  replicas: 2\n  selector:\n    matchLabels:\n      app: node-exporter\n  template:\n    metadata:\n      labels:\n        app: node-exporter\n    spec:\n      containers:\n        - name: node-exporter\n          image: prom/node-exporter:v1.8.2",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Audit Listening Kernel Sockets",
+          "instruction": "Run `ss -tulpn` to inspect listening TCP sockets and owning kernel processes.",
+          "commandHint": "ss -tulpn"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Deploy Node Exporter",
+          "instruction": "Create the `node-exporter` deployment in the `monitoring` namespace with image `prom/node-exporter:v1.8.2`.",
+          "commandHint": "kubectl create deployment node-exporter --image=prom/node-exporter:v1.8.2 --replicas=2 -n monitoring"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "val-linux-02-a",
+          "description": "Executed socket inspection command (`ss`)",
+          "type": "command_executed",
+          "commandSubstring": "ss",
+          "remediation": "Run `ss -tulpn` in the terminal."
+        },
+        {
+          "id": "val-linux-02-b",
+          "description": "Deployment monitoring/node-exporter is Running with 2 replicas",
+          "type": "replica_count_min",
+          "kind": "Deployment",
+          "name": "node-exporter",
+          "namespace": "monitoring",
+          "expectedValue": 2,
+          "remediation": "Run `kubectl create deployment node-exporter --image=prom/node-exporter:v1.8.2 --replicas=2 -n monitoring`."
+        }
+      ],
+      "solutionCommands": [
+        "ss -tulpn",
+        "kubectl create deployment node-exporter --image=prom/node-exporter:v1.8.2 --replicas=2 -n monitoring"
+      ],
+      "troubleshootingGuide": "Verify that `node-exporter` is deployed in the `monitoring` namespace (`-n monitoring`) with at least 2 replicas."
+    }
+  ],
+  "assessmentQuestions": [
+    {
+      "id": "q-linux-01",
+      "question": "Which Linux kernel mechanism enforces CPU, memory, and I/O resource ceilings on container processes?",
+      "options": [
+        "Control Groups (cgroups v2)",
+        "UTS Namespaces",
+        "chroot jails",
+        "iptables NAT chains"
+      ],
+      "correctIndex": 0,
+      "explanation": "Linux cgroups v2 account for and throttle CPU, memory, block I/O, and PID consumption per process hierarchy, whereas namespaces provide visibility isolation."
+    },
+    {
+      "id": "q-linux-02",
+      "question": "Which sysctl kernel setting must be set to 1 on Linux worker nodes so pods can route packets across network interfaces?",
+      "options": [
+        "vm.swappiness",
+        "net.ipv4.ip_forward",
+        "kernel.pid_max",
+        "fs.file-max"
+      ],
+      "correctIndex": 1,
+      "explanation": "net.ipv4.ip_forward=1 enables IPv4 packet forwarding between virtual ethernet pairs (veth), bridges, and physical NICs."
+    }
+  ]
+}
+

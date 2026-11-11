@@ -1,0 +1,201 @@
+{
+  "id": "containers-runtime",
+  "title": "Containers, OCI Runtimes & Distroless Images",
+  "category": "Foundations",
+  "trackId": "track-foundations",
+  "version": "1.0.0",
+  "difficulty": "Beginner",
+  "estimatedHours": 6,
+  "summary": "Build, inspect, and troubleshoot OCI containers, containerd/CRI runtimes, multi-stage distroless images, and rootless execution contexts.",
+  "prerequisites": ["linux-fundamentals"],
+  "learningObjectives": [
+    "Inspect running containers and OCI image layers using docker and crictl CLI workflows.",
+    "Remediate broken container image deployments suffering from ImagePullBackOff.",
+    "Deploy hardened distroless workloads running as non-root users in production."
+  ],
+  "curriculumModules": [
+    {
+      "id": "mod-containers-01",
+      "title": "OCI Specifications, containerd & OverlayFS",
+      "conceptSummary": "The Open Container Initiative (OCI) standardizes image manifests, layer tarballs, and runtime config.json. Kubelet communicates with containerd over gRPC via the Container Runtime Interface (CRI).",
+      "productionArchitecturePattern": "Use multi-stage builds to compile binaries in a builder stage and copy only the static binary and CA certificates into `gcr.io/distroless/static-debian12:nonroot`.",
+      "keyCommands": [
+        "docker ps",
+        "docker images",
+        "crictl ps"
+      ]
+    },
+    {
+      "id": "mod-containers-02",
+      "title": "Diagnosing ImagePullBackOff & Container Startup Failures",
+      "conceptSummary": "ImagePullBackOff occurs when containerd cannot fetch an image manifest due to an invalid tag, missing registry Secret, or unreachable registry mirror.",
+      "productionArchitecturePattern": "Pin immutable OCI image digests or verified semantic tags and configure private imagePullSecrets with regional registry mirrors.",
+      "keyCommands": [
+        "kubectl describe pod",
+        "kubectl set image deployment/<name> <container>=<image>"
+      ]
+    }
+  ],
+  "labs": [
+    {
+      "id": "lab-containers-01",
+      "title": "OCI Container Runtime Inspection & Distroless Deployment",
+      "difficulty": "Beginner",
+      "durationMinutes": 20,
+      "xpReward": 150,
+      "scenario": "Platform Security requires migrating a microservice in namespace `production` to a minimal distroless OCI image.",
+      "productionContext": "Distroless images eliminate shells and package managers from production containers, shrinking CVE surfaces by over 90%.",
+      "prerequisites": ["lab-linux-01"],
+      "objectives": [
+        "List available local OCI container images using docker images",
+        "Deploy `distroless-api` in `production` using `gcr.io/distroless/static-debian12:nonroot`"
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: distroless-api\n  namespace: production\nspec:\n  replicas: 2\n  selector:\n    matchLabels:\n      app: distroless-api\n  template:\n    metadata:\n      labels:\n        app: distroless-api\n    spec:\n      containers:\n        - name: api\n          image: gcr.io/distroless/static-debian12:nonroot",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Inspect Local OCI Image Cache",
+          "instruction": "Run `docker images` to inspect verified base images on the node.",
+          "commandHint": "docker images"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Deploy Distroless API Workload",
+          "instruction": "Create deployment `distroless-api` in `production` with 2 replicas using `gcr.io/distroless/static-debian12:nonroot`.",
+          "commandHint": "kubectl create deployment distroless-api --image=gcr.io/distroless/static-debian12:nonroot --replicas=2 -n production"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "val-cont-01-a",
+          "description": "Inspected OCI images via docker images",
+          "type": "command_executed",
+          "commandSubstring": "docker images",
+          "remediation": "Run `docker images` in the terminal."
+        },
+        {
+          "id": "val-cont-01-b",
+          "description": "Deployment production/distroless-api uses gcr.io/distroless/static-debian12:nonroot",
+          "type": "resource_field_contains",
+          "kind": "Deployment",
+          "name": "distroless-api",
+          "namespace": "production",
+          "fieldPath": "spec.template.spec.containers[0].image",
+          "expectedValue": "gcr.io/distroless/static-debian12:nonroot",
+          "remediation": "Deploy distroless-api with image gcr.io/distroless/static-debian12:nonroot in namespace production."
+        }
+      ],
+      "solutionCommands": [
+        "docker images",
+        "kubectl create deployment distroless-api --image=gcr.io/distroless/static-debian12:nonroot --replicas=2 -n production"
+      ],
+      "troubleshootingGuide": "Check `kubectl get deploy distroless-api -n production -o json` to confirm the image tag matches `gcr.io/distroless/static-debian12:nonroot`."
+    },
+    {
+      "id": "lab-containers-02",
+      "title": "Resolving ImagePullBackOff on Production Inventory Service",
+      "difficulty": "Beginner",
+      "durationMinutes": 20,
+      "xpReward": 175,
+      "scenario": "Deployment `inventory-api` in namespace `production` was deployed with an invalid image tag (`nginx:1.27-broken`) and is stuck in `ImagePullBackOff`.",
+      "productionContext": "Rapidly identifying and fixing broken OCI image references is one of the most common day-to-day Kubernetes operations.",
+      "prerequisites": ["lab-containers-01"],
+      "objectives": [
+        "Update `deployment/inventory-api` in `production` to use `nginx:1.27-alpine`",
+        "Verify all `inventory-api` pods transition to `Running`"
+      ],
+      "initialClusterState": {
+        "resources": [
+          {
+            "apiVersion": "apps/v1",
+            "kind": "Deployment",
+            "metadata": { "name": "inventory-api", "namespace": "production" },
+            "spec": {
+              "replicas": 2,
+              "selector": { "matchLabels": { "app": "inventory-api" } },
+              "template": {
+                "metadata": { "labels": { "app": "inventory-api" } },
+                "spec": {
+                  "containers": [
+                    { "name": "inventory", "image": "nginx:1.27-broken" }
+                  ]
+                }
+              }
+            }
+          }
+        ]
+      },
+      "starterManifest": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: inventory-api\n  namespace: production\nspec:\n  replicas: 2\n  selector:\n    matchLabels:\n      app: inventory-api\n  template:\n    metadata:\n      labels:\n        app: inventory-api\n    spec:\n      containers:\n        - name: inventory\n          image: nginx:1.27-alpine",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Inspect Failing Inventory Pods",
+          "instruction": "Run `kubectl get pods -n production` to observe the `ImagePullBackOff` status.",
+          "commandHint": "kubectl get pods -n production"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Set Verified OCI Image Tag",
+          "instruction": "Update container `inventory` on `deployment/inventory-api` in `production` to `nginx:1.27-alpine`.",
+          "commandHint": "kubectl set image deployment/inventory-api inventory=nginx:1.27-alpine -n production"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "val-cont-02-a",
+          "description": "Deployment production/inventory-api image updated to nginx:1.27-alpine",
+          "type": "resource_field_equals",
+          "kind": "Deployment",
+          "name": "inventory-api",
+          "namespace": "production",
+          "fieldPath": "spec.template.spec.containers[0].image",
+          "expectedValue": "nginx:1.27-alpine",
+          "remediation": "Run `kubectl set image deployment/inventory-api inventory=nginx:1.27-alpine -n production`."
+        },
+        {
+          "id": "val-cont-02-b",
+          "description": "All inventory-api pods are Running",
+          "type": "pod_status_running",
+          "kind": "Pod",
+          "name": "inventory-api",
+          "namespace": "production",
+          "remediation": "Ensure the image tag is valid so pods transition to Running."
+        }
+      ],
+      "solutionCommands": [
+        "kubectl set image deployment/inventory-api inventory=nginx:1.27-alpine -n production"
+      ],
+      "troubleshootingGuide": "Use `kubectl describe deploy inventory-api -n production` to verify the container name (`inventory`) and image (`nginx:1.27-alpine`)."
+    }
+  ],
+  "assessmentQuestions": [
+    {
+      "id": "q-cont-01",
+      "question": "Why are multi-stage builds with distroless base images recommended for production Kubernetes workloads?",
+      "options": [
+        "They include a full bash shell and apt-get for live production debugging",
+        "They strip compilers, shells, and OS package managers, drastically reducing image size and CVE attack surface",
+        "They bypass Kubernetes RBAC checks",
+        "They automatically disable container memory limits"
+      ],
+      "correctIndex": 1,
+      "explanation": "Distroless images contain only the application binary and runtime dependencies, preventing attackers from spawning shells or running package managers if a process is compromised."
+    },
+    {
+      "id": "q-cont-02",
+      "question": "Which protocol does the Kubernetes kubelet use to communicate with containerd?",
+      "options": [
+        "Container Runtime Interface (CRI) over gRPC",
+        "Docker Engine REST API v1.12",
+        "SNMP v3",
+        "OpenFlow"
+      ],
+      "correctIndex": 0,
+      "explanation": "Kubelet communicates with OCI-compliant runtimes like containerd and CRI-O using the Kubernetes Container Runtime Interface (CRI) over a local UNIX domain gRPC socket."
+    }
+  ]
+}
+

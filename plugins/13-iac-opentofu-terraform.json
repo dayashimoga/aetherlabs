@@ -1,0 +1,186 @@
+{
+  "id": "iac-opentofu-terraform",
+  "title": "Infrastructure as Code (OpenTofu & Terraform)",
+  "category": "Platform & IaC",
+  "trackId": "track-platform",
+  "version": "1.0.0",
+  "difficulty": "Intermediate",
+  "estimatedHours": 8,
+  "summary": "Provision reproducible cloud and Kubernetes infrastructure using OpenTofu and Terraform: HCL modules, remote state locking, plan/apply workflows, and drift detection.",
+  "prerequisites": ["linux-fundamentals", "cloud-networking"],
+  "learningObjectives": [
+    "Execute the full OpenTofu/Terraform lifecycle (`init`, `validate`, `plan`, `apply`, `state list`).",
+    "Provision cloud VPC, EKS cluster, and S3 state infrastructure declaratively.",
+    "Audit and reconcile infrastructure state drift."
+  ],
+  "curriculumModules": [
+    {
+      "id": "mod-iac-01",
+      "title": "Declarative HCL, State Graphs & Provider Plugins",
+      "conceptSummary": "OpenTofu (CNCF / Linux Foundation open-source Terraform fork) builds a dependency DAG of infrastructure resources, compares HCL against remote state, and executes API calls in topological order.",
+      "productionArchitecturePattern": "Store encrypted state remotely (S3/GCS/Azure Blob) with state locking enabled and client-side state encryption (`encryption` block in OpenTofu).",
+      "keyCommands": [
+        "tofu init",
+        "tofu validate",
+        "tofu plan",
+        "tofu apply"
+      ]
+    },
+    {
+      "id": "mod-iac-02",
+      "title": "Reusable Modules, Drift Detection & Policy-as-Code",
+      "conceptSummary": "Versioned modules encapsulate VPC, Kubernetes, and IAM patterns while `tofu state list` and `tofu plan -detailed-exitcode` detect out-of-band console drift.",
+      "productionArchitecturePattern": "Run `tofu plan` on every Pull Request and gate `tofu apply` behind automated OPA/Conftest policy checks.",
+      "keyCommands": [
+        "tofu state list",
+        "terraform plan"
+      ]
+    }
+  ],
+  "labs": [
+    {
+      "id": "lab-iac-01",
+      "title": "Provisioning Cloud-Native Infrastructure with OpenTofu",
+      "difficulty": "Intermediate",
+      "durationMinutes": 20,
+      "xpReward": 200,
+      "scenario": "Initialize and apply an OpenTofu configuration (`tofu init` and `tofu apply`) to provision the production VPC and EKS cluster resources.",
+      "productionContext": "All production cloud environments must be provisioned through version-controlled OpenTofu/Terraform workflows rather than manual ClickOps.",
+      "prerequisites": ["lab-net-01"],
+      "objectives": [
+        "Initialize OpenTofu providers using `tofu init`",
+        "Apply the infrastructure plan using `tofu apply` to provision `aws_eks_cluster.prod`"
+      ],
+      "initialClusterState": {
+        "resources": [],
+        "cloudResources": [],
+        "terraformState": { "initialized": false, "resources": [], "outputs": {} }
+      },
+      "starterManifest": "# main.tf (OpenTofu v1.9)\nresource \"aws_vpc\" \"main\" {\n  cidr_block = \"10.0.0.0/16\"\n}\nresource \"aws_eks_cluster\" \"prod\" {\n  name = \"kubelabs-eks-prod\"\n}",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Initialize OpenTofu Workspace",
+          "instruction": "Run `tofu init` to initialize providers and state backend.",
+          "commandHint": "tofu init"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Apply Declarative Infrastructure Plan",
+          "instruction": "Run `tofu apply` to provision the VPC, EKS cluster, and S3 artifact bucket.",
+          "commandHint": "tofu apply"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "val-iac-01-a",
+          "description": "Executed tofu init",
+          "type": "command_executed",
+          "commandSubstring": "tofu init",
+          "remediation": "Run `tofu init`."
+        },
+        {
+          "id": "val-iac-01-b",
+          "description": "Cloud resource aws_eks_cluster.prod provisioned via tofu apply",
+          "type": "cloud_resource_exists",
+          "name": "aws_eks_cluster.prod",
+          "remediation": "Run `tofu apply` to provision cloud resources."
+        }
+      ],
+      "solutionCommands": [
+        "tofu init",
+        "tofu apply"
+      ],
+      "troubleshootingGuide": "Run `tofu init` followed by `tofu apply`, then inspect with `tofu state list`."
+    },
+    {
+      "id": "lab-iac-02",
+      "title": "Auditing Terraform State & Deploying Workload ConfigMap",
+      "difficulty": "Intermediate",
+      "durationMinutes": 20,
+      "xpReward": 200,
+      "scenario": "Audit managed infrastructure in the state file using `tofu state list` and publish the cluster endpoint into ConfigMap `production/terraform-outputs`.",
+      "productionContext": "Bridging IaC outputs into Kubernetes ConfigMaps allows workloads and GitOps controllers to consume cloud resource identifiers cleanly.",
+      "prerequisites": ["lab-iac-01"],
+      "objectives": [
+        "List tracked resources in OpenTofu state using `tofu state list`",
+        "Create ConfigMap `terraform-outputs` in `production` with `vpc_id=vpc-prod-01`"
+      ],
+      "initialClusterState": {
+        "resources": [],
+        "terraformState": {
+          "initialized": true,
+          "resources": ["aws_vpc.main", "aws_eks_cluster.prod"],
+          "outputs": {}
+        }
+      },
+      "starterManifest": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: terraform-outputs\n  namespace: production\ndata:\n  vpc_id: vpc-prod-01",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Inspect OpenTofu State Graph",
+          "instruction": "Run `tofu state list` to audit resources tracked in the state file.",
+          "commandHint": "tofu state list"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Publish Terraform Output ConfigMap",
+          "instruction": "Create ConfigMap `terraform-outputs` in `production` with `--from-literal=vpc_id=vpc-prod-01`.",
+          "commandHint": "kubectl create configmap terraform-outputs --from-literal=vpc_id=vpc-prod-01 -n production"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "val-iac-02-a",
+          "description": "Audited state via tofu state list",
+          "type": "command_executed",
+          "commandSubstring": "tofu state list",
+          "remediation": "Run `tofu state list`."
+        },
+        {
+          "id": "val-iac-02-b",
+          "description": "ConfigMap production/terraform-outputs has vpc_id=vpc-prod-01",
+          "type": "resource_field_equals",
+          "kind": "ConfigMap",
+          "name": "terraform-outputs",
+          "namespace": "production",
+          "fieldPath": "data.vpc_id",
+          "expectedValue": "vpc-prod-01",
+          "remediation": "Run `kubectl create configmap terraform-outputs --from-literal=vpc_id=vpc-prod-01 -n production`."
+        }
+      ],
+      "solutionCommands": [
+        "tofu state list",
+        "kubectl create configmap terraform-outputs --from-literal=vpc_id=vpc-prod-01 -n production"
+      ],
+      "troubleshootingGuide": "Ensure `tofu state list` was executed and `ConfigMap/terraform-outputs` exists in `production`."
+    }
+  ],
+  "assessmentQuestions": [
+    {
+      "id": "q-iac-01",
+      "question": "Why is remote state locking (e.g., S3 + DynamoDB or native S3 lockfile) critical when multiple engineers or CI jobs run OpenTofu/Terraform?",
+      "options": [
+        "It makes container images smaller",
+        "It prevents concurrent `apply` runs from corrupting the state file or creating conflicting duplicate cloud resources",
+        "It disables AWS IAM authentication",
+        "It converts HCL into Python"
+      ],
+      "correctIndex": 1,
+      "explanation": "State locking ensures only one process can mutate the infrastructure state graph at a time, preventing race conditions and state corruption."
+    },
+    {
+      "id": "q-iac-02",
+      "question": "Which OpenTofu command validates the syntax and internal consistency of `.tf` files without accessing remote cloud APIs?",
+      "options": [
+        "tofu destroy",
+        "tofu validate",
+        "tofu taint",
+        "tofu force-unlock"
+      ],
+      "correctIndex": 1,
+      "explanation": "`tofu validate` checks HCL syntax, attribute types, and module references locally without requiring cloud credentials or network calls."
+    }
+  ]
+}
+

@@ -1,0 +1,213 @@
+{
+  "id": "finops-green-cloud",
+  "title": "Cloud-Native FinOps (OpenCost) & Sustainable Green Computing (Kepler)",
+  "category": "Emerging Technologies",
+  "trackId": "track-platform",
+  "version": "1.0.0",
+  "difficulty": "Advanced",
+  "estimatedHours": 7,
+  "summary": "Master CNCF OpenCost unit economics, namespace cost allocation, right-sizing CPU/Memory slack, and eBPF-based Kepler pod energy/carbon telemetry.",
+  "prerequisites": ["kubernetes-core", "observability-stack"],
+  "learningObjectives": [
+    "Deploy CNCF OpenCost to measure real-time Kubernetes cost allocation by namespace, label, and controller.",
+    "Eliminate CPU and memory over-provisioning slack by right-sizing workload requests.",
+    "Deploy Kepler (Kubernetes-based Efficient Power Level Exporter) for pod-level energy and carbon footprint visibility."
+  ],
+  "curriculumModules": [
+    {
+      "id": "mod-finops-01",
+      "title": "CNCF OpenCost & Kubernetes Unit Economics",
+      "conceptSummary": "Shared multi-tenant clusters obscure cloud bills. CNCF OpenCost correlates cloud billing APIs (AWS CUR, Azure Cost, GCP Billing) with Pod CPU/RAM/GPU/PV usage to calculate exact per-service unit costs.",
+      "productionArchitecturePattern": "Enforce mandatory cost-center labels (`finops.kubelabs.io/cost-center`) via admission policies and alert on idle cluster slack > 25%.",
+      "keyCommands": [
+        "kubectl create deployment opencost --image=quay.io/kubecost1/kubecost-cost-model:latest -n monitoring",
+        "kubectl label deployment"
+      ]
+    },
+    {
+      "id": "mod-finops-02",
+      "title": "Green Cloud-Native Computing with Kepler & Carbon-Aware Scheduling",
+      "conceptSummary": "Kepler uses eBPF performance counters and RAPL (Running Average Power Limit) to attribute joules/watts of hardware power consumption to individual Pods and namespaces.",
+      "productionArchitecturePattern": "Shift batch and AI training jobs to low-carbon grid windows and right-size over-provisioned deployments.",
+      "keyCommands": [
+        "kubectl top nodes",
+        "kubectl top pods -n production"
+      ]
+    }
+  ],
+  "labs": [
+    {
+      "id": "lab-finops-01",
+      "title": "Deploying CNCF OpenCost & Enforcing FinOps Cost-Center Attribution",
+      "difficulty": "Advanced",
+      "durationMinutes": 20,
+      "xpReward": 200,
+      "scenario": "Deploy `opencost` in the `monitoring` namespace and tag `deployment/checkout-service` in `production` with `finops.kubelabs.io/cost-center=commerce-core`.",
+      "productionContext": "FinOps chargeback and showback require every production workload to carry verified cost-allocation labels.",
+      "prerequisites": ["lab-obs-01"],
+      "objectives": [
+        "Create deployment `opencost` in `monitoring` with image `quay.io/kubecost1/kubecost-cost-model:v1.113.0`",
+        "Label `deployment/checkout-service` in `production` with `finops.kubelabs.io/cost-center=commerce-core`"
+      ],
+      "initialClusterState": {
+        "resources": [
+          {
+            "apiVersion": "apps/v1",
+            "kind": "Deployment",
+            "metadata": { "name": "checkout-service", "namespace": "production" },
+            "spec": {
+              "replicas": 2,
+              "selector": { "matchLabels": { "app": "checkout-service" } },
+              "template": {
+                "metadata": { "labels": { "app": "checkout-service" } },
+                "spec": { "containers": [{ "name": "checkout", "image": "nginx:1.27-alpine" }] }
+              }
+            }
+          }
+        ]
+      },
+      "starterManifest": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: opencost\n  namespace: monitoring\nspec:\n  replicas: 1\n  selector:\n    matchLabels:\n      app: opencost\n  template:\n    metadata:\n      labels:\n        app: opencost\n    spec:\n      containers:\n        - name: opencost\n          image: quay.io/kubecost1/kubecost-cost-model:v1.113.0",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Deploy CNCF OpenCost Exporter",
+          "instruction": "Create deployment `opencost` in `monitoring` using image `quay.io/kubecost1/kubecost-cost-model:v1.113.0`.",
+          "commandHint": "kubectl create deployment opencost --image=quay.io/kubecost1/kubecost-cost-model:v1.113.0 -n monitoring"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Tag Production Workload with FinOps Cost Center",
+          "instruction": "Label `deployment/checkout-service` in `production` with `finops.kubelabs.io/cost-center=commerce-core`.",
+          "commandHint": "kubectl label deployment checkout-service finops.kubelabs.io/cost-center=commerce-core -n production"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "val-finops-01-a",
+          "description": "Deployment monitoring/opencost is Running",
+          "type": "pod_status_running",
+          "kind": "Pod",
+          "name": "opencost",
+          "namespace": "monitoring",
+          "remediation": "Run `kubectl create deployment opencost --image=quay.io/kubecost1/kubecost-cost-model:v1.113.0 -n monitoring`."
+        },
+        {
+          "id": "val-finops-01-b",
+          "description": "Deployment production/checkout-service labeled with finops.kubelabs.io/cost-center=commerce-core",
+          "type": "resource_field_equals",
+          "kind": "Deployment",
+          "name": "checkout-service",
+          "namespace": "production",
+          "fieldPath": "metadata.labels.finops.kubelabs.io/cost-center",
+          "expectedValue": "commerce-core",
+          "remediation": "Run `kubectl label deployment checkout-service finops.kubelabs.io/cost-center=commerce-core -n production`."
+        }
+      ],
+      "solutionCommands": [
+        "kubectl create deployment opencost --image=quay.io/kubecost1/kubecost-cost-model:v1.113.0 -n monitoring",
+        "kubectl label deployment checkout-service finops.kubelabs.io/cost-center=commerce-core -n production"
+      ],
+      "troubleshootingGuide": "Verify `opencost` is running in `monitoring` and `checkout-service` in `production` has the `finops.kubelabs.io/cost-center` label."
+    },
+    {
+      "id": "lab-finops-02",
+      "title": "Right-Sizing Over-Provisioned Workloads & Deploying Kepler Energy Exporter",
+      "difficulty": "Advanced",
+      "durationMinutes": 20,
+      "xpReward": 225,
+      "scenario": "Deployment `reporting-batch` in `production` is grossly over-provisioned with 8 replicas during off-peak hours. Right-size it to 2 replicas and deploy `kepler-exporter` in `monitoring` to track watts/carbon per pod.",
+      "productionContext": "Right-sizing idle replica slack and monitoring pod-level watts with CNCF Kepler cuts both cloud spend and datacenter carbon emissions.",
+      "prerequisites": ["lab-finops-01"],
+      "objectives": [
+        "Scale `deployment/reporting-batch` in `production` down to 2 replicas",
+        "Deploy `kepler-exporter` in `monitoring` using `quay.io/sustainable_computing_io/kepler:v0.7.12`"
+      ],
+      "initialClusterState": {
+        "resources": [
+          {
+            "apiVersion": "apps/v1",
+            "kind": "Deployment",
+            "metadata": { "name": "reporting-batch", "namespace": "production" },
+            "spec": {
+              "replicas": 8,
+              "selector": { "matchLabels": { "app": "reporting-batch" } },
+              "template": {
+                "metadata": { "labels": { "app": "reporting-batch" } },
+                "spec": { "containers": [{ "name": "batch", "image": "nginx:1.27-alpine" }] }
+              }
+            }
+          }
+        ]
+      },
+      "starterManifest": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: kepler-exporter\n  namespace: monitoring\nspec:\n  replicas: 1\n  selector:\n    matchLabels:\n      app: kepler-exporter\n  template:\n    metadata:\n      labels:\n        app: kepler-exporter\n    spec:\n      containers:\n        - name: kepler\n          image: quay.io/sustainable_computing_io/kepler:v0.7.12",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Right-Size Over-Provisioned Batch Deployment",
+          "instruction": "Scale `deployment/reporting-batch` in `production` to 2 replicas.",
+          "commandHint": "kubectl scale deployment reporting-batch --replicas=2 -n production"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Deploy CNCF Kepler Power & Carbon Exporter",
+          "instruction": "Create deployment `kepler-exporter` in `monitoring` with image `quay.io/sustainable_computing_io/kepler:v0.7.12`.",
+          "commandHint": "kubectl create deployment kepler-exporter --image=quay.io/sustainable_computing_io/kepler:v0.7.12 -n monitoring"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "val-finops-02-a",
+          "description": "Deployment production/reporting-batch right-sized to 2 replicas",
+          "type": "resource_field_equals",
+          "kind": "Deployment",
+          "name": "reporting-batch",
+          "namespace": "production",
+          "fieldPath": "spec.replicas",
+          "expectedValue": 2,
+          "remediation": "Run `kubectl scale deployment reporting-batch --replicas=2 -n production`."
+        },
+        {
+          "id": "val-finops-02-b",
+          "description": "Deployment monitoring/kepler-exporter is Running",
+          "type": "pod_status_running",
+          "kind": "Pod",
+          "name": "kepler-exporter",
+          "namespace": "monitoring",
+          "remediation": "Run `kubectl create deployment kepler-exporter --image=quay.io/sustainable_computing_io/kepler:v0.7.12 -n monitoring`."
+        }
+      ],
+      "solutionCommands": [
+        "kubectl scale deployment reporting-batch --replicas=2 -n production",
+        "kubectl create deployment kepler-exporter --image=quay.io/sustainable_computing_io/kepler:v0.7.12 -n monitoring"
+      ],
+      "troubleshootingGuide": "Check `kubectl get deploy reporting-batch -n production` (2/2) and `kubectl get deploy kepler-exporter -n monitoring`."
+    }
+  ],
+  "assessmentQuestions": [
+    {
+      "id": "q-finops-01",
+      "question": "Which CNCF project provides vendor-neutral real-time cost monitoring and showback/chargeback allocation for Kubernetes workloads?",
+      "options": [
+        "OpenCost",
+        "CoreDNS",
+        "etcd",
+        "containerd"
+      ],
+      "correctIndex": 0,
+      "explanation": "OpenCost is the CNCF specification and open-source engine for measuring and allocating cloud-native infrastructure and container costs."
+    },
+    {
+      "id": "q-finops-02",
+      "question": "How does CNCF Kepler estimate the electrical power consumption (in watts/joules) of individual Kubernetes Pods?",
+      "options": [
+        "By reading hardware RAPL/ACPI power meters and attributing energy to container processes using eBPF CPU/GPU performance counters",
+        "By counting the number of lines in YAML files",
+        "By pinging external DNS servers",
+        "By disabling CPU caches"
+      ],
+      "correctIndex": 0,
+      "explanation": "Kepler combines hardware power sensors (RAPL, NVML for GPUs, ACPI) with eBPF process telemetry to attribute node energy consumption to individual pods."
+    }
+  ]
+}
+

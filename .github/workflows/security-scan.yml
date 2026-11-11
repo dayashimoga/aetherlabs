@@ -1,0 +1,32 @@
+name: Security & Supply-Chain Audit
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "0 4 * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  security-gate:
+    name: SAST, Sandbox Isolation & Zero-Dependency Audit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "25.x"
+
+      - name: Verify Zero External Runtime Dependencies & Sandbox Integrity
+        run: npm run audit:self
+
+      - name: Execute Security & Injection Prevention Suite
+        run: npm test
+

@@ -1,0 +1,192 @@
+{
+  "id": "service-mesh",
+  "title": "Service Mesh (Istio, Cilium Mesh, mTLS & Traffic Control)",
+  "category": "Security & Service Mesh",
+  "trackId": "track-devsecops",
+  "version": "1.0.0",
+  "difficulty": "Advanced",
+  "estimatedHours": 9,
+  "summary": "Master Istio and Cilium Service Mesh architectures: strict mutual TLS (SPIFFE/SPIRE identities), L7 VirtualService traffic splitting, DestinationRules, and circuit breaking.",
+  "prerequisites": ["cloud-networking", "devsecops-security"],
+  "learningObjectives": [
+    "Configure Istio VirtualService and DestinationRule resources for weighted canary traffic management.",
+    "Enforce cluster-wide or namespace-scoped STRICT mutual TLS via PeerAuthentication.",
+    "Audit Envoy proxy synchronization and mesh configuration using istioctl."
+  ],
+  "curriculumModules": [
+    {
+      "id": "mod-mesh-01",
+      "title": "Istio Control Plane (istiod), Sidecar & Ambient Dataplanes",
+      "conceptSummary": "istiod compiles Kubernetes and Istio routing rules into Envoy xDS configuration, issuing short-lived X.509 SPIFFE certificates (`spiffe://cluster.local/ns/<ns>/sa/<sa>`) for automatic mTLS.",
+      "productionArchitecturePattern": "Enforce `PeerAuthentication` with `mtls.mode: STRICT` in production namespaces so all east-west microservice traffic is mutually authenticated and encrypted.",
+      "keyCommands": [
+        "istioctl proxy-status",
+        "istioctl analyze",
+        "kubectl get peerauthentication -n production"
+      ]
+    },
+    {
+      "id": "mod-mesh-02",
+      "title": "L7 Traffic Splitting, Retries & Circuit Breaking",
+      "conceptSummary": "`VirtualService` defines how requests route to a service (headers, weights, timeouts, retries), while `DestinationRule` defines subsets (`v1`, `v2`), load-balancing algorithms, and outlier detection circuit breakers.",
+      "productionArchitecturePattern": "Combine DestinationRule outlier detection with VirtualService weighted routing (`90% v1 / 10% v2`) for zero-downtime canary testing.",
+      "keyCommands": [
+        "kubectl get virtualservice -n production",
+        "kubectl get destinationrule -n production"
+      ]
+    }
+  ],
+  "labs": [
+    {
+      "id": "lab-mesh-01",
+      "title": "Configuring Istio VirtualService & DestinationRule for Canary Routing",
+      "difficulty": "Advanced",
+      "durationMinutes": 25,
+      "xpReward": 225,
+      "scenario": "Configure Istio traffic management for the `reviews` microservice in `production` by creating a `VirtualService` (`reviews-route`) and `DestinationRule` (`reviews-destination`).",
+      "productionContext": "Service meshes decouple deployment scaling from traffic routing, allowing 10% canary traffic even with a small pod count.",
+      "prerequisites": ["lab-net-02"],
+      "objectives": [
+        "Create `VirtualService` `reviews-route` in `production`",
+        "Create `DestinationRule` `reviews-destination` in `production` and run `istioctl analyze`"
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "apiVersion: networking.istio.io/v1beta1\nkind: VirtualService\nmetadata:\n  name: reviews-route\n  namespace: production\n---\napiVersion: networking.istio.io/v1beta1\nkind: DestinationRule\nmetadata:\n  name: reviews-destination\n  namespace: production",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Create VirtualService & DestinationRule",
+          "instruction": "Create `VirtualService` `reviews-route` and `DestinationRule` `reviews-destination` in `production`.",
+          "commandHint": "kubectl create virtualservice reviews-route -n production"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Validate Mesh Configuration with istioctl",
+          "instruction": "Create `DestinationRule` `reviews-destination` and run `istioctl analyze`.",
+          "commandHint": "istioctl analyze"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "val-mesh-01-a",
+          "description": "VirtualService production/reviews-route exists",
+          "type": "resource_exists",
+          "kind": "VirtualService",
+          "name": "reviews-route",
+          "namespace": "production",
+          "remediation": "Run `kubectl create virtualservice reviews-route -n production`."
+        },
+        {
+          "id": "val-mesh-01-b",
+          "description": "DestinationRule production/reviews-destination exists",
+          "type": "resource_exists",
+          "kind": "DestinationRule",
+          "name": "reviews-destination",
+          "namespace": "production",
+          "remediation": "Run `kubectl create destinationrule reviews-destination -n production`."
+        },
+        {
+          "id": "val-mesh-01-c",
+          "description": "Validated mesh configuration with istioctl analyze",
+          "type": "command_executed",
+          "commandSubstring": "istioctl analyze",
+          "remediation": "Run `istioctl analyze`."
+        }
+      ],
+      "solutionCommands": [
+        "kubectl create virtualservice reviews-route -n production",
+        "kubectl create destinationrule reviews-destination -n production",
+        "istioctl analyze"
+      ],
+      "troubleshootingGuide": "Confirm both `reviews-route` and `reviews-destination` exist in `production` (`kubectl get vs,dr -n production`)."
+    },
+    {
+      "id": "lab-mesh-02",
+      "title": "Enforcing Strict mTLS with Istio PeerAuthentication",
+      "difficulty": "Advanced",
+      "durationMinutes": 20,
+      "xpReward": 225,
+      "scenario": "Enforce strict mutual TLS across all workloads in `production` by creating a `PeerAuthentication` policy named `default-strict-mtls` with `spec.mtls.mode` set to `STRICT`.",
+      "productionContext": "Strict mTLS prevents plaintext lateral movement and guarantees cryptographic workload identity verification.",
+      "prerequisites": ["lab-mesh-01"],
+      "objectives": [
+        "Create `PeerAuthentication` `default-strict-mtls` in `production`",
+        "Patch `default-strict-mtls` so `spec.mtls.mode` equals `STRICT`"
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "apiVersion: security.istio.io/v1beta1\nkind: PeerAuthentication\nmetadata:\n  name: default-strict-mtls\n  namespace: production\nspec:\n  mtls:\n    mode: STRICT",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Create PeerAuthentication Policy",
+          "instruction": "Create `PeerAuthentication` `default-strict-mtls` in `production`.",
+          "commandHint": "kubectl create peerauthentication default-strict-mtls -n production"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Set mTLS Mode to STRICT",
+          "instruction": "Patch `default-strict-mtls` in `production` with `{\"spec\":{\"mtls\":{\"mode\":\"STRICT\"}}}`.",
+          "commandHint": "kubectl patch peerauthentication default-strict-mtls -n production -p '{\"spec\":{\"mtls\":{\"mode\":\"STRICT\"}}}'"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "val-mesh-02-a",
+          "description": "PeerAuthentication production/default-strict-mtls exists",
+          "type": "resource_exists",
+          "kind": "PeerAuthentication",
+          "name": "default-strict-mtls",
+          "namespace": "production",
+          "remediation": "Run `kubectl create peerauthentication default-strict-mtls -n production`."
+        },
+        {
+          "id": "val-mesh-02-b",
+          "description": "PeerAuthentication mode is set to STRICT",
+          "type": "resource_field_equals",
+          "kind": "PeerAuthentication",
+          "name": "default-strict-mtls",
+          "namespace": "production",
+          "fieldPath": "spec.mtls.mode",
+          "expectedValue": "STRICT",
+          "remediation": "Run `kubectl patch peerauthentication default-strict-mtls -n production -p '{\"spec\":{\"mtls\":{\"mode\":\"STRICT\"}}}'`."
+        }
+      ],
+      "solutionCommands": [
+        "kubectl create peerauthentication default-strict-mtls -n production",
+        "kubectl patch peerauthentication default-strict-mtls -n production -p '{\"spec\":{\"mtls\":{\"mode\":\"STRICT\"}}}'"
+      ],
+      "troubleshootingGuide": "Check `kubectl get peerauthentication default-strict-mtls -n production -o json` to verify `spec.mtls.mode` is `STRICT`."
+    }
+  ],
+  "assessmentQuestions": [
+    {
+      "id": "q-mesh-01",
+      "question": "Which standard identity format does Istio use to encode workload identities inside X.509 mTLS certificates?",
+      "options": [
+        "SPIFFE (`spiffe://<trust-domain>/ns/<namespace>/sa/<service-account>`)",
+        "Kerberos v5 Realm Ticket",
+        "MAC Address EUI-64",
+        "Basic Auth Base64"
+      ],
+      "correctIndex": 0,
+      "explanation": "Istio issues X.509 certificates containing a Subject Alternative Name (SAN) formatted according to the CNCF SPIFFE specification."
+    },
+    {
+      "id": "q-mesh-02",
+      "question": "In Istio, which resource defines traffic subsets (`v1`, `v2`), connection pool settings, and outlier detection circuit breakers?",
+      "options": [
+        "ServiceAccount",
+        "DestinationRule",
+        "ConfigMap",
+        "EndpointSlice"
+      ],
+      "correctIndex": 1,
+      "explanation": "A `DestinationRule` configures policies applied to traffic *after* VirtualService routing has occurred, including named subsets, TLS settings, and circuit breakers."
+    }
+  ]
+}
+

@@ -1,0 +1,193 @@
+{
+  "id": "gitops-delivery",
+  "title": "GitOps & Progressive Delivery (Argo CD, Flux & Rollouts)",
+  "category": "Kubernetes & CNCF",
+  "trackId": "track-k8s-admin",
+  "version": "1.0.0",
+  "difficulty": "Intermediate",
+  "estimatedHours": 8,
+  "summary": "Implement OpenGitOps principles with Argo CD and Flux: pull-based reconciliation, automated drift healing, and progressive Canary/Blue-Green delivery.",
+  "prerequisites": ["kubernetes-core", "cncf-packaging"],
+  "learningObjectives": [
+    "Apply the four OpenGitOps principles (Declarative, Versioned/Immutable, Pulled Automatically, Continuously Reconciled).",
+    "Synchronize OutOfSync Argo CD Applications and verify self-healing workload reconciliation.",
+    "Configure Argo Rollouts for progressive Canary traffic delivery."
+  ],
+  "curriculumModules": [
+    {
+      "id": "mod-gitops-01",
+      "title": "Pull-Based GitOps Reconciliation with Argo CD",
+      "conceptSummary": "Instead of CI pipelines pushing `kubectl apply` with cluster-admin tokens, an in-cluster GitOps agent (Argo CD) pulls desired state from Git and continuously heals configuration drift.",
+      "productionArchitecturePattern": "Use the App-of-Apps or `ApplicationSet` pattern to manage multi-cluster fleets from an immutable Git repository with branch protection and signed commits.",
+      "keyCommands": [
+        "argocd app list",
+        "argocd app get <app>",
+        "argocd app sync <app>"
+      ]
+    },
+    {
+      "id": "mod-gitops-02",
+      "title": "Progressive Delivery: Canary & Blue-Green Rollouts",
+      "conceptSummary": "Argo Rollouts replaces standard Deployments with a `Rollout` controller that shifts traffic incrementally (`10% -> 25% -> 50% -> 100%`) while querying Prometheus SLO metrics.",
+      "productionArchitecturePattern": "Pair Argo Rollouts with an AnalysisTemplate that automatically aborts and rolls back a canary release if HTTP 5xx exceeds 1% or P99 latency exceeds 250ms.",
+      "keyCommands": [
+        "kubectl get rollout -n production",
+        "kubectl describe rollout -n production"
+      ]
+    }
+  ],
+  "labs": [
+    {
+      "id": "lab-gitops-01",
+      "title": "Synchronizing OutOfSync Production Fleet with Argo CD",
+      "difficulty": "Intermediate",
+      "durationMinutes": 20,
+      "xpReward": 200,
+      "scenario": "A new Git commit updated the `checkout-gitops` application in Argo CD, leaving it `OutOfSync`. Synchronize the application and verify its pods are running in `production`.",
+      "productionContext": "GitOps operators monitor sync status and trigger or automate reconciliation to guarantee cluster state matches Git.",
+      "prerequisites": ["lab-cncf-01"],
+      "objectives": [
+        "Inspect Argo CD applications using `argocd app list`",
+        "Synchronize `checkout-gitops` using `argocd app sync checkout-gitops`"
+      ],
+      "initialClusterState": {
+        "argoApps": [
+          {
+            "name": "checkout-gitops",
+            "namespace": "argocd",
+            "destNamespace": "production",
+            "repoURL": "https://github.com/kubelabs-io/gitops-fleet",
+            "path": "apps/checkout",
+            "targetRevision": "main",
+            "syncStatus": "OutOfSync",
+            "healthStatus": "Progressing"
+          }
+        ],
+        "resources": []
+      },
+      "starterManifest": "apiVersion: argoproj.io/v1alpha1\nkind: Application\nmetadata:\n  name: checkout-gitops\n  namespace: argocd\nspec:\n  source:\n    repoURL: https://github.com/kubelabs-io/gitops-fleet\n    targetRevision: main\n    path: apps/checkout\n  destination:\n    server: https://kubernetes.default.svc\n    namespace: production",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Check Argo CD Sync Status",
+          "instruction": "Run `argocd app list` to see `checkout-gitops` in `OutOfSync` status.",
+          "commandHint": "argocd app list"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Trigger GitOps Reconciliation",
+          "instruction": "Synchronize `checkout-gitops` with the target cluster.",
+          "commandHint": "argocd app sync checkout-gitops"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "val-gitops-01-a",
+          "description": "Argo CD Application checkout-gitops is Synced & Healthy",
+          "type": "argocd_app_synced",
+          "name": "checkout-gitops",
+          "remediation": "Run `argocd app sync checkout-gitops`."
+        },
+        {
+          "id": "val-gitops-01-b",
+          "description": "Deployment production/checkout-gitops is Running",
+          "type": "pod_status_running",
+          "kind": "Pod",
+          "name": "checkout-gitops",
+          "namespace": "production",
+          "remediation": "Verify checkout-gitops pods are Running in production after sync."
+        }
+      ],
+      "solutionCommands": [
+        "argocd app list",
+        "argocd app sync checkout-gitops"
+      ],
+      "troubleshootingGuide": "Run `argocd app get checkout-gitops` to confirm `Sync Status: Synced` and `Health Status: Healthy`."
+    },
+    {
+      "id": "lab-gitops-02",
+      "title": "Deploying a Progressive Canary Rollout Workload",
+      "difficulty": "Intermediate",
+      "durationMinutes": 25,
+      "xpReward": 200,
+      "scenario": "Deploy an Argo `Rollout` resource named `search-canary` in `production` with 3 replicas for progressive canary delivery.",
+      "productionContext": "Progressive delivery limits blast radius by exposing new versions to a small percentage of users before full promotion.",
+      "prerequisites": ["lab-gitops-01"],
+      "objectives": [
+        "Create `Rollout` resource `search-canary` in `production`",
+        "Scale `Rollout` `search-canary` to 3 replicas in `production`"
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "apiVersion: argoproj.io/v1alpha1\nkind: Rollout\nmetadata:\n  name: search-canary\n  namespace: production\nspec:\n  replicas: 3\n  selector:\n    matchLabels:\n      app: search-canary\n  template:\n    metadata:\n      labels:\n        app: search-canary\n    spec:\n      containers:\n        - name: search\n          image: ghcr.io/kubelabs/search:v2.1.0",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Create Canary Rollout Resource",
+          "instruction": "Create Rollout `search-canary` in `production`.",
+          "commandHint": "kubectl create rollout search-canary -n production"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Scale Canary Rollout to 3 Replicas",
+          "instruction": "Scale `rollout/search-canary` to 3 replicas in `production`.",
+          "commandHint": "kubectl scale rollout search-canary --replicas=3 -n production"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "val-gitops-02-a",
+          "description": "Rollout production/search-canary exists",
+          "type": "resource_exists",
+          "kind": "Rollout",
+          "name": "search-canary",
+          "namespace": "production",
+          "remediation": "Run `kubectl create rollout search-canary -n production`."
+        },
+        {
+          "id": "val-gitops-02-b",
+          "description": "Rollout production/search-canary has 3 ready replicas",
+          "type": "replica_count_min",
+          "kind": "Rollout",
+          "name": "search-canary",
+          "namespace": "production",
+          "expectedValue": 3,
+          "remediation": "Run `kubectl scale rollout search-canary --replicas=3 -n production`."
+        }
+      ],
+      "solutionCommands": [
+        "kubectl create rollout search-canary -n production",
+        "kubectl scale rollout search-canary --replicas=3 -n production"
+      ],
+      "troubleshootingGuide": "Check `kubectl get rollout search-canary -n production` to verify `3/3` replicas are ready."
+    }
+  ],
+  "assessmentQuestions": [
+    {
+      "id": "q-gitops-01",
+      "question": "Why is pull-based GitOps (Argo CD / Flux) more secure than traditional push-based CI/CD pipelines?",
+      "options": [
+        "It stores cluster-admin credentials in public GitHub repositories",
+        "External CI runners never need direct network access or cluster-admin credentials to the production Kubernetes API server",
+        "It disables TLS verification on kube-apiserver",
+        "It allows developers to SSH directly into worker nodes"
+      ],
+      "correctIndex": 1,
+      "explanation": "In pull-based GitOps, the reconciliation controller runs inside the cluster and pulls desired state from Git, keeping production cluster credentials off external CI servers."
+    },
+    {
+      "id": "q-gitops-02",
+      "question": "What happens when `selfHeal: true` is enabled on an Argo CD automated sync policy and someone manually edits a Deployment via `kubectl edit`?",
+      "options": [
+        "Argo CD commits the manual change back to the main branch in Git",
+        "Argo CD detects the live cluster drift against Git and automatically overwrites the manual change to restore the Git state",
+        "Argo CD deletes the entire namespace",
+        "Argo CD shuts down kube-controller-manager"
+      ],
+      "correctIndex": 1,
+      "explanation": "With `selfHeal: true`, Git remains the single source of truth; any out-of-band manual change is automatically reverted to match the Git revision."
+    }
+  ]
+}
+

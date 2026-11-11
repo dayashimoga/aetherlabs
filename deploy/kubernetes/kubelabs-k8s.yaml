@@ -1,0 +1,138 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: kubelabs-system
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kubelabs-sa
+  namespace: kubelabs-system
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: kubelabs-sqlite-pvc
+  namespace: kubelabs-system
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kubelabs-platform
+  namespace: kubelabs-system
+  labels:
+    app: kubelabs-platform
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: kubelabs-platform
+  template:
+    metadata:
+      labels:
+        app: kubelabs-platform
+    spec:
+      serviceAccountName: kubelabs-sa
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: kubelabs
+          image: ghcr.io/kubelabs-io/kubelabs:1.0.0
+          ports:
+            - containerPort: 4100
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: 100m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 150Mi
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: 4100
+            initialDelaySeconds: 5
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 4100
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          volumeMounts:
+            - name: sqlite-data
+              mountPath: /app/data
+      volumes:
+        - name: sqlite-data
+          persistentVolumeClaim:
+            claimName: kubelabs-sqlite-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kubelabs-svc
+  namespace: kubelabs-system
+spec:
+  type: ClusterIP
+  selector:
+    app: kubelabs-platform
+  ports:
+    - port: 80
+      targetPort: 4100
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: kubelabs-ingress
+  namespace: kubelabs-system
+spec:
+  ingressClassName: cilium
+  rules:
+    - host: learn.kubelabs.internal
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: kubelabs-svc
+                port:
+                  number: 80
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kubelabs-zero-trust
+  namespace: kubelabs-system
+spec:
+  podSelector:
+    matchLabels:
+      app: kubelabs-platform
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - ports:
+        - protocol: TCP
+          port: 4100
+

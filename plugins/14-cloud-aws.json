@@ -1,0 +1,183 @@
+{
+  "id": "cloud-aws",
+  "title": "AWS Cloud-Native Architecture, Amazon EKS & Karpenter",
+  "category": "Multi-Cloud & AI-Ops",
+  "trackId": "track-multicloud-aiops",
+  "version": "1.0.0",
+  "difficulty": "Advanced",
+  "estimatedHours": 10,
+  "summary": "Architect production Amazon EKS clusters, IAM Roles for Service Accounts (IRSA / Pod Identity), AWS VPC CNI, ALB Controller, and Karpenter node provisioning.",
+  "prerequisites": ["kubernetes-core", "iac-opentofu-terraform"],
+  "learningObjectives": [
+    "Provision and inspect Amazon EKS control planes via the AWS CLI.",
+    "Configure IAM Roles for Service Accounts (IRSA) using OIDC federated ServiceAccount annotations.",
+    "Define Karpenter NodePool resources for rapid, right-sized EC2 Spot/On-Demand provisioning."
+  ],
+  "curriculumModules": [
+    {
+      "id": "mod-aws-01",
+      "title": "Amazon EKS Control Plane, VPC CNI & IRSA Workload Identity",
+      "conceptSummary": "Amazon EKS runs a multi-AZ managed control plane. IAM Roles for Service Accounts (IRSA) uses OIDC token projection so Pods assume scoped AWS IAM Roles without static AWS_ACCESS_KEY_ID secrets.",
+      "productionArchitecturePattern": "Annotate Kubernetes ServiceAccounts with `eks.amazonaws.com/role-arn` and scope the IAM Trust Policy to the exact namespace and ServiceAccount name.",
+      "keyCommands": [
+        "aws eks describe-cluster --name kubelabs-eks-prod",
+        "kubectl annotate serviceaccount"
+      ]
+    },
+    {
+      "id": "mod-aws-02",
+      "title": "Groupless Node Autoscaling with Karpenter",
+      "conceptSummary": "Unlike legacy Cluster Autoscaler tied to static EC2 Auto Scaling Groups, Karpenter watches unschedulable pods directly and launches optimal EC2 instances in seconds.",
+      "productionArchitecturePattern": "Define a Karpenter `NodePool` with Spot + On-Demand consolidation enabled (`consolidationPolicy: WhenEmptyOrUnderutilized`).",
+      "keyCommands": [
+        "kubectl get nodepool",
+        "kubectl create nodepool"
+      ]
+    }
+  ],
+  "labs": [
+    {
+      "id": "lab-aws-01",
+      "title": "Amazon EKS Cluster Inspection & IRSA IAM Role Binding",
+      "difficulty": "Advanced",
+      "durationMinutes": 25,
+      "xpReward": 225,
+      "scenario": "Verify the `kubelabs-eks-prod` cluster via AWS CLI and configure a Kubernetes `ServiceAccount` (`s3-uploader-sa`) in `production` annotated with IAM Role `arn:aws:iam::123456789012:role/eks-s3-uploader`.",
+      "productionContext": "IRSA eliminates long-lived AWS IAM access keys from Kubernetes Secrets, using short-lived OIDC web identity tokens instead.",
+      "prerequisites": ["lab-k8s-02"],
+      "objectives": [
+        "Inspect the EKS cluster using `aws eks describe-cluster --name kubelabs-eks-prod`",
+        "Create ServiceAccount `s3-uploader-sa` in `production` and annotate it with `eks.amazonaws.com/role-arn=arn:aws:iam::123456789012:role/eks-s3-uploader`"
+      ],
+      "initialClusterState": {
+        "resources": [],
+        "cloudResources": []
+      },
+      "starterManifest": "apiVersion: v1\nkind: ServiceAccount\nmetadata:\n  name: s3-uploader-sa\n  namespace: production\n  annotations:\n    eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/eks-s3-uploader",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Verify Amazon EKS Control Plane",
+          "instruction": "Run `aws eks describe-cluster --name kubelabs-eks-prod`.",
+          "commandHint": "aws eks describe-cluster --name kubelabs-eks-prod"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Create & Annotate IRSA ServiceAccount",
+          "instruction": "Create `s3-uploader-sa` in `production` and annotate it with `eks.amazonaws.com/role-arn=arn:aws:iam::123456789012:role/eks-s3-uploader`.",
+          "commandHint": "kubectl create serviceaccount s3-uploader-sa -n production"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "val-aws-01-a",
+          "description": "Amazon EKS cluster kubelabs-eks-prod verified ACTIVE",
+          "type": "cloud_resource_exists",
+          "name": "kubelabs-eks-prod",
+          "remediation": "Run `aws eks describe-cluster --name kubelabs-eks-prod`."
+        },
+        {
+          "id": "val-aws-01-b",
+          "description": "ServiceAccount production/s3-uploader-sa has IRSA role-arn annotation",
+          "type": "resource_field_equals",
+          "kind": "ServiceAccount",
+          "name": "s3-uploader-sa",
+          "namespace": "production",
+          "fieldPath": "metadata.annotations.eks.amazonaws.com/role-arn",
+          "expectedValue": "arn:aws:iam::123456789012:role/eks-s3-uploader",
+          "remediation": "Create s3-uploader-sa and run `kubectl annotate serviceaccount s3-uploader-sa eks.amazonaws.com/role-arn=arn:aws:iam::123456789012:role/eks-s3-uploader -n production`."
+        }
+      ],
+      "solutionCommands": [
+        "aws eks describe-cluster --name kubelabs-eks-prod",
+        "kubectl create serviceaccount s3-uploader-sa -n production",
+        "kubectl annotate serviceaccount s3-uploader-sa eks.amazonaws.com/role-arn=arn:aws:iam::123456789012:role/eks-s3-uploader -n production"
+      ],
+      "troubleshootingGuide": "Check `kubectl describe sa s3-uploader-sa -n production` to confirm the `eks.amazonaws.com/role-arn` annotation."
+    },
+    {
+      "id": "lab-aws-02",
+      "title": "Configuring a Karpenter Elastic NodePool",
+      "difficulty": "Advanced",
+      "durationMinutes": 20,
+      "xpReward": 225,
+      "scenario": "Provision a Karpenter `NodePool` named `spot-compute-pool` to enable rapid Spot/On-Demand EC2 compute consolidation.",
+      "productionContext": "Karpenter NodePools dynamically select instance families and availability zones to minimize compute waste.",
+      "prerequisites": ["lab-aws-01"],
+      "objectives": [
+        "Create `NodePool` `spot-compute-pool`",
+        "Label `NodePool` `spot-compute-pool` with `karpenter.sh/capacity-type=spot`"
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "apiVersion: karpenter.sh/v1\nkind: NodePool\nmetadata:\n  name: spot-compute-pool\n  labels:\n    karpenter.sh/capacity-type: spot",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Create Karpenter NodePool",
+          "instruction": "Create `NodePool` `spot-compute-pool`.",
+          "commandHint": "kubectl create nodepool spot-compute-pool"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Label NodePool Capacity Tier",
+          "instruction": "Label `nodepool/spot-compute-pool` with `karpenter.sh/capacity-type=spot`.",
+          "commandHint": "kubectl label nodepool spot-compute-pool karpenter.sh/capacity-type=spot"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "val-aws-02-a",
+          "description": "Karpenter NodePool spot-compute-pool exists",
+          "type": "resource_exists",
+          "kind": "NodePool",
+          "name": "spot-compute-pool",
+          "remediation": "Run `kubectl create nodepool spot-compute-pool`."
+        },
+        {
+          "id": "val-aws-02-b",
+          "description": "NodePool labeled karpenter.sh/capacity-type=spot",
+          "type": "resource_field_equals",
+          "kind": "NodePool",
+          "name": "spot-compute-pool",
+          "fieldPath": "metadata.labels.karpenter.sh/capacity-type",
+          "expectedValue": "spot",
+          "remediation": "Run `kubectl label nodepool spot-compute-pool karpenter.sh/capacity-type=spot`."
+        }
+      ],
+      "solutionCommands": [
+        "kubectl create nodepool spot-compute-pool",
+        "kubectl label nodepool spot-compute-pool karpenter.sh/capacity-type=spot"
+      ],
+      "troubleshootingGuide": "Run `kubectl get nodepool spot-compute-pool -o json` to verify the label."
+    }
+  ],
+  "assessmentQuestions": [
+    {
+      "id": "q-aws-01",
+      "question": "How does Amazon EKS IAM Roles for Service Accounts (IRSA) grant AWS API permissions to a Pod without static IAM credentials?",
+      "options": [
+        "By mounting the EC2 worker node's root SSH key into every container",
+        "By projecting a signed OIDC service account token into the Pod and exchanging it via AWS STS `AssumeRoleWithWebIdentity`",
+        "By storing AWS root account credentials in a ConfigMap",
+        "By disabling IAM validation in VPC endpoints"
+      ],
+      "correctIndex": 1,
+      "explanation": "IRSA uses Kubernetes projected service account tokens validated against the cluster's OIDC provider via AWS STS `AssumeRoleWithWebIdentity`."
+    },
+    {
+      "id": "q-aws-02",
+      "question": "How does AWS VPC CNI assign IP addresses to Pods on Amazon EKS?",
+      "options": [
+        "It allocates secondary private IPv4/IPv6 addresses directly from the AWS VPC subnet via Elastic Network Interfaces (ENIs)",
+        "It uses IPX/SPX tunneling",
+        "Every Pod shares 127.0.0.1 across all nodes",
+        "It requires public IPv4 addresses for every internal pod"
+      ],
+      "correctIndex": 0,
+      "explanation": "AWS VPC CNI attaches ENIs and secondary VPC IP addresses to worker nodes so Pods have first-class routable VPC IPs."
+    }
+  ]
+}
+

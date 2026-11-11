@@ -1,0 +1,182 @@
+{
+  "id": "platform-engineering",
+  "title": "Platform Engineering, Internal Developer Platforms & Crossplane",
+  "category": "Platform & IaC",
+  "trackId": "track-platform",
+  "version": "1.0.0",
+  "difficulty": "Advanced",
+  "estimatedHours": 9,
+  "summary": "Design Internal Developer Platforms (IDPs) as a product: Golden Path templates, Backstage software catalogs, and Crossplane universal cloud control planes.",
+  "prerequisites": ["gitops-delivery", "cncf-packaging"],
+  "learningObjectives": [
+    "Provision self-service cloud infrastructure using Crossplane Composite Resource Claims.",
+    "Standardize Golden Path microservice deployments with compliant platform metadata.",
+    "Reduce cognitive load for application teams through declarative platform APIs."
+  ],
+  "curriculumModules": [
+    {
+      "id": "mod-plat-01",
+      "title": "Platform as a Product & Golden Paths",
+      "conceptSummary": "Platform Engineering reduces developer cognitive load by providing paved 'Golden Paths'—self-service templates with built-in CI/CD, observability, security, and GitOps.",
+      "productionArchitecturePattern": "Expose a Backstage portal backed by GitOps templates and Kubernetes Custom Resources so teams can launch compliant services in minutes.",
+      "keyCommands": [
+        "kubectl get webapp,postgresinstance -n production"
+      ]
+    },
+    {
+      "id": "mod-plat-02",
+      "title": "Crossplane: Kubernetes-Native Universal Cloud Control Plane",
+      "conceptSummary": "Crossplane lets platform teams define `CompositeResourceDefinitions` (XRDs) and `Compositions` so developers can claim cloud databases, queues, and buckets via standard `kubectl apply`.",
+      "productionArchitecturePattern": "Provide namespace-scoped Crossplane Claims (`PostgresInstance`) that automatically compose VPC subnets, RDS/CloudSQL instances, and connection Secrets.",
+      "keyCommands": [
+        "kubectl create postgresinstance <name> -n production",
+        "kubectl get postgresinstance -n production"
+      ]
+    }
+  ],
+  "labs": [
+    {
+      "id": "lab-plat-01",
+      "title": "Self-Service Database Provisioning via Crossplane Claim",
+      "difficulty": "Advanced",
+      "durationMinutes": 20,
+      "xpReward": 225,
+      "scenario": "A product squad needs a compliant PostgreSQL instance in `production`. Provision the Crossplane claim `PostgresInstance` named `billing-rds-claim` and verify the platform controller reconciles its backing service.",
+      "productionContext": "With Crossplane, application teams request infrastructure using Kubernetes manifests without writing raw cloud IAM or VPC code.",
+      "prerequisites": ["lab-cncf-02"],
+      "objectives": [
+        "Create `PostgresInstance` `billing-rds-claim` in `production`",
+        "Verify the reconciled database service `billing-rds-claim-db` has an active endpoint"
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "apiVersion: database.kubelabs.io/v1alpha1\nkind: PostgresInstance\nmetadata:\n  name: billing-rds-claim\n  namespace: production\nspec:\n  tier: production-ha\n  storageGB: 200",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Submit Crossplane PostgresInstance Claim",
+          "instruction": "Create `PostgresInstance` `billing-rds-claim` in `production`.",
+          "commandHint": "kubectl create postgresinstance billing-rds-claim -n production"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Verify Composed Database Endpoint",
+          "instruction": "Check that service `billing-rds-claim-db` was automatically provisioned in `production`.",
+          "commandHint": "kubectl get svc billing-rds-claim-db -n production"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "val-plat-01-a",
+          "description": "Crossplane claim PostgresInstance production/billing-rds-claim exists",
+          "type": "resource_exists",
+          "kind": "PostgresInstance",
+          "name": "billing-rds-claim",
+          "namespace": "production",
+          "remediation": "Run `kubectl create postgresinstance billing-rds-claim -n production`."
+        },
+        {
+          "id": "val-plat-01-b",
+          "description": "Composed Service production/billing-rds-claim-db has active endpoint",
+          "type": "service_has_endpoints",
+          "kind": "Service",
+          "name": "billing-rds-claim-db",
+          "namespace": "production",
+          "expectedValue": 1,
+          "remediation": "Ensure billing-rds-claim is created in namespace production."
+        }
+      ],
+      "solutionCommands": [
+        "kubectl create postgresinstance billing-rds-claim -n production"
+      ],
+      "troubleshootingGuide": "Run `kubectl get postgresinstance,svc -n production` to confirm reconciliation."
+    },
+    {
+      "id": "lab-plat-02",
+      "title": "Onboarding a Golden Path Microservice with IDP Labels",
+      "difficulty": "Intermediate",
+      "durationMinutes": 20,
+      "xpReward": 200,
+      "scenario": "Deploy a Golden Path service `customer-portal` in `production` and label it with `platform.kubelabs.io/golden-path=enabled` for Backstage catalog discovery.",
+      "productionContext": "Backstage and platform controllers discover and govern services through standardized Kubernetes labels and annotations.",
+      "prerequisites": ["lab-plat-01"],
+      "objectives": [
+        "Create deployment `customer-portal` in `production`",
+        "Label `deployment/customer-portal` in `production` with `platform.kubelabs.io/golden-path=enabled`"
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: customer-portal\n  namespace: production\n  labels:\n    platform.kubelabs.io/golden-path: enabled\nspec:\n  replicas: 2\n  selector:\n    matchLabels:\n      app: customer-portal\n  template:\n    metadata:\n      labels:\n        app: customer-portal\n    spec:\n      containers:\n        - name: portal\n          image: nginx:1.27-alpine",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Deploy Customer Portal Microservice",
+          "instruction": "Create deployment `customer-portal` in `production`.",
+          "commandHint": "kubectl create deployment customer-portal --image=nginx:1.27-alpine -n production"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Apply Golden Path Governance Label",
+          "instruction": "Label `deployment/customer-portal` with `platform.kubelabs.io/golden-path=enabled` in `production`.",
+          "commandHint": "kubectl label deployment customer-portal platform.kubelabs.io/golden-path=enabled -n production"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "val-plat-02-a",
+          "description": "Deployment production/customer-portal exists",
+          "type": "resource_exists",
+          "kind": "Deployment",
+          "name": "customer-portal",
+          "namespace": "production",
+          "remediation": "Run `kubectl create deployment customer-portal --image=nginx:1.27-alpine -n production`."
+        },
+        {
+          "id": "val-plat-02-b",
+          "description": "Deployment has label platform.kubelabs.io/golden-path=enabled",
+          "type": "resource_field_equals",
+          "kind": "Deployment",
+          "name": "customer-portal",
+          "namespace": "production",
+          "fieldPath": "metadata.labels.platform.kubelabs.io/golden-path",
+          "expectedValue": "enabled",
+          "remediation": "Run `kubectl label deployment customer-portal platform.kubelabs.io/golden-path=enabled -n production`."
+        }
+      ],
+      "solutionCommands": [
+        "kubectl create deployment customer-portal --image=nginx:1.27-alpine -n production",
+        "kubectl label deployment customer-portal platform.kubelabs.io/golden-path=enabled -n production"
+      ],
+      "troubleshootingGuide": "Check `kubectl get deploy customer-portal -n production -o json` to verify the label is present."
+    }
+  ],
+  "assessmentQuestions": [
+    {
+      "id": "q-plat-01",
+      "question": "How does Crossplane differ from traditional CLI-only Infrastructure-as-Code tools?",
+      "options": [
+        "Crossplane runs as a continuous Kubernetes reconciliation loop inside the cluster, actively detecting and healing cloud drift",
+        "Crossplane only works with on-premises FTP servers",
+        "Crossplane requires writing infrastructure in assembly language",
+        "Crossplane cannot provision cloud databases"
+      ],
+      "correctIndex": 0,
+      "explanation": "Crossplane embeds cloud provider controllers inside Kubernetes, continuously reconciling cloud APIs against declarative CRDs rather than only running when a CLI command is triggered."
+    },
+    {
+      "id": "q-plat-02",
+      "question": "What is a 'Golden Path' in Platform Engineering?",
+      "options": [
+        "A mandatory ticket queue that requires 5 manual approvals",
+        "An opinionated, well-supported, self-service workflow that makes the secure and compliant way to ship software the easiest path for developers",
+        "A static network cable between two routers",
+        "A billing report exported at the end of the year"
+      ],
+      "correctIndex": 1,
+      "explanation": "Golden Paths abstract away infrastructure boilerplate while baking in security, observability, and GitOps best practices."
+    }
+  ]
+}
+

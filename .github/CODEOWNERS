@@ -1,0 +1,13 @@
+# KubeLabs CODEOWNERS Governance
+*                                       @kubelabs-io/architecture @kubelabs-io/platform
+/docs/                                  @kubelabs-io/architecture @kubelabs-io/documentation
+/agents/                                @kubelabs-io/architecture @kubelabs-io/qa
+/schemas/                               @kubelabs-io/architecture
+/plugins/                               @kubelabs-io/curriculum @kubelabs-io/kubernetes
+/src/engine/                            @kubelabs-io/architecture @kubelabs-io/kubernetes
+/src/api/                               @kubelabs-io/backend @kubelabs-io/security
+/src/db/                                @kubelabs-io/backend @kubelabs-io/platform
+/public/                                @kubelabs-io/frontend
+/tests/                                 @kubelabs-io/qa
+/.github/                               @kubelabs-io/devops @kubelabs-io/security
+
