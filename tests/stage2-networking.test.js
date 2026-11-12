@@ -217,3 +217,4 @@ test('Subphase 2.2.2: Deterministic 7-Stage Packet Tracer with NetworkPolicy and
   assert.ok(traceBlocked.dropReason.includes('Blocked by Ingress Default-Deny'));
   assert.ok(traceBlocked.hops.some((h) => h.name === 'Ingress NetworkPolicy' && h.status === 'DROP'));
 });
+

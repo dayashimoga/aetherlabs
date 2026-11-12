@@ -758,3 +758,4 @@ if (typeof globalThis !== 'undefined') {
   globalThis.isIpInCidr = isIpInCidr;
   globalThis.matchesIpBlock = matchesIpBlock;
 }
+
