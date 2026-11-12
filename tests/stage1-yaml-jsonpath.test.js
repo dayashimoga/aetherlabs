@@ -226,3 +226,4 @@ test('Subphase 1.1.3: JSONPath filter expressions and Kubernetes output formatti
   const formatted = formatJsonPath(clusterData, tpl);
   assert.equal(formatted, 'web-prod\tRunning\napi-prod\tRunning\n');
 });
+
