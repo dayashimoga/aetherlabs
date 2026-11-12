@@ -329,6 +329,9 @@ class MultiCliDispatcher {
     pipelineDriver.registerCommand('kubeadm', this.handleKubeadm.bind(this));
     pipelineDriver.registerCommand('cilium', this.handleCilium.bind(this));
     pipelineDriver.registerCommand('linkerd', this.handleLinkerd.bind(this));
+    pipelineDriver.registerCommand('flux', this.handleFlux.bind(this));
+    pipelineDriver.registerCommand('velero', this.handleVelero.bind(this));
+    pipelineDriver.registerCommand('vcluster', this.handleVcluster.bind(this));
     pipelineDriver.registerCommand('curl', this.handleCurl.bind(this));
     pipelineDriver.registerCommand('dig', this.handleDig.bind(this));
     pipelineDriver.registerCommand('nslookup', this.handleNslookup.bind(this));
@@ -433,6 +436,22 @@ class MultiCliDispatcher {
         return this._kubectlAuth({ restArgs, namespace });
       case 'top':
         return this._kubectlTop({ restArgs, namespace });
+      case 'edit':
+        return this._kubectlEdit({ restArgs, namespace });
+      case 'autoscale':
+        return this._kubectlAutoscale({ restArgs, namespace });
+      case 'diff':
+        return this._kubectlDiff({ filename, stdin, vfs, cwd });
+      case 'wait':
+        return this._kubectlWait({ restArgs, namespace });
+      case 'debug':
+        return this._kubectlDebug({ restArgs, namespace });
+      case 'taint':
+        return this._kubectlTaint({ restArgs });
+      case 'config':
+        return this._kubectlConfig({ restArgs, vfs, cwd });
+      case 'explain':
+        return this._kubectlExplain({ restArgs });
       case 'cluster-info':
         return {
           stdout: 'Kubernetes control plane is running at https://192.168.1.10:6443\nCoreDNS is running at https://192.168.1.10:6443/api/v1/namespaces/kube-system/services/kube-dns:dns/proxy\n',
@@ -1026,6 +1045,460 @@ class MultiCliDispatcher {
     return { stdout: '', stderr: 'error: top supports node or pod\n', code: 1 };
   }
 
+  _kubectlEdit({ restArgs, namespace }) {
+    if (!this.graph) return { stdout: '', stderr: 'No resource graph active\n', code: 1 };
+    let rawKind = restArgs[0];
+    let targetName = restArgs[1];
+    if (rawKind && rawKind.includes('/')) {
+      const parts = rawKind.split('/');
+      rawKind = parts[0];
+      targetName = parts[1];
+    }
+    if (!rawKind || !targetName) {
+      return { stdout: '', stderr: 'error: A resource type and name must be specified to edit\n', code: 1 };
+    }
+    const kind = normalizeKind(rawKind);
+    const res = this.graph.get(kind, namespace, targetName);
+    if (!res) {
+      return { stdout: '', stderr: `Error from server (NotFound): ${rawKind} "${targetName}" not found\n`, code: 1 };
+    }
+    res.metadata = res.metadata || {};
+    res.metadata.annotations = res.metadata.annotations || {};
+    res.metadata.annotations['kubectl.kubernetes.io/last-edited'] = new Date().toISOString();
+    this.graph.set(res);
+    return { stdout: `${rawKind.toLowerCase()}/${targetName} edited\n`, stderr: '', code: 0 };
+  }
+
+  _kubectlAutoscale({ restArgs, namespace }) {
+    if (!this.graph) return { stdout: '', stderr: 'No resource graph active\n', code: 1 };
+    let rawTarget = restArgs[0];
+    let targetKind = 'Deployment';
+    let targetName = null;
+
+    if (rawTarget && rawTarget.includes('/')) {
+      const parts = rawTarget.split('/');
+      targetKind = normalizeKind(parts[0]);
+      targetName = parts[1];
+    } else if (rawTarget) {
+      targetKind = normalizeKind(rawTarget);
+      targetName = restArgs[1];
+    }
+
+    if (!targetName) {
+      return { stdout: '', stderr: 'error: A resource type and name must be specified to autoscale\n', code: 1 };
+    }
+
+    let min = 1;
+    let max = 5;
+    let cpuPercent = 80;
+
+    for (let i = 0; i < restArgs.length; i++) {
+      const a = restArgs[i];
+      if (a.startsWith('--min=')) min = parseInt(a.split('=')[1], 10);
+      else if (a === '--min') min = parseInt(restArgs[++i], 10);
+      else if (a.startsWith('--max=')) max = parseInt(a.split('=')[1], 10);
+      else if (a === '--max') max = parseInt(restArgs[++i], 10);
+      else if (a.startsWith('--cpu-percent=')) cpuPercent = parseInt(a.split('=')[1], 10);
+      else if (a === '--cpu-percent') cpuPercent = parseInt(restArgs[++i], 10);
+    }
+
+    const targetResource = this.graph.get(targetKind, namespace, targetName);
+    if (!targetResource) {
+      return { stdout: '', stderr: `Error from server (NotFound): ${targetKind} "${targetName}" not found in namespace "${namespace}"\n`, code: 1 };
+    }
+
+    const hpa = {
+      apiVersion: 'autoscaling/v2',
+      kind: 'HorizontalPodAutoscaler',
+      metadata: {
+        name: targetName,
+        namespace,
+        creationTimestamp: new Date().toISOString()
+      },
+      spec: {
+        scaleTargetRef: {
+          apiVersion: 'apps/v1',
+          kind: targetKind,
+          name: targetName
+        },
+        minReplicas: min,
+        maxReplicas: max,
+        metrics: [{
+          type: 'Resource',
+          resource: {
+            name: 'cpu',
+            target: { type: 'Utilization', averageUtilization: cpuPercent }
+          }
+        }]
+      },
+      status: {
+        currentReplicas: targetResource.spec?.replicas || 1,
+        desiredReplicas: targetResource.spec?.replicas || 1
+      }
+    };
+
+    this.graph.set(hpa);
+    return { stdout: `horizontalpodautoscaler.autoscaling/${targetName} autoscaled\n`, stderr: '', code: 0 };
+  }
+
+  _kubectlDiff({ filename, stdin, vfs, cwd }) {
+    if (!this.graph) return { stdout: '', stderr: 'No resource graph active\n', code: 1 };
+    let content = stdin;
+    if (filename && vfs) {
+      try {
+        const resolved = vfs.normalizePath(filename, cwd);
+        content = vfs.readFile(resolved);
+      } catch (err) {
+        return { stdout: '', stderr: `error: open ${filename}: no such file or directory\n`, code: 1 };
+      }
+    }
+    if (!content || !content.trim()) {
+      return { stdout: '', stderr: 'error: no manifest content provided for diff\n', code: 1 };
+    }
+
+    let docs = [];
+    try {
+      docs = yamlParser.parseAllYaml ? yamlParser.parseAllYaml(content) : (yamlParser.parseYaml ? [yamlParser.parseYaml(content)] : [JSON.parse(content)]);
+    } catch {
+      docs = [JSON.parse(content)];
+    }
+
+    const diffLines = [];
+    for (const doc of docs) {
+      if (!doc || !doc.kind || !doc.metadata?.name) continue;
+      const ns = doc.metadata.namespace || 'default';
+      const live = this.graph.get(doc.kind, ns, doc.metadata.name);
+      if (!live) {
+        diffLines.push(`--- /dev/null\n+++ /tmp/LIVE/${doc.metadata.name}.yaml`);
+        diffLines.push(`+ apiVersion: ${doc.apiVersion}\n+ kind: ${doc.kind}\n+ metadata:\n+   name: ${doc.metadata.name}`);
+      } else {
+        const fieldDiffs = [];
+        for (const k of Object.keys(doc.spec || {})) {
+          if (JSON.stringify(doc.spec[k]) !== JSON.stringify(live.spec?.[k])) {
+            fieldDiffs.push(`-   ${k}: ${JSON.stringify(live.spec?.[k])}`);
+            fieldDiffs.push(`+   ${k}: ${JSON.stringify(doc.spec[k])}`);
+          }
+        }
+        if (fieldDiffs.length > 0) {
+          diffLines.push(`diff -u -N /tmp/LIVE/${doc.metadata.name}.yaml /tmp/CONFIG/${doc.metadata.name}.yaml`);
+          diffLines.push(`--- /tmp/LIVE/${doc.metadata.name}.yaml`);
+          diffLines.push(`+++ /tmp/CONFIG/${doc.metadata.name}.yaml`);
+          diffLines.push(...fieldDiffs);
+        }
+      }
+    }
+
+    if (diffLines.length > 0) {
+      return { stdout: diffLines.join('\n') + '\n', stderr: '', code: 1 };
+    }
+    return { stdout: '', stderr: '', code: 0 };
+  }
+
+  _kubectlWait({ restArgs, namespace }) {
+    if (!this.graph) return { stdout: '', stderr: 'No resource graph active\n', code: 1 };
+    let condition = 'Ready';
+    let forDelete = false;
+    let target = null;
+
+    for (let i = 0; i < restArgs.length; i++) {
+      const a = restArgs[i];
+      if (a.startsWith('--for=condition=')) {
+        condition = a.split('=')[2] || 'Ready';
+      } else if (a.startsWith('--for=delete')) {
+        forDelete = true;
+      } else if (!a.startsWith('-')) {
+        target = a;
+      }
+    }
+
+    if (!target) {
+      return { stdout: '', stderr: 'error: Must specify one or more resources to wait on\n', code: 1 };
+    }
+
+    let kind = 'Pod';
+    let name = target;
+    if (target.includes('/')) {
+      const parts = target.split('/');
+      kind = normalizeKind(parts[0]);
+      name = parts[1];
+    }
+
+    const res = this.graph.get(kind, namespace, name);
+    if (forDelete) {
+      if (!res) {
+        return { stdout: `${target} condition met\n`, stderr: '', code: 0 };
+      }
+      return { stdout: '', stderr: `timed out waiting for the condition on ${target}\n`, code: 1 };
+    }
+
+    if (!res) {
+      return { stdout: '', stderr: `error: ${target} not found\n`, code: 1 };
+    }
+
+    const conditions = res.status?.conditions || [];
+    const matched = conditions.some((c) => c.type === condition && c.status === 'True') || res.status?.phase === 'Running' || res.status?.phase === 'Active';
+
+    if (matched) {
+      return { stdout: `${target} condition met\n`, stderr: '', code: 0 };
+    }
+    return { stdout: '', stderr: `timed out waiting for the condition on ${target}\n`, code: 1 };
+  }
+
+  _kubectlDebug({ restArgs, namespace }) {
+    if (!this.graph) return { stdout: '', stderr: 'No resource graph active\n', code: 1 };
+    const target = restArgs[0] || 'pod/app';
+    let image = 'busybox:latest';
+
+    for (let i = 1; i < restArgs.length; i++) {
+      const a = restArgs[i];
+      if (a.startsWith('--image=')) image = a.split('=')[1];
+      else if (a === '--image') image = restArgs[++i];
+    }
+
+    let kind = 'Pod';
+    let name = target;
+    if (target.includes('/')) {
+      const parts = target.split('/');
+      kind = normalizeKind(parts[0]);
+      name = parts[1];
+    }
+
+    if (kind === 'Pod') {
+      const pod = this.graph.get('Pod', namespace, name);
+      if (!pod) {
+        return { stdout: '', stderr: `Error from server (NotFound): pods "${name}" not found\n`, code: 1 };
+      }
+      pod.spec = pod.spec || {};
+      pod.spec.ephemeralContainers = pod.spec.ephemeralContainers || [];
+      pod.spec.ephemeralContainers.push({
+        name: 'debugger',
+        image,
+        stdin: true,
+        tty: true
+      });
+      this.graph.set(pod);
+      return {
+        stdout: `Targeting container "debugger". If you don't see a command prompt, try pressing enter.\n`,
+        stderr: '',
+        code: 0
+      };
+    }
+
+    if (kind === 'Node') {
+      const debugPodName = `node-debugger-${name.slice(0, 10)}`;
+      this.graph.set({
+        apiVersion: 'v1',
+        kind: 'Pod',
+        metadata: { name: debugPodName, namespace },
+        spec: {
+          nodeName: name,
+          hostPID: true,
+          hostNetwork: true,
+          containers: [{ name: 'debugger', image }]
+        },
+        status: { phase: 'Running' }
+      });
+      return {
+        stdout: `Creating debugging pod node-debugger-${name.slice(0, 10)} with container debugger on node ${name}.\n`,
+        stderr: '',
+        code: 0
+      };
+    }
+
+    return { stdout: `Debugging started for ${target}\n`, stderr: '', code: 0 };
+  }
+
+  _kubectlTaint({ restArgs }) {
+    if (!this.graph) return { stdout: '', stderr: 'No resource graph active\n', code: 1 };
+    const rawKind = restArgs[0];
+    const nodeName = restArgs[1];
+    const taintExpr = restArgs[2];
+
+    if (!nodeName || !taintExpr) {
+      return { stdout: '', stderr: 'error: exactly one node and at least one taint must be specified\n', code: 1 };
+    }
+
+    const node = this.graph.get('Node', null, nodeName);
+    if (!node) {
+      return { stdout: '', stderr: `Error from server (NotFound): nodes "${nodeName}" not found\n`, code: 1 };
+    }
+
+    node.spec = node.spec || {};
+    node.spec.taints = node.spec.taints || [];
+
+    if (taintExpr.endsWith('-')) {
+      const cleanExpr = taintExpr.slice(0, -1);
+      const colonIdx = cleanExpr.indexOf(':');
+      const effect = colonIdx > -1 ? cleanExpr.slice(colonIdx + 1) : null;
+      const keyPart = colonIdx > -1 ? cleanExpr.slice(0, colonIdx) : cleanExpr;
+      const eqIdx = keyPart.indexOf('=');
+      const key = eqIdx > -1 ? keyPart.slice(0, eqIdx) : keyPart;
+
+      node.spec.taints = node.spec.taints.filter((t) => {
+        if (effect && t.effect !== effect) return true;
+        return t.key !== key;
+      });
+      this.graph.set(node);
+      return { stdout: `node/${nodeName} untainted\n`, stderr: '', code: 0 };
+    }
+
+    const colonIdx = taintExpr.indexOf(':');
+    const effect = colonIdx > -1 ? taintExpr.slice(colonIdx + 1) : 'NoSchedule';
+    const keyPart = colonIdx > -1 ? taintExpr.slice(0, colonIdx) : taintExpr;
+    const eqIdx = keyPart.indexOf('=');
+    const key = eqIdx > -1 ? keyPart.slice(0, eqIdx) : keyPart;
+    const value = eqIdx > -1 ? keyPart.slice(eqIdx + 1) : '';
+
+    node.spec.taints = node.spec.taints.filter((t) => t.key !== key || t.effect !== effect);
+    node.spec.taints.push({ key, value, effect });
+    this.graph.set(node);
+    return { stdout: `node/${nodeName} tainted\n`, stderr: '', code: 0 };
+  }
+
+  _kubectlConfig({ restArgs, vfs, cwd }) {
+    this.kubeConfig = this.kubeConfig || {
+      currentContext: 'kubernetes-admin@kubernetes',
+      contexts: [
+        { name: 'kubernetes-admin@kubernetes', cluster: 'kubernetes', user: 'kubernetes-admin', namespace: 'default' }
+      ]
+    };
+
+    const action = restArgs[0];
+    if (action === 'view') {
+      const out = [
+        'apiVersion: v1',
+        'clusters:',
+        '- cluster:',
+        '    server: https://192.168.1.10:6443',
+        '  name: kubernetes',
+        'contexts:',
+        ...this.kubeConfig.contexts.flatMap((c) => [
+          `- context:`,
+          `    cluster: ${c.cluster || 'kubernetes'}`,
+          `    user: ${c.user || 'kubernetes-admin'}`,
+          `    namespace: ${c.namespace || 'default'}`,
+          `  name: ${c.name}`
+        ]),
+        `current-context: ${this.kubeConfig.currentContext}`,
+        'kind: Config',
+        'preferences: {}',
+        'users:',
+        '- name: kubernetes-admin',
+        '  user:',
+        '    client-certificate-data: REDACTED'
+      ];
+      return { stdout: out.join('\n') + '\n', stderr: '', code: 0 };
+    }
+
+    if (action === 'current-context') {
+      return { stdout: `${this.kubeConfig.currentContext}\n`, stderr: '', code: 0 };
+    }
+
+    if (action === 'use-context') {
+      const ctxName = restArgs[1];
+      if (!ctxName) return { stdout: '', stderr: 'error: context name required\n', code: 1 };
+      this.kubeConfig.currentContext = ctxName;
+      return { stdout: `Switched to context "${ctxName}".\n`, stderr: '', code: 0 };
+    }
+
+    if (action === 'set-context') {
+      const ctxName = restArgs[1];
+      if (!ctxName) return { stdout: '', stderr: 'error: context name required\n', code: 1 };
+      let ns = 'default';
+      let cluster = 'kubernetes';
+      let user = 'kubernetes-admin';
+      for (let i = 2; i < restArgs.length; i++) {
+        const a = restArgs[i];
+        if (a.startsWith('--namespace=')) ns = a.split('=')[1];
+        else if (a === '--namespace') ns = restArgs[++i];
+        else if (a.startsWith('--cluster=')) cluster = a.split('=')[1];
+        else if (a === '--cluster') cluster = restArgs[++i];
+        else if (a.startsWith('--user=')) user = a.split('=')[1];
+        else if (a === '--user') user = restArgs[++i];
+      }
+      const existing = this.kubeConfig.contexts.find((c) => c.name === ctxName);
+      if (existing) {
+        existing.namespace = ns;
+        existing.cluster = cluster;
+        existing.user = user;
+      } else {
+        this.kubeConfig.contexts.push({ name: ctxName, cluster, user, namespace: ns });
+      }
+      return { stdout: `Context "${ctxName}" modified.\n`, stderr: '', code: 0 };
+    }
+
+    if (action === 'get-contexts') {
+      const headers = ['CURRENT', 'NAME', 'CLUSTER', 'AUTHINFO', 'NAMESPACE'];
+      const rows = this.kubeConfig.contexts.map((c) => [
+        c.name === this.kubeConfig.currentContext ? '*' : '',
+        c.name,
+        c.cluster || 'kubernetes',
+        c.user || 'kubernetes-admin',
+        c.namespace || 'default'
+      ]);
+      return { stdout: this._formatTable(headers, rows) + '\n', stderr: '', code: 0 };
+    }
+
+    return { stdout: 'kubectl config view/current-context/use-context/set-context/get-contexts\n', stderr: '', code: 0 };
+  }
+
+  _kubectlExplain({ restArgs }) {
+    const target = restArgs[0] || 'pod';
+    const kind = normalizeKind(target.split('.')[0]);
+
+    const doc = {
+      Pod: {
+        version: 'v1',
+        description: 'Pod is a collection of containers that can run on a host.',
+        fields: {
+          metadata: 'Standard object metadata.',
+          spec: 'Specification of the desired behavior of the pod.',
+          status: 'Most recently observed status of the pod.'
+        }
+      },
+      Deployment: {
+        version: 'apps/v1',
+        description: 'Deployment enables declarative updates for Pods and ReplicaSets.',
+        fields: {
+          metadata: 'Standard object metadata.',
+          spec: 'Specification of the desired behavior of the Deployment.',
+          status: 'Most recently observed status of the Deployment.'
+        }
+      },
+      Service: {
+        version: 'v1',
+        description: 'Service is an abstract way to expose an application running on a set of Pods as a network service.',
+        fields: {
+          metadata: 'Standard object metadata.',
+          spec: 'The list of ports that are exposed by this service.',
+          status: 'Most recently observed status of the service.'
+        }
+      }
+    };
+
+    const entry = doc[kind] || {
+      version: 'v1',
+      description: `${kind} resource definition in Kubernetes API.`,
+      fields: { metadata: 'Object metadata.', spec: 'Resource specification.' }
+    };
+
+    const lines = [
+      `KIND:     ${kind}`,
+      `VERSION:  ${entry.version}`,
+      '',
+      `DESCRIPTION:`,
+      `    ${entry.description}`,
+      '',
+      `FIELDS:`
+    ];
+    for (const [fName, fDesc] of Object.entries(entry.fields)) {
+      lines.push(`   ${fName.padEnd(16)} <Object>`);
+      lines.push(`      ${fDesc}`);
+    }
+
+    return { stdout: lines.join('\n') + '\n', stderr: '', code: 0 };
+  }
+
   // -------------------------------------------------------------------------
   // 2. HELM CLI HANDLER
   // -------------------------------------------------------------------------
@@ -1234,7 +1707,7 @@ class MultiCliDispatcher {
   // 7. MULTI-CLOUD (AWS, AZURE, GCLOUD) HANDLER
   // -------------------------------------------------------------------------
 
-  handleAws({ argv = [] }) {
+  handleAws({ argv = [], vfs = null, cwd = '/home/learner' }) {
     const svc = argv[1];
     if (svc === 'sts' && argv[2] === 'get-caller-identity') {
       return {
@@ -1247,16 +1720,258 @@ class MultiCliDispatcher {
         code: 0
       };
     }
+
     if (svc === 'eks') {
+      const action = argv[2];
+      if (action === 'update-kubeconfig') {
+        let clusterName = 'kubelabs-production-eks';
+        let region = 'us-east-1';
+        for (let i = 3; i < argv.length; i++) {
+          if (argv[i].startsWith('--name=')) clusterName = argv[i].split('=')[1];
+          else if (argv[i] === '--name') clusterName = argv[++i];
+          else if (argv[i].startsWith('--region=')) region = argv[i].split('=')[1];
+          else if (argv[i] === '--region') region = argv[++i];
+        }
+        const ctxArn = `arn:aws:eks:${region}:123456789012:cluster/${clusterName}`;
+        if (vfs) {
+          try {
+            vfs.writeFile(
+              '/home/learner/.kube/config',
+              `apiVersion: v1\ncurrent-context: ${ctxArn}\nkind: Config\n`
+            );
+          } catch {
+            // ignore
+          }
+        }
+        return {
+          stdout: `Updated context ${ctxArn} in /home/learner/.kube/config\n`,
+          stderr: '',
+          code: 0
+        };
+      }
+
+      if (action === 'describe-cluster') {
+        let clusterName = 'kubelabs-production-eks';
+        for (let i = 3; i < argv.length; i++) {
+          if (argv[i].startsWith('--name=')) clusterName = argv[i].split('=')[1];
+          else if (argv[i] === '--name') clusterName = argv[++i];
+        }
+        return {
+          stdout: JSON.stringify({
+            cluster: {
+              name: clusterName,
+              arn: `arn:aws:eks:us-east-1:123456789012:cluster/${clusterName}`,
+              version: '1.31',
+              endpoint: 'https://78A9C12.gr7.us-east-1.eks.amazonaws.com',
+              roleArn: 'arn:aws:iam::123456789012:role/eks-cluster-role',
+              status: 'ACTIVE'
+            }
+          }, null, 2) + '\n',
+          stderr: '',
+          code: 0
+        };
+      }
+
+      return {
+        stdout: JSON.stringify({ clusters: ['kubelabs-production-eks'] }, null, 2) + '\n',
+        stderr: '',
+        code: 0
+      };
+    }
+
+    if (svc === 'iam') {
+      const action = argv[2];
+      if (action === 'get-role') {
+        let roleName = 'eks-pod-identity-role';
+        for (let i = 3; i < argv.length; i++) {
+          if (argv[i].startsWith('--role-name=')) roleName = argv[i].split('=')[1];
+          else if (argv[i] === '--role-name') roleName = argv[++i];
+        }
+        return {
+          stdout: JSON.stringify({
+            Role: {
+              RoleName: roleName,
+              RoleId: 'AROAIEXAMPLE',
+              Arn: `arn:aws:iam::123456789012:role/${roleName}`,
+              AssumeRolePolicyDocument: {
+                Version: '2012-10-17',
+                Statement: [{ Effect: 'Allow', Principal: { Service: 'pods.eks.amazonaws.com' }, Action: 'sts:AssumeRole' }]
+              }
+            }
+          }, null, 2) + '\n',
+          stderr: '',
+          code: 0
+        };
+      }
       return {
         stdout: JSON.stringify({
-          clusters: ['kubelabs-production-eks']
+          Roles: [
+            { RoleName: 'eks-cluster-role', Arn: 'arn:aws:iam::123456789012:role/eks-cluster-role' },
+            { RoleName: 'eks-node-role', Arn: 'arn:aws:iam::123456789012:role/eks-node-role' }
+          ]
         }, null, 2) + '\n',
         stderr: '',
         code: 0
       };
     }
+
+    if (svc === 'ec2' && argv[2] === 'describe-instances') {
+      return {
+        stdout: JSON.stringify({
+          Reservations: [{
+            Instances: [
+              { InstanceId: 'i-0a1b2c3d4e5f6g7h8', InstanceType: 'm6i.xlarge', State: { Name: 'running' }, PrivateIpAddress: '192.168.1.10' },
+              { InstanceId: 'i-0b2c3d4e5f6g7h8i9', InstanceType: 't3.large', State: { Name: 'running' }, PrivateIpAddress: '192.168.1.11' }
+            ]
+          }]
+        }, null, 2) + '\n',
+        stderr: '',
+        code: 0
+      };
+    }
+
     return { stdout: 'AWS CLI v2.17.40\n', stderr: '', code: 0 };
+  }
+
+  handleFlux({ argv = [] }) {
+    const sub = argv[1];
+    if (sub === 'get') {
+      const resType = argv[2] || 'kustomizations';
+      if (resType.startsWith('kustom')) {
+        const headers = ['NAME', 'REVISION', 'SUSPENDED', 'READY', 'MESSAGE'];
+        const rows = [
+          ['apps', 'main@sha1:e84f291', 'False', 'True', 'Applied revision: main@sha1:e84f291'],
+          ['infrastructure', 'main@sha1:e84f291', 'False', 'True', 'Applied revision: main@sha1:e84f291']
+        ];
+        return { stdout: this._formatTable(headers, rows) + '\n', stderr: '', code: 0 };
+      }
+      if (resType.startsWith('helm')) {
+        const headers = ['NAME', 'REVISION', 'SUSPENDED', 'READY', 'MESSAGE'];
+        const rows = [
+          ['redis-cluster', '6.2.14', 'False', 'True', 'Release reconciliation succeeded'],
+          ['ingress-nginx', '4.10.1', 'False', 'True', 'Release reconciliation succeeded']
+        ];
+        return { stdout: this._formatTable(headers, rows) + '\n', stderr: '', code: 0 };
+      }
+      if (resType.startsWith('source')) {
+        const headers = ['NAME', 'REVISION', 'SUSPENDED', 'READY', 'MESSAGE'];
+        const rows = [
+          ['podinfo', 'master@sha1:123abc4', 'False', 'True', 'stored artifact for revision']
+        ];
+        return { stdout: this._formatTable(headers, rows) + '\n', stderr: '', code: 0 };
+      }
+    }
+    if (sub === 'reconcile') {
+      const name = argv[3] || argv[2] || 'apps';
+      return {
+        stdout: `► annotating Kustomization ${name} in flux-system namespace\n✔ Kustomization reconciled successfully\n`,
+        stderr: '',
+        code: 0
+      };
+    }
+    return { stdout: 'Flux GitOps CLI v2.3.0\n', stderr: '', code: 0 };
+  }
+
+  handleVelero({ argv = [] }) {
+    this.veleroBackups = this.veleroBackups || [
+      { name: 'daily-backup-2026-11-10', status: 'Completed', errors: 0, warnings: 0, created: '2026-11-10 02:00:00' }
+    ];
+
+    const entity = argv[1];
+    const action = argv[2];
+
+    if (entity === 'backup') {
+      if (action === 'create') {
+        const name = argv[3] || `backup-${Date.now()}`;
+        this.veleroBackups.push({
+          name,
+          status: 'Completed',
+          errors: 0,
+          warnings: 0,
+          created: new Date().toISOString()
+        });
+        return { stdout: `Backup request "${name}" submitted successfully.\n`, stderr: '', code: 0 };
+      }
+      if (action === 'get') {
+        const headers = ['NAME', 'STATUS', 'ERRORS', 'WARNINGS', 'CREATED', 'EXPIRES'];
+        const rows = this.veleroBackups.map((b) => [b.name, b.status, String(b.errors), String(b.warnings), b.created, '28d']);
+        return { stdout: this._formatTable(headers, rows) + '\n', stderr: '', code: 0 };
+      }
+      if (action === 'describe') {
+        const name = argv[3] || (this.veleroBackups[0] ? this.veleroBackups[0].name : 'backup');
+        const lines = [
+          `Name:         ${name}`,
+          `Namespace:    velero`,
+          `Labels:       velero.io/storage-location=default`,
+          `Phase:        Completed`,
+          `Namespaces:   Included: *`,
+          `Resources:    Included: *`,
+          `Items Backed Up: 142 items`
+        ];
+        return { stdout: lines.join('\n') + '\n', stderr: '', code: 0 };
+      }
+    }
+
+    if (entity === 'restore') {
+      if (action === 'create') {
+        let fromBackup = 'daily-backup';
+        for (let i = 3; i < argv.length; i++) {
+          if (argv[i].startsWith('--from-backup=')) fromBackup = argv[i].split('=')[1];
+          else if (argv[i] === '--from-backup') fromBackup = argv[++i];
+        }
+        return { stdout: `Restore request "${fromBackup}-restore-${Math.random().toString(36).slice(2, 7)}" submitted successfully.\n`, stderr: '', code: 0 };
+      }
+      if (action === 'get') {
+        const headers = ['NAME', 'BACKUP', 'STATUS', 'STARTED', 'COMPLETED'];
+        const rows = [
+          ['daily-backup-restore-1', 'daily-backup-2026-11-10', 'Completed', '2026-11-12 04:00:00', '2026-11-12 04:02:15']
+        ];
+        return { stdout: this._formatTable(headers, rows) + '\n', stderr: '', code: 0 };
+      }
+    }
+
+    return { stdout: 'Velero Disaster Recovery CLI v1.14.0\n', stderr: '', code: 0 };
+  }
+
+  handleVcluster({ argv = [] }) {
+    this.vclusters = this.vclusters || [
+      { name: 'staging-tenant', namespace: 'vcluster-staging', status: 'Running', connected: 'False', age: '3d' }
+    ];
+
+    const action = argv[1];
+    if (action === 'create') {
+      const name = argv[2] || 'my-vcluster';
+      let ns = name;
+      for (let i = 3; i < argv.length; i++) {
+        if (argv[i] === '-n' || argv[i] === '--namespace') ns = argv[++i];
+        else if (argv[i].startsWith('-n=')) ns = argv[i].split('=')[1];
+      }
+      this.vclusters.push({ name, namespace: ns, status: 'Running', connected: 'True', age: '10s' });
+      return {
+        stdout: `[info] Creating vCluster "${name}" in namespace "${ns}"...\n[info] vCluster "${name}" successfully created and ready to use!\n`,
+        stderr: '',
+        code: 0
+      };
+    }
+
+    if (action === 'list') {
+      const headers = ['NAME', 'NAMESPACE', 'STATUS', 'CONNECTED', 'AGE'];
+      const rows = this.vclusters.map((v) => [v.name, v.namespace, v.status, v.connected, v.age]);
+      return { stdout: this._formatTable(headers, rows) + '\n', stderr: '', code: 0 };
+    }
+
+    if (action === 'connect') {
+      const name = argv[2] || (this.vclusters[0] ? this.vclusters[0].name : 'vcluster');
+      return { stdout: `[info] Switched context to vcluster_${name}\n`, stderr: '', code: 0 };
+    }
+
+    if (action === 'delete') {
+      const name = argv[2];
+      this.vclusters = this.vclusters.filter((v) => v.name !== name);
+      return { stdout: `[info] Successfully deleted vCluster "${name}"\n`, stderr: '', code: 0 };
+    }
+
+    return { stdout: 'vcluster: Virtual Kubernetes Clusters CLI v0.19.5\n', stderr: '', code: 0 };
   }
 
   handleAzure({ argv = [] }) {

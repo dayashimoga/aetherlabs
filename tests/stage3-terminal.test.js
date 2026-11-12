@@ -272,3 +272,4 @@ test('Subphase 3.1.1: History tracking and !! expansion', () => {
   assert.equal(repeat.code, 0);
   assert.match(repeat.stdout, /echo "Second Line"/);
 });
+
