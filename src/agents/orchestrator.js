@@ -58,8 +58,8 @@ class AgentOrchestrator {
         passed: tracks.length === 6
       },
       {
-        name: 'All 18 Cloud-Native, Multi-Cloud & Emerging Tech Domains are active',
-        passed: this.pluginManager.getAllDomains().length === 18
+        name: 'All 26 Cloud-Native, Multi-Cloud & Emerging Tech Domains are active',
+        passed: this.pluginManager.getAllDomains().length === 26
       }
     ];
     return this.formatAgentResult('agent-product', 'Product Engineering Agent', checks);
@@ -154,8 +154,8 @@ class AgentOrchestrator {
         passed: this.pluginManager.validationErrors.length === 0
       },
       {
-        name: 'At least 36 hands-on interactive labs across 18 domains',
-        passed: domains.length === 18 && labs.length >= 36
+        name: 'At least 52 hands-on interactive labs across 26 domains',
+        passed: domains.length === 26 && labs.length >= 52
       },
       {
         name: 'Every domain includes modules, labs, and assessment questions',
@@ -248,7 +248,7 @@ class AgentOrchestrator {
       },
       {
         name: `All ${incEngine.scenarios.length} production incident simulations deterministically resolve via canonical solution`,
-        passed: solvableIncidents === incEngine.scenarios.length && incEngine.scenarios.length === 8
+        passed: solvableIncidents === incEngine.scenarios.length && incEngine.scenarios.length >= 12
       }
     ];
     return this.formatAgentResult('agent-qa', 'QA Lead & Deterministic Solver Agent', checks);

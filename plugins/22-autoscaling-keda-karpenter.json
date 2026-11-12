@@ -1,0 +1,204 @@
+{
+  "id": "autoscaling-keda-karpenter",
+  "title": "22. Autoscaling & Consolidation (KEDA & Karpenter)",
+  "category": "SRE & Performance Engineering",
+  "trackId": "track-sre",
+  "version": "1.0.0",
+  "difficulty": "Advanced",
+  "estimatedHours": 7,
+  "summary": "Master intelligent event-driven workload autoscaling with KEDA (Kubernetes Event-driven Autoscaling) and rapid node provisioning and consolidation with Karpenter.",
+  "prerequisites": [
+    "Horizontal Pod Autoscaler (HPA) and Metrics Server",
+    "Cloud Provider Auto Scaling Groups / VM Scale Sets",
+    "PodDisruptionBudgets and scheduling constraints"
+  ],
+  "learningObjectives": [
+    "Deploy KEDA ScaledObject and TriggerAuthentication resources for queue-length autoscaling down to zero",
+    "Configure Karpenter NodePool and EC2NodeClass resources for sub-minute node provisioning",
+    "Implement Karpenter consolidation policies to eliminate underutilized cloud compute instances",
+    "Protect mission-critical production services with fine-tuned PodDisruptionBudgets (PDB)"
+  ],
+  "curriculumModules": [
+    {
+      "id": "mod-scale-01",
+      "title": "KEDA: Event-Driven Autoscaling Beyond CPU/Memory",
+      "conceptSummary": "Standard HPA is reactive and bounded to CPU/memory metrics. KEDA provides 60+ external scalers (Kafka, Redis, RabbitMQ, SQS, Prometheus) and supports scale-to-zero when queues are idle.",
+      "productionArchitecturePattern": "Microservice workers scaling from 0 to 100 pods based on Kafka consumer group lag or SQS queue depth.",
+      "keyCommands": [
+        "kubectl get scaledobjects -A",
+        "kubectl get triggers -A",
+        "kubectl describe scaledobject <name>"
+      ]
+    },
+    {
+      "id": "mod-scale-02",
+      "title": "Karpenter: High-Velocity Node Autoscaling & Consolidation",
+      "conceptSummary": "Karpenter bypasses slow Cloud Auto Scaling Groups by directly evaluating unschedulable pod resource requirements and launching optimal EC2/Compute instances in < 45 seconds.",
+      "productionArchitecturePattern": "Dynamic Karpenter NodePool with consolidationPolicy: WhenUnderutilized and spot instance interruption handling.",
+      "keyCommands": [
+        "kubectl get nodepools",
+        "kubectl get ec2nodeclasses",
+        "kubectl get pdb -A"
+      ]
+    }
+  ],
+  "labs": [
+    {
+      "id": "lab-scale-01",
+      "title": "KEDA Event-Driven Queue Autoscaling Configuration",
+      "difficulty": "Advanced",
+      "durationMinutes": 30,
+      "xpReward": 250,
+      "scenario": "Your asynchronous image processing service experiences unpredictable bursts. Configure a KEDA ScaledObject that scales the worker Deployment from 1 to 20 replicas based on queue lag.",
+      "productionContext": "KEDA automatically creates and manages the underlying Kubernetes HPA, feeding it external custom metrics from message brokers.",
+      "prerequisites": ["HPA", "KEDA"],
+      "objectives": [
+        "Deploy the order-worker Deployment with 1 initial replica",
+        "Deploy a KEDA ScaledObject named worker-scaler targeting order-worker",
+        "Configure minReplicaCount: 1, maxReplicaCount: 20, and pollingInterval: 15"
+      ],
+      "initialClusterState": {
+        "resources": [
+          {
+            "apiVersion": "v1",
+            "kind": "Namespace",
+            "metadata": { "name": "production" }
+          }
+        ]
+      },
+      "starterManifest": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: order-worker\n  namespace: production\nspec:\n  replicas: 1\n  selector:\n    matchLabels:\n      app: order-worker\n  template:\n    metadata:\n      labels:\n        app: order-worker\n    spec:\n      containers:\n        - name: worker\n          image: busybox:1.36\n          command: [\"sh\", \"-c\", \"while true; do sleep 10; done\"]\n---\napiVersion: keda.sh/v1alpha1\nkind: ScaledObject\nmetadata:\n  name: worker-scaler\n  namespace: production\nspec:\n  scaleTargetRef:\n    name: order-worker\n  minReplicaCount: 1\n  maxReplicaCount: 20\n  pollingInterval: 15\n  cooldownPeriod: 60\n",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Review KEDA ScaledObject Manifest",
+          "instruction": "Open the Manifest Editor and review the order-worker Deployment and worker-scaler ScaledObject.",
+          "commandHint": "kubectl get pods -n production"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Deploy Workload and ScaledObject",
+          "instruction": "Apply the manifest to the production namespace.",
+          "commandHint": "kubectl apply -f manifest.yaml"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "val-scale-01-deploy",
+          "description": "Deployment order-worker exists in production namespace",
+          "type": "resource_exists",
+          "kind": "Deployment",
+          "name": "order-worker",
+          "namespace": "production",
+          "remediation": "Apply the starter manifest to create the order-worker Deployment."
+        },
+        {
+          "id": "val-scale-01-scaler",
+          "description": "ScaledObject worker-scaler exists with maxReplicaCount 20",
+          "type": "resource_field_equals",
+          "kind": "ScaledObject",
+          "name": "worker-scaler",
+          "namespace": "production",
+          "fieldPath": "spec.maxReplicaCount",
+          "expectedValue": 20,
+          "remediation": "Deploy ScaledObject worker-scaler with spec.maxReplicaCount: 20."
+        }
+      ],
+      "solutionCommands": [
+        "kubectl apply -f manifest.yaml"
+      ],
+      "troubleshootingGuide": "Confirm that scaleTargetRef.name matches 'order-worker' exactly."
+    },
+    {
+      "id": "lab-scale-02",
+      "title": "Karpenter NodePool Consolidation & PodDisruptionBudgets",
+      "difficulty": "Advanced",
+      "durationMinutes": 35,
+      "xpReward": 250,
+      "scenario": "To optimize cloud costs, configure a Karpenter NodePool with consolidationPolicy WhenUnderutilized, protected by a PodDisruptionBudget ensuring 80% minimum availability.",
+      "productionContext": "Karpenter consolidation dynamically replaces multiple underutilized nodes with fewer, cheaper instances, cutting cloud bills by up to 50%.",
+      "prerequisites": ["Karpenter", "PodDisruptionBudget"],
+      "objectives": [
+        "Deploy a Karpenter NodePool named general-compute with consolidation enabled",
+        "Deploy a PodDisruptionBudget named payment-pdb requiring minAvailable: 80%",
+        "Verify node scheduling and consolidation policies"
+      ],
+      "initialClusterState": {
+        "resources": [
+          {
+            "apiVersion": "v1",
+            "kind": "Namespace",
+            "metadata": { "name": "production" }
+          }
+        ]
+      },
+      "starterManifest": "apiVersion: karpenter.sh/v1\nkind: NodePool\nmetadata:\n  name: general-compute\nspec:\n  disruption:\n    consolidationPolicy: WhenUnderutilized\n    consolidateAfter: 30s\n  template:\n    spec:\n      nodeClassRef:\n        name: default\n---\napiVersion: policy/v1\nkind: PodDisruptionBudget\nmetadata:\n  name: payment-pdb\n  namespace: production\nspec:\n  minAvailable: \"80%\"\n  selector:\n    matchLabels:\n      app: payment-api\n",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Inspect Karpenter and PDB Manifests",
+          "instruction": "Review the NodePool and PodDisruptionBudget definitions in the Manifest Editor.",
+          "commandHint": "cat /etc/hosts"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Apply NodePool and PDB Resources",
+          "instruction": "Deploy the resources to establish consolidation and disruption protection.",
+          "commandHint": "kubectl apply -f manifest.yaml"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "val-scale-02-nodepool",
+          "description": "NodePool general-compute exists with consolidationPolicy WhenUnderutilized",
+          "type": "resource_field_equals",
+          "kind": "NodePool",
+          "name": "general-compute",
+          "fieldPath": "spec.disruption.consolidationPolicy",
+          "expectedValue": "WhenUnderutilized",
+          "remediation": "Apply the NodePool manifest with spec.disruption.consolidationPolicy: WhenUnderutilized."
+        },
+        {
+          "id": "val-scale-02-pdb",
+          "description": "PodDisruptionBudget payment-pdb exists in production with minAvailable 80%",
+          "type": "resource_field_equals",
+          "kind": "PodDisruptionBudget",
+          "name": "payment-pdb",
+          "namespace": "production",
+          "fieldPath": "spec.minAvailable",
+          "expectedValue": "80%",
+          "remediation": "Deploy PodDisruptionBudget payment-pdb in production with minAvailable: '80%'."
+        }
+      ],
+      "solutionCommands": [
+        "kubectl apply -f manifest.yaml"
+      ],
+      "troubleshootingGuide": "Ensure minAvailable in the PDB is passed as a string with percentage '80%'."
+    }
+  ],
+  "assessmentQuestions": [
+    {
+      "id": "q-scale-01",
+      "question": "What is the primary capability KEDA introduces over standard Kubernetes Horizontal Pod Autoscaler?",
+      "options": [
+        "It can scale workloads based on external event sources (queues, streams) and scale down to zero replicas",
+        "It replaces the kubelet on worker nodes",
+        "It only works with Java applications",
+        "It requires hardware GPU acceleration"
+      ],
+      "correctIndex": 0,
+      "explanation": "KEDA provides event-driven scalers for 60+ external systems and enables scale-to-zero when event queues are empty."
+    },
+    {
+      "id": "q-scale-02",
+      "question": "How does Karpenter consolidation optimize cluster compute costs?",
+      "options": [
+        "By deleting idle pods every 5 minutes",
+        "By identifying underutilized nodes, evicting workloads according to PDBs, and terminating or downsizing EC2 instances",
+        "By turning off DNS resolution",
+        "By enforcing mandatory spot instances on control-plane nodes"
+      ],
+      "correctIndex": 1,
+      "explanation": "Karpenter consolidation continuously monitors cluster utilization and consolidates workloads onto fewer, cheaper nodes."
+    }
+  ]
+}

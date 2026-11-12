@@ -1,6 +1,16 @@
 'use strict';
 
 (function () {
+  function escapeHtml(str) {
+    if (str === null || str === undefined) return '';
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
   const state = {
     overview: null,
     activeLab: null,
@@ -10,20 +20,68 @@
       nodes: [],
       edges: []
     },
-    activeExam: null
+    activeExam: null,
+    lastClusterState: null,
+    commandHistory: [],
+    historyIndex: -1,
+    currentTheme: localStorage.getItem('kubelabs_theme') || 'dark'
   };
 
   async function apiCall(path, options = {}) {
-    const res = await fetch(path, {
-      method: options.method || 'GET',
-      headers: { 'Content-Type': 'application/json' },
-      body: options.body ? JSON.stringify(options.body) : undefined
-    });
-    const data = await res.json();
-    if (!res.ok) {
-      throw new Error((data.error && data.error.message) || `HTTP ${res.status}`);
+    try {
+      const res = await fetch(path, {
+        method: options.method || 'GET',
+        headers: { 'Content-Type': 'application/json' },
+        body: options.body ? JSON.stringify(options.body) : undefined
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error((data.error && data.error.message) || `HTTP ${res.status}`);
+      }
+      return data;
+    } catch (err) {
+      if (window.KubeLabsOfflineEngine) {
+        const modeEl = document.getElementById('header-runtime-mode');
+        if (modeEl) modeEl.textContent = 'Offline Engine (Active)';
+        return handleOfflineRequest(path, options);
+      }
+      throw err;
     }
-    return data;
+  }
+
+  function handleOfflineRequest(path, options) {
+    const oe = window.KubeLabsOfflineEngine;
+    if (path === '/api/overview') {
+      const prog = oe.getProgress();
+      return {
+        learner: { profile: { xp: prog.xp }, completedLabs: (prog.completedLabs || []).map((id) => ({ lab_id: id, status: 'completed' })) },
+        tracks: state.overview ? state.overview.tracks : [],
+        domains: state.overview ? state.overview.domains : [],
+        labs: state.overview ? state.overview.labs : [],
+        projects: state.overview ? state.overview.projects : []
+      };
+    }
+    if (path === '/api/terminal/exec') {
+      const cmd = options.body ? options.body.command : '';
+      const res = oe.executeCommand(cmd);
+      return {
+        exitCode: res.exitCode,
+        output: res.output,
+        clusterState: oe.getClusterState()
+      };
+    }
+    if (path.includes('/validate')) {
+      const rules = (state.activeLab && state.activeLab.validationRules) || [];
+      const report = oe.evaluateRules(rules);
+      if (report.passed && state.activeLab) {
+        oe.recordProgress({ labId: state.activeLab.id, xpReward: state.activeLab.xpReward });
+      }
+      return {
+        ...report,
+        clusterState: oe.getClusterState()
+      };
+    }
+    return { exitCode: 0, clusterState: oe.getClusterState() };
   }
 
   function switchView(viewId) {
@@ -55,7 +113,7 @@
     const learner = state.overview.learner || {};
     const profile = learner.profile || { xp: 0 };
     const completedLabs = (learner.completedLabs || []).filter((l) => l.status === 'completed');
-    const totalLabs = (state.overview.labs || []).length;
+    const totalLabs = (state.overview.labs || []).length || 52;
 
     const xpEl = document.getElementById('header-xp');
     const labsEl = document.getElementById('header-labs-completed');
@@ -63,7 +121,104 @@
     if (labsEl) labsEl.textContent = `${completedLabs.length}/${totalLabs} Labs Completed`;
   }
 
+  function renderSvgTopology(clusterState) {
+    const svg = document.getElementById('cluster-topology-svg');
+    if (!svg || !clusterState) return;
+
+    const resources = clusterState.resources || [];
+    const ingresses = resources.filter((r) => r.kind === 'Ingress');
+    const services = resources.filter((r) => r.kind === 'Service');
+    const pods = resources.filter((r) => r.kind === 'Pod');
+    const nodes = resources.filter((r) => r.kind === 'Node' || r.kind === 'PersistentVolumeClaim');
+
+    const colX = { ing: 45, svc: 165, pod: 310, node: 455 };
+    let svgContent = `
+      <defs>
+        <marker id="arrow" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#38bdf8" />
+        </marker>
+      </defs>
+      <text x="${colX.ing}" y="18" fill="#94a3b8" font-size="10" font-family="monospace" text-anchor="middle">INGRESS</text>
+      <text x="${colX.svc}" y="18" fill="#94a3b8" font-size="10" font-family="monospace" text-anchor="middle">SERVICE</text>
+      <text x="${colX.pod}" y="18" fill="#94a3b8" font-size="10" font-family="monospace" text-anchor="middle">PODS</text>
+      <text x="${colX.node}" y="18" fill="#94a3b8" font-size="10" font-family="monospace" text-anchor="middle">HOST / PVC</text>
+    `;
+
+    const ingY = ingresses.slice(0, 3).map((_, i) => 45 + i * 42);
+    const svcY = services.slice(0, 4).map((_, i) => 38 + i * 36);
+    const podY = pods.slice(0, 5).map((_, i) => 32 + i * 27);
+    const nodeY = nodes.slice(0, 3).map((_, i) => 45 + i * 42);
+
+    for (let i = 0; i < Math.min(ingresses.length, services.length); i++) {
+      const y1 = ingY[i] || 45;
+      const y2 = svcY[i] || 38;
+      svgContent += `<line x1="${colX.ing + 20}" y1="${y1}" x2="${colX.svc - 20}" y2="${y2}" stroke="#38bdf8" stroke-width="1.5" stroke-dasharray="3,3" marker-end="url(#arrow)" />`;
+    }
+    for (let i = 0; i < Math.min(services.length, pods.length); i++) {
+      const y1 = svcY[i] || 38;
+      const y2 = podY[i] || 32;
+      svgContent += `<line x1="${colX.svc + 20}" y1="${y1}" x2="${colX.pod - 20}" y2="${y2}" stroke="#10b981" stroke-width="1.5" stroke-dasharray="3,3" marker-end="url(#arrow)" />`;
+    }
+    for (let i = 0; i < Math.min(pods.length, nodes.length); i++) {
+      const y1 = podY[i] || 32;
+      const y2 = nodeY[i] || 45;
+      svgContent += `<line x1="${colX.pod + 20}" y1="${y1}" x2="${colX.node - 20}" y2="${y2}" stroke="#a855f7" stroke-width="1.5" stroke-dasharray="3,3" marker-end="url(#arrow)" />`;
+    }
+
+    ingresses.slice(0, 3).forEach((r, i) => {
+      const y = ingY[i];
+      svgContent += `
+        <g class="topology-node">
+          <rect x="${colX.ing - 32}" y="${y - 12}" width="64" height="24" rx="4" fill="#1e293b" stroke="#38bdf8" stroke-width="1.2" />
+          <text x="${colX.ing}" y="${y + 3}" fill="#38bdf8" font-size="9" font-family="monospace" text-anchor="middle">${escapeHtml(r.metadata.name.slice(0, 9))}</text>
+        </g>
+      `;
+    });
+
+    services.slice(0, 4).forEach((r, i) => {
+      const y = svcY[i];
+      const hasEps = r.status && r.status.endpointCount > 0;
+      const stroke = hasEps ? '#10b981' : '#f59e0b';
+      svgContent += `
+        <g class="topology-node">
+          <rect x="${colX.svc - 30}" y="${y - 12}" width="60" height="24" rx="4" fill="#1e293b" stroke="${stroke}" stroke-width="1.2" />
+          <text x="${colX.svc}" y="${y + 3}" fill="${stroke}" font-size="9" font-family="monospace" text-anchor="middle">${escapeHtml(r.metadata.name.slice(0, 8))}</text>
+        </g>
+      `;
+    });
+
+    pods.slice(0, 5).forEach((r, i) => {
+      const y = podY[i];
+      const phase = (r.status && (r.status.phase || r.status.reason)) || 'Pending';
+      const isHealthy = phase === 'Running';
+      const isPending = phase.includes('Pending') || phase.includes('Creating');
+      const stroke = isHealthy ? '#10b981' : isPending ? '#f59e0b' : '#ef4444';
+      svgContent += `
+        <g class="topology-node">
+          <circle cx="${colX.pod}" cy="${y}" r="10" fill="#1e293b" stroke="${stroke}" stroke-width="1.5" />
+          <text x="${colX.pod}" y="${y + 3}" fill="${stroke}" font-size="8" font-family="monospace" text-anchor="middle">${isHealthy ? '●' : '!'}</text>
+          <text x="${colX.pod + 15}" y="${y + 3}" fill="#cbd5e1" font-size="8" font-family="monospace">${escapeHtml(r.metadata.name.slice(0, 11))}</text>
+        </g>
+      `;
+    });
+
+    nodes.slice(0, 3).forEach((r, i) => {
+      const y = nodeY[i];
+      svgContent += `
+        <g class="topology-node">
+          <rect x="${colX.node - 32}" y="${y - 12}" width="64" height="24" rx="4" fill="#1e293b" stroke="#a855f7" stroke-width="1.2" />
+          <text x="${colX.node}" y="${y + 3}" fill="#c084fc" font-size="9" font-family="monospace" text-anchor="middle">${escapeHtml(r.metadata.name.slice(0, 9))}</text>
+        </g>
+      `;
+    });
+
+    svg.innerHTML = svgContent;
+  }
+
   function renderClusterTopology(clusterState) {
+    state.lastClusterState = clusterState;
+    renderSvgTopology(clusterState);
+
     const container = document.getElementById('cluster-topology-view');
     const countBadge = document.getElementById('cluster-resource-count');
     if (!container || !clusterState) return;
@@ -74,7 +229,7 @@
     container.innerHTML = resources
       .filter((r) => r.kind !== 'Namespace')
       .map((r) => {
-        const ns = r.metadata.namespace ? `${r.metadata.namespace}/` : '';
+        const ns = r.metadata.namespace ? `${escapeHtml(r.metadata.namespace)}/` : '';
         let statusText = (r.status && (r.status.reason || r.status.phase)) || 'Active';
         if (r.kind === 'Service') {
           statusText = `${(r.status && r.status.endpointCount) || 0} endpoints`;
@@ -91,9 +246,9 @@
           <div class="resource-chip">
             <div>
               <span class="status-dot ${isBroken ? 'broken' : 'healthy'}"></span>
-              <strong>${r.kind}</strong>: ${ns}${r.metadata.name}
+              <strong>${escapeHtml(r.kind)}</strong>: ${ns}${escapeHtml(r.metadata.name)}
             </div>
-            <span class="badge ${isBroken ? 'sev1' : ''}">${statusText}</span>
+            <span class="badge ${isBroken ? 'sev1' : ''}">${escapeHtml(statusText)}</span>
           </div>
         `;
       })
@@ -116,12 +271,12 @@
           (t) => `
           <div class="card">
             <div class="card-header">
-              <span class="card-title">${t.title}</span>
+              <span class="card-title">${escapeHtml(t.title)}</span>
               <span class="badge">${t.labsCount} Labs | ${t.totalHours}h</span>
             </div>
-            <p style="font-size:0.82rem; color:var(--text-secondary);">${t.summary}</p>
+            <p style="font-size:0.82rem; color:var(--text-secondary);">${escapeHtml(t.summary)}</p>
             <div style="font-size:0.76rem; color:var(--accent-blue); margin-top:auto;">
-              Certification: ${t.certificationTitle}
+              Certification: ${escapeHtml(t.certificationTitle)}
             </div>
           </div>
         `
@@ -139,23 +294,55 @@
       projectsContainer.innerHTML = (state.overview.projects || [])
         .map((proj) => {
           const isDone = doneProjects.has(proj.id);
+          const milestonesHtml = (proj.milestones || [])
+            .map(
+              (m) => `
+              <div style="display:flex; justify-content:space-between; align-items:center; background:var(--bg-secondary); padding:0.35rem 0.6rem; border-radius:4px; margin-top:0.3rem;">
+                <span style="font-size:0.75rem;">• M${m.milestoneNumber}: ${escapeHtml(m.title)}</span>
+                <button class="btn btn-primary validate-milestone-btn" data-proj-id="${proj.id}" data-m-num="${m.milestoneNumber}" type="button" style="padding:0.15rem 0.45rem; font-size:0.7rem;">Validate</button>
+              </div>
+            `
+            )
+            .join('');
+
           return `
             <div class="card">
               <div class="card-header">
-                <span class="card-title">${proj.title}</span>
+                <span class="card-title">${escapeHtml(proj.title)}</span>
                 ${isDone ? '<span class="badge completed">Completed</span>' : `<span class="badge">+${proj.xpReward} XP</span>`}
               </div>
-              <p style="font-size:0.8rem; color:var(--text-secondary);">${proj.summary}</p>
-              <div style="font-size:0.76rem; color:var(--text-muted);">
-                ${(proj.milestones || []).map((m) => `<div>• M${m.milestoneNumber}: ${m.title}</div>`).join('')}
-              </div>
-              <div style="margin-top:auto; padding-top:0.4rem;">
-                <button class="btn btn-success solve-project-btn" data-proj-id="${proj.id}" type="button" style="width:100%;">Build &amp; Validate Capstone Project</button>
+              <p style="font-size:0.8rem; color:var(--text-secondary);">${escapeHtml(proj.summary)}</p>
+              <div class="milestone-stepper">${milestonesHtml}</div>
+              <div style="margin-top:auto; padding-top:0.5rem;">
+                <button class="btn btn-success solve-project-btn" data-proj-id="${proj.id}" type="button" style="width:100%;">Build &amp; Validate Full Capstone</button>
               </div>
             </div>
           `;
         })
         .join('');
+
+      projectsContainer.querySelectorAll('.validate-milestone-btn').forEach((btn) => {
+        btn.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          const pId = btn.dataset.projId;
+          const mNum = btn.dataset.mNum;
+          try {
+            const res = await apiCall(`/api/projects/${pId}/milestones/${mNum}/validate`, { method: 'POST' });
+            if (res.passed) {
+              btn.classList.remove('btn-primary', 'btn-danger');
+              btn.classList.add('btn-success');
+              btn.textContent = `M${mNum} Pass ✓`;
+            } else {
+              btn.classList.remove('btn-primary', 'btn-success');
+              btn.classList.add('btn-danger');
+              btn.textContent = `M${mNum} Fail ✗`;
+            }
+            if (res.clusterState) renderClusterTopology(res.clusterState);
+          } catch (err) {
+            btn.textContent = 'Error';
+          }
+        });
+      });
 
       projectsContainer.querySelectorAll('.solve-project-btn').forEach((btn) => {
         btn.addEventListener('click', async () => {
@@ -298,6 +485,8 @@
 
   async function executeTerminalCommand(cmd) {
     if (!cmd || !cmd.trim()) return;
+    state.commandHistory.push(cmd);
+    state.historyIndex = -1;
     appendTerminalLine(cmd, true);
     const manifestText = document.getElementById('wb-manifest-editor').value;
     const res = await apiCall('/api/terminal/exec', {
@@ -311,6 +500,54 @@
     }
     if (res.clusterState) {
       renderClusterTopology(res.clusterState);
+    }
+  }
+
+  function handleTabCompletion(input) {
+    const val = input.value;
+    const tokens = val.split(' ');
+    const lastToken = tokens[tokens.length - 1].toLowerCase();
+    if (!lastToken) return;
+
+    const suggestions = [
+      'kubectl', 'get', 'describe', 'apply', 'create', 'delete', 'scale', 'patch', 'label', 'annotate',
+      'pods', 'services', 'deployments', 'nodes', 'namespaces', 'configmaps', 'secrets', 'networkpolicies',
+      'vcluster', 'kyverno', 'velero', 'etcdctl', 'kubeadm', 'aiops', 'argocd', 'istioctl', 'helm'
+    ];
+
+    if (state.lastClusterState && Array.isArray(state.lastClusterState.resources)) {
+      for (const r of state.lastClusterState.resources) {
+        if (r.metadata && r.metadata.name) suggestions.push(r.metadata.name);
+      }
+    }
+
+    const match = suggestions.find((s) => s.toLowerCase().startsWith(lastToken) && s.toLowerCase() !== lastToken);
+    if (match) {
+      tokens[tokens.length - 1] = match;
+      input.value = tokens.join(' ') + ' ';
+    }
+  }
+
+  function initTheme() {
+    const savedTheme = localStorage.getItem('kubelabs_theme') || 'dark';
+    setTheme(savedTheme);
+
+    const toggleBtn = document.getElementById('theme-toggle');
+    if (toggleBtn) {
+      toggleBtn.addEventListener('click', () => {
+        const nextTheme = state.currentTheme === 'dark' ? 'light' : state.currentTheme === 'light' ? 'high-contrast' : 'dark';
+        setTheme(nextTheme);
+      });
+    }
+  }
+
+  function setTheme(theme) {
+    state.currentTheme = theme;
+    localStorage.setItem('kubelabs_theme', theme);
+    document.documentElement.setAttribute('data-theme', theme);
+    const toggleBtn = document.getElementById('theme-toggle');
+    if (toggleBtn) {
+      toggleBtn.textContent = `Theme: ${theme === 'high-contrast' ? 'High Contrast' : theme.charAt(0).toUpperCase() + theme.slice(1)}`;
     }
   }
 
@@ -694,10 +931,50 @@
       switchView('view-paths');
     }
 
+    initTheme();
+
     // Domain search input
     const searchInput = document.getElementById('domain-search-input');
     if (searchInput) {
       searchInput.addEventListener('input', () => renderPathsAndDomains(searchInput.value));
+    }
+
+    // Terminal input keydown for Arrow history, Tab completion, Ctrl+L, Ctrl+Enter
+    const termInput = document.getElementById('terminal-input');
+    if (termInput) {
+      termInput.addEventListener('keydown', (e) => {
+        if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          if (state.commandHistory.length === 0) return;
+          if (state.historyIndex === -1) {
+            state.historyIndex = state.commandHistory.length - 1;
+          } else if (state.historyIndex > 0) {
+            state.historyIndex--;
+          }
+          termInput.value = state.commandHistory[state.historyIndex] || '';
+        } else if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          if (state.historyIndex !== -1) {
+            if (state.historyIndex < state.commandHistory.length - 1) {
+              state.historyIndex++;
+              termInput.value = state.commandHistory[state.historyIndex];
+            } else {
+              state.historyIndex = -1;
+              termInput.value = '';
+            }
+          }
+        } else if (e.key === 'Tab') {
+          e.preventDefault();
+          handleTabCompletion(termInput);
+        } else if (e.ctrlKey && e.key === 'l') {
+          e.preventDefault();
+          const out = document.getElementById('terminal-output');
+          if (out) out.innerHTML = '';
+        } else if (e.ctrlKey && e.key === 'Enter') {
+          e.preventDefault();
+          validateActiveLab();
+        }
+      });
     }
 
     // Terminal form submission

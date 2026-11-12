@@ -1,10 +1,11 @@
 'use strict';
 
-const CACHE_NAME = 'kubelabs-offline-v1';
+const CACHE_NAME = 'kubelabs-offline-v2';
 const SHELL_ASSETS = [
   '/',
   '/index.html',
   '/css/styles.css',
+  '/js/offlineEngine.js',
   '/js/app.js',
   '/manifest.json',
   '/api/overview'

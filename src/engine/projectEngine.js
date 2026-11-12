@@ -492,6 +492,157 @@ const CAPSTONE_PROJECTS = [
       'aiops analyze',
       'aiops remediate'
     ]
+  },
+  {
+    id: 'proj-07-multitenant-vcluster-platform',
+    trackId: 'track-platform',
+    title: 'Capstone 7: Multi-Tenant Virtual Cluster Platform with Kyverno & vCluster',
+    difficulty: 'Principal',
+    xpReward: 500,
+    summary: 'Architect an enterprise multi-tenant developer platform using vCluster virtual control planes, Kyverno security admission policies, and hard resource quota governance.',
+    businessProblem: 'Hundreds of feature teams need rapid isolated Kubernetes clusters without the infrastructure cost and slow provisioning times of dedicated cloud EKS/GKE clusters.',
+    milestones: [
+      {
+        milestoneNumber: 1,
+        title: 'Provision Isolated Tenant Namespace & ResourceQuota',
+        instruction: 'Create namespace `tenant-alpha` and ResourceQuota `alpha-quota` setting `hard.pods: "10"`.'
+      },
+      {
+        milestoneNumber: 2,
+        title: 'Enforce Governance with Kyverno ClusterPolicy',
+        instruction: 'Deploy Kyverno ClusterPolicy `require-team-label` to mandate team ownership labels on all workloads.'
+      },
+      {
+        milestoneNumber: 3,
+        title: 'Deploy Lightweight Virtual Control Plane (vCluster)',
+        instruction: 'Deploy virtual cluster `alpha-vcluster` inside namespace `tenant-alpha` using the vCluster CLI.'
+      },
+      {
+        milestoneNumber: 4,
+        title: 'Isolate Tenant Traffic via NetworkPolicy',
+        instruction: 'Create NetworkPolicy `deny-cross-tenant` in `tenant-alpha` to isolate network ingress and egress.'
+      }
+    ],
+    initialClusterState: { resources: [] },
+    validationRules: [
+      {
+        id: 'proj-07-r1',
+        description: 'ResourceQuota alpha-quota in namespace tenant-alpha limits hard.pods to 10',
+        type: 'resource_field_equals',
+        kind: 'ResourceQuota',
+        name: 'alpha-quota',
+        namespace: 'tenant-alpha',
+        fieldPath: 'spec.hard.pods',
+        expectedValue: '10',
+        remediation: 'Run `kubectl create quota alpha-quota --hard=pods=10 -n tenant-alpha`.'
+      },
+      {
+        id: 'proj-07-r2',
+        description: 'ClusterPolicy require-team-label exists',
+        type: 'resource_exists',
+        kind: 'ClusterPolicy',
+        name: 'require-team-label',
+        remediation: 'Run `kubectl create clusterpolicy require-team-label`.'
+      },
+      {
+        id: 'proj-07-r3',
+        description: 'Command vcluster create executed for alpha-vcluster in tenant-alpha',
+        type: 'command_executed',
+        pattern: 'vcluster create alpha-vcluster',
+        remediation: 'Run `vcluster create alpha-vcluster -n tenant-alpha`.'
+      },
+      {
+        id: 'proj-07-r4',
+        description: 'NetworkPolicy deny-cross-tenant exists in namespace tenant-alpha',
+        type: 'resource_exists',
+        kind: 'NetworkPolicy',
+        name: 'deny-cross-tenant',
+        namespace: 'tenant-alpha',
+        remediation: 'Run `kubectl create networkpolicy deny-cross-tenant -n tenant-alpha`.'
+      }
+    ],
+    solutionCommands: [
+      'kubectl create namespace tenant-alpha',
+      'kubectl create quota alpha-quota --hard=pods=10 -n tenant-alpha',
+      'kubectl create clusterpolicy require-team-label',
+      'vcluster create alpha-vcluster -n tenant-alpha',
+      'kubectl create networkpolicy deny-cross-tenant -n tenant-alpha'
+    ]
+  },
+  {
+    id: 'proj-08-kserve-distributed-ai-cloud',
+    trackId: 'track-multicloud-aiops',
+    title: 'Capstone 8: Cloud-Native Distributed AI Cloud with KServe & Ray Autoscaler',
+    difficulty: 'Principal',
+    xpReward: 500,
+    summary: 'Build a planetary-scale AI/ML platform orchestrating distributed PyTorch training jobs and serverless LLM model serving endpoints with hardware acceleration.',
+    businessProblem: 'Generative AI product demands low-latency streaming responses with auto-scaling down to zero when idle, plus multi-node distributed model fine-tuning runs.',
+    milestones: [
+      {
+        milestoneNumber: 1,
+        title: 'Deploy Distributed Training Job with Kubeflow PyTorchJob',
+        instruction: 'Create namespace `ai-platform` and deploy PyTorchJob `foundation-llm-finetune`.'
+      },
+      {
+        milestoneNumber: 2,
+        title: 'Provision Serverless LLM Predictor with KServe',
+        instruction: 'Deploy KServe InferenceService `gpt-distributed-inference` in `ai-platform`.'
+      },
+      {
+        milestoneNumber: 3,
+        title: 'Configure AI Inference Gateway Service',
+        instruction: 'Expose model endpoint via ClusterIP Service `inference-gw` on port 8000 in `ai-platform`.'
+      },
+      {
+        milestoneNumber: 4,
+        title: 'Run AI-Ops Autonomous Analysis',
+        instruction: 'Execute `aiops analyze` to evaluate inference latency and cluster GPU saturation.'
+      }
+    ],
+    initialClusterState: { resources: [] },
+    validationRules: [
+      {
+        id: 'proj-08-r1',
+        description: 'PyTorchJob foundation-llm-finetune exists in namespace ai-platform',
+        type: 'resource_exists',
+        kind: 'PyTorchJob',
+        name: 'foundation-llm-finetune',
+        namespace: 'ai-platform',
+        remediation: 'Run `kubectl create pytorchjob foundation-llm-finetune -n ai-platform`.'
+      },
+      {
+        id: 'proj-08-r2',
+        description: 'InferenceService gpt-distributed-inference exists in namespace ai-platform',
+        type: 'resource_exists',
+        kind: 'InferenceService',
+        name: 'gpt-distributed-inference',
+        namespace: 'ai-platform',
+        remediation: 'Run `kubectl create inferenceservice gpt-distributed-inference -n ai-platform`.'
+      },
+      {
+        id: 'proj-08-r3',
+        description: 'Service inference-gw exists in namespace ai-platform',
+        type: 'resource_exists',
+        kind: 'Service',
+        name: 'inference-gw',
+        namespace: 'ai-platform',
+        remediation: 'Run `kubectl create service clusterip inference-gw --tcp=8000:8000 -n ai-platform`.'
+      },
+      {
+        id: 'proj-08-r4',
+        description: 'Command aiops analyze executed',
+        type: 'command_executed',
+        pattern: 'aiops analyze',
+        remediation: 'Run `aiops analyze`.'
+      }
+    ],
+    solutionCommands: [
+      'kubectl create namespace ai-platform',
+      'kubectl create pytorchjob foundation-llm-finetune -n ai-platform',
+      'kubectl create inferenceservice gpt-distributed-inference -n ai-platform',
+      'kubectl create service clusterip inference-gw --tcp=8000:8000 -n ai-platform',
+      'aiops analyze'
+    ]
   }
 ];
 
@@ -529,6 +680,31 @@ class ProjectEngine {
       title: project.title,
       trackId: project.trackId,
       xpReward: project.xpReward,
+      ...report
+    };
+  }
+
+  validateMilestone(projectId, milestoneNumber, virtualCluster, commandHistory = []) {
+    const project = this.getProject(projectId);
+    if (!project) {
+      throw new Error(`Capstone project "${projectId}" not found`);
+    }
+    const mNum = parseInt(milestoneNumber, 10);
+    const milestone = (project.milestones || []).find((m) => m.milestoneNumber === mNum);
+    if (!milestone) {
+      throw new Error(`Milestone ${mNum} not found in project "${projectId}"`);
+    }
+
+    const rulesForMilestone = (project.validationRules || []).filter((r, idx) => {
+      if (r.milestoneNumber !== undefined) return r.milestoneNumber === mNum;
+      return idx + 1 === mNum;
+    });
+    const rulesToEval = rulesForMilestone.length > 0 ? rulesForMilestone : [project.validationRules[mNum - 1] || project.validationRules[0]];
+    const report = this.validationEngine.evaluate(rulesToEval, virtualCluster, commandHistory);
+    return {
+      projectId: project.id,
+      milestoneNumber: mNum,
+      milestoneTitle: milestone.title,
       ...report
     };
   }

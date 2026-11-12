@@ -1,8 +1,8 @@
 # Master Curriculum Catalog & Learning Path Matrix
 
 **Document ID**: CURR-KUBELABS-2026-001  
-**Version**: 1.0.0  
-**Coverage**: 18 Domains | 6 Guided Role Tracks | 36 Hands-On Labs | 8 Live Production Incident Simulations | 6 Production Capstone Projects | 8 Enterprise Reference Architectures | 6 Verifiable Certifications
+**Version**: 2.0.0  
+**Coverage**: 26 Domains | 6 Guided Role Tracks | 52 Hands-On Labs | 12 Live Production Incident Simulations | 8 Production Capstone Projects | 8 Enterprise Reference Architectures | 6 Verifiable Certifications
 
 ---
 
@@ -11,21 +11,21 @@
 ```mermaid
 flowchart LR
     T1["Track 1: Cloud-Native Foundations"] --> T2["Track 2: Kubernetes & CNCF Administrator (CKA/CKAD)"]
-    T2 --> T3["Track 3: DevSecOps & Supply Chain Specialist (CKS)"]
-    T2 --> T4["Track 4: SRE, Service Mesh & Observability Lead"]
-    T3 --> T5["Track 5: Internal Developer Platform (IDP) & FinOps Architect"]
+    T2 --> T3["Track 3: DevSecOps & Zero-Trust Specialist (CKS)"]
+    T2 --> T4["Track 4: SRE, Service Mesh & Resilience Lead"]
+    T3 --> T5["Track 5: Platform Engineering & Multi-Tenancy Architect"]
     T4 --> T5
-    T5 --> T6["Track 6: Multi-Cloud (AWS/Azure/GCP), Wasm/eBPF & AI-Ops Principal"]
+    T5 --> T6["Track 6: Multi-Cloud, Cloud-Native AI/ML & Distributed Systems"]
 ```
 
 | Track ID | Role Title | Included Domains | Capstone Certification |
 |---|---|---|---|
-| `track-foundations` | Cloud-Native Systems Engineer | `linux-fundamentals`, `containers-runtime`, `cloud-networking` | Certified Cloud-Native Foundations Associate (CCNFA) |
-| `track-k8s-admin` | Kubernetes & GitOps Administrator | `kubernetes-core`, `cncf-packaging`, `gitops-delivery`, `devops-cicd` | Certified Kubernetes & GitOps Administrator (CKGA) |
-| `track-devsecops` | DevSecOps & Zero-Trust Engineer | `devsecops-security`, `service-mesh` | Certified Cloud-Native Security Specialist (CCNSS) |
-| `track-sre` | Principal SRE & Chaos Engineer | `observability-stack`, `sre-incident-chaos` | Certified Site Reliability & Incident Commander (CSRIC) |
-| `track-platform` | Platform Engineering & FinOps Architect | `platform-engineering`, `iac-opentofu-terraform`, `finops-green-cloud` | Certified Platform Engineering Architect (CPEA) |
-| `track-multicloud-aiops` | Multi-Cloud & AI-Ops Principal | `cloud-aws`, `cloud-azure-gcp`, `aiops-autonomous`, `wasm-ebpf-edge` | Certified Multi-Cloud & AI-Ops Principal (CMCAP) |
+| `track-foundations` | Cloud-Native Systems Engineer | `linux-fundamentals`, `containers-runtime`, `cloud-networking`, `storage-csi-velero-dr` | Certified Cloud-Native Foundations Associate (CCNFA) |
+| `track-k8s-admin` | Kubernetes & GitOps Administrator | `kubernetes-core`, `cncf-packaging`, `gitops-delivery`, `devops-cicd`, `k8s-control-plane-lifecycle` | Certified Kubernetes & GitOps Administrator (CKGA) |
+| `track-devsecops` | DevSecOps & Zero-Trust Engineer | `devsecops-security`, `service-mesh`, `policy-as-code-kyverno`, `zero-trust-spiffe-externalsecrets` | Certified Cloud-Native Security Specialist (CCNSS) |
+| `track-sre` | Principal SRE & Chaos Engineer | `observability-stack`, `sre-incident-chaos`, `gateway-api-cilium`, `autoscaling-keda-karpenter` | Certified Site Reliability & Incident Commander (CSRIC) |
+| `track-platform` | Platform Engineering & FinOps Architect | `platform-engineering`, `iac-opentofu-terraform`, `finops-green-cloud`, `multitenancy-vcluster-crossplane` | Certified Platform Engineering Architect (CPEA) |
+| `track-multicloud-aiops` | Multi-Cloud & AI-Ops Principal | `cloud-aws`, `cloud-azure-gcp`, `aiops-autonomous`, `wasm-ebpf-edge`, `cloud-native-aiml-kserve` | Certified Multi-Cloud & AI-Ops Principal (CMCAP) |
 
 ---
 
@@ -193,6 +193,78 @@ flowchart LR
 - **Troubleshooting Exercise**: Track down silent cloud cost spikes caused by unbound replica scaling.
 - **Production Scenario**: Achieving 35% cloud infrastructure cost reduction and tracking carbon intensity across multi-tenant clusters.
 
+### Domain 19: K8s Control Plane Internals, etcd & Upgrades (`k8s-control-plane-lifecycle`)
+- **Prerequisites**: `linux-fundamentals`, `kubernetes-core`
+- **Objectives**: Master static pod manifests, Raft quorum mechanics, etcd snapshot saves and point-in-time recovery, kubeadm multi-node minor version upgrades, node drain disruption budgets, and TLS PKI certificate rotation.
+- **Hands-On Labs**:
+  1. `lab-cp-01`: **etcd Snapshot Backup and Point-in-Time Disaster Recovery** — Execute `etcdctl snapshot save`, verify member endpoint health, and record backup audit state.
+  2. `lab-cp-02`: **Kubeadm Cluster Upgrade & Safe Node Drain Sequence** — Plan upgrade with `kubeadm upgrade plan`, cordon and drain nodes safely with `--ignore-daemonsets`, and verify cluster status.
+- **Troubleshooting Exercise**: Restore an etcd quorum split-brain state caused by network partitioning across control plane nodes.
+- **Production Scenario**: Orchestrating zero-downtime rolling upgrades across 500-node production clusters running critical financial workloads.
+
+### Domain 20: Next-Gen Networking: Kubernetes Gateway API & Cilium eBPF (`gateway-api-cilium`)
+- **Prerequisites**: `cloud-networking`, `kubernetes-core`
+- **Objectives**: Implement Kubernetes Gateway API (`GatewayClass`, `Gateway`, `HTTPRoute`), path prefix matching, header-based routing, Cilium eBPF kube-proxy replacement, and Hubble L7 flow observability.
+- **Hands-On Labs**:
+  1. `lab-gw-01`: **GatewayClass, Gateway, and HTTPRoute Path Routing** — Provision an enterprise Gateway listener on port 80 and route `/api/v1` and `/web` to decoupled backend services.
+  2. `lab-gw-02`: **Cilium eBPF NetworkPolicy & Hubble L7 Flow Inspection** — Deploy `CiliumNetworkPolicy` with L7 HTTP method filtering and inspect network flows using Hubble CLI.
+- **Troubleshooting Exercise**: Diagnose traffic blackholes caused by mismatched Gateway listeners and HTTPRoute parentRefs.
+- **Production Scenario**: Transitioning legacy Ingress controller fleets to Kubernetes Gateway API with Cilium eBPF accelerated datapath.
+
+### Domain 21: Policy-as-Code & Cluster Governance with Kyverno (`policy-as-code-kyverno`)
+- **Prerequisites**: `kubernetes-core`, `devsecops-security`
+- **Objectives**: Enforce declarative Kubernetes governance with Kyverno `ClusterPolicy`, validate Pod Security Standards (`restricted`), mutate incoming pod manifests to inject mandatory metadata/labels, and generate audit reports.
+- **Hands-On Labs**:
+  1. `lab-kyv-01`: **Enforcing Pod Security Admission via Kyverno ClusterPolicy** — Deploy an admission control policy disallowing privileged containers and hostPID sharing.
+  2. `lab-kyv-02`: **Kyverno Mutating Policy for Mandatory Workload Tags** — Automatically inject `team: platform` and `cost-center: engineering` annotations into unlabelled production pods.
+- **Troubleshooting Exercise**: Unblock failed deployment rollouts rejected by an overly strict Kyverno validating webhook configuration.
+- **Production Scenario**: Enterprise guardrail enforcement across 25 development teams ensuring SOC2 compliance at admission time.
+
+### Domain 22: Advanced Autoscaling: KEDA & Karpenter (`autoscaling-keda-karpenter`)
+- **Prerequisites**: `kubernetes-core`, `observability-stack`, `cloud-aws`
+- **Objectives**: Master event-driven autoscaling with KEDA (RabbitMQ/Kafka queue depths, Prometheus metric triggers), scale down to zero, and configure AWS Karpenter just-in-time node provisioning with disruption consolidation.
+- **Hands-On Labs**:
+  1. `lab-auto-01`: **Event-Driven Microservice Autoscaling with KEDA ScaledObject** — Autoscale consumer pods dynamically between 1 and 20 based on message queue lag triggers.
+  2. `lab-auto-02`: **Karpenter NodePool & Disruption Budget Configuration** — Architect an enterprise Karpenter NodePool with Spot instances, arm64 architectures, and consolidation policies.
+- **Troubleshooting Exercise**: Fix KEDA ScaledObject trigger authentication failures preventing consumer scaling.
+- **Production Scenario**: Slashing idle compute costs by 70% using KEDA scale-to-zero and Karpenter sub-minute node provisioning.
+
+### Domain 23: Production Storage, CSI & Velero Disaster Recovery (`storage-csi-velero-dr`)
+- **Prerequisites**: `kubernetes-core`, `linux-fundamentals`
+- **Objectives**: Implement Container Storage Interface (CSI), dynamic PersistentVolume provisioning with custom `StorageClass` configurations (Retain/Delete, VolumeBindingMode), and orchestrate full-cluster snapshot backups and restores with Velero.
+- **Hands-On Labs**:
+  1. `lab-stor-01`: **Dynamic Persistent Volume Provisioning with Custom StorageClass** — Deploy an encrypted SSD StorageClass with `WaitForFirstConsumer` binding and bind a PVC.
+  2. `lab-stor-02`: **Velero Cluster Disaster Recovery Backup & Scheduled Schedule** — Create on-demand and recurring Velero backups protecting persistent volumes and stateful deployments.
+- **Troubleshooting Exercise**: Recover stateful databases from persistent volume claim binding deadlocks caused by mismatched zone topologies.
+- **Production Scenario**: Cross-region multi-cloud disaster recovery runbook restoring critical stateful infrastructure in `< 15 minutes`.
+
+### Domain 24: Multi-Tenancy, Virtual Clusters (vcluster) & Crossplane (`multitenancy-vcluster-crossplane`)
+- **Prerequisites**: `kubernetes-core`, `platform-engineering`
+- **Objectives**: Architect hard multi-tenancy on shared physical infrastructure using Loft vcluster, separate tenant control planes, enforce ResourceQuota and LimitRange constraints, and provision external cloud resources via Crossplane composite claims.
+- **Hands-On Labs**:
+  1. `lab-ten-01`: **Virtual Cluster Isolation with vcluster & Namespace Quotas** — Deploy an isolated virtual control plane inside a host tenant namespace with strict CPU/memory limits.
+  2. `lab-ten-02`: **Crossplane Composite Cloud Infrastructure Claim** — Declare composite infrastructure claims to bind RDS PostgreSQL instances and S3 buckets directly from tenant manifests.
+- **Troubleshooting Exercise**: Resolve cross-tenant noisy neighbor CPU contention and API server saturation.
+- **Production Scenario**: Enterprise Internal Developer Platform hosting 300 engineering teams on shared infrastructure with zero noisy-neighbor interference.
+
+### Domain 25: Zero-Trust Identity, SPIFFE/SPIRE & External Secrets (`zero-trust-spiffe-externalsecrets`)
+- **Prerequisites**: `devsecops-security`, `service-mesh`
+- **Objectives**: Implement cryptographic zero-trust workload identity with SPIFFE/SPIRE (SVID X.509 issuance), eliminate long-lived cluster secrets using External Secrets Operator (ESO), and synchronize credentials from HashiCorp Vault or AWS Secrets Manager.
+- **Hands-On Labs**:
+  1. `lab-zt-01`: **External Secrets Operator Sync from AWS/Vault SecretStore** — Configure `ClusterSecretStore` and `ExternalSecret` reconciling encrypted secrets from external secret vaults into native Kubernetes Secrets.
+  2. `lab-zt-02`: **SPIFFE/SPIRE Workload Identity SVID Attestation** — Register workloads with SPIRE server and verify mTLS SVID token attestation.
+- **Troubleshooting Exercise**: Remediate expired external secret sync tokens causing application authentication failure.
+- **Production Scenario**: Eliminating plaintext secret sprawl across git repositories and enforcing short-lived ephemeral credential rotation.
+
+### Domain 26: Cloud-Native AI/ML Platforms: Kubeflow, Ray & KServe (`cloud-native-aiml-kserve`)
+- **Prerequisites**: `aiops-autonomous`, `cloud-aws`, `cloud-azure-gcp`
+- **Objectives**: Architect scalable cloud-native AI/ML infrastructure with Kubeflow Training Operator (distributed PyTorchJob/TFJob), Ray clusters for distributed compute, and serverless model inference deployment via KServe InferenceService with canary traffic splitting.
+- **Hands-On Labs**:
+  1. `lab-ai-01`: **High-Performance InferenceService Deployment with KServe** — Deploy a serverless transformer LLM model serving endpoint with vLLM runtime and GPU hardware acceleration.
+  2. `lab-ai-02`: **Model Mesh Routing, Canary Canary Splitting & GPU Metrics** — Configure 90/10 traffic splitting between model revisions and track GPU inference latency metrics.
+- **Troubleshooting Exercise**: Diagnose out-of-memory CUDA crashes (`OOMKilled`) during distributed multi-node LLM training.
+- **Production Scenario**: Planetary-scale Generative AI platform serving 50M inference requests daily across hybrid GPU cloud clusters.
+
 ---
 
 ## 3. Real-World Multi-Milestone Capstone Projects
@@ -205,5 +277,27 @@ flowchart LR
 | `proj-04-sre-autonomous-observability` | `track-sre` | High-Resilience SRE Platform (OpenTelemetry, SLO Alerting & HPA) | 1. CrashLoopBackOff Recovery<br/>2. HorizontalPodAutoscaler Scaling<br/>3. PrometheusRule SLO Burn Alert | 450 XP |
 | `proj-05-idp-crossplane-finops` | `track-platform` | Internal Developer Platform (OpenTofu + Crossplane + OpenCost FinOps) | 1. OpenTofu Cloud Foundation<br/>2. Crossplane Database Claim<br/>3. OpenCost FinOps Deployment | 500 XP |
 | `proj-06-multicloud-aiops-gpu` | `track-multicloud-aiops` | Multi-Cloud Federated AI Inference Platform & Autonomous AI-Ops | 1. EKS & GKE Fleet Verification<br/>2. GPU Taint-Tolerant LLM Scheduling<br/>3. AI-Ops Anomaly Remediation | 550 XP |
+| `proj-07-multitenant-vcluster-platform` | `track-platform` | Multi-Tenant Virtual Cluster Platform with Kyverno & vCluster | 1. Isolated Tenant Namespace & ResourceQuota<br/>2. Kyverno ClusterPolicy Governance<br/>3. Lightweight vCluster Control Plane<br/>4. Cross-Tenant Network Isolation | 500 XP |
+| `proj-08-kserve-distributed-ai-cloud` | `track-multicloud-aiops` | Cloud-Native Distributed AI Cloud with KServe & Ray Autoscaler | 1. Kubeflow PyTorchJob Distributed Training<br/>2. KServe Serverless LLM Predictor<br/>3. Inference Gateway Routing<br/>4. AI-Ops Autonomous Saturation Analysis | 500 XP |
+
+---
+
+## 4. Live Production Incident Simulations (SRE & On-Call)
+
+| Incident ID | Severity | Domain / Category | MTTR Budget | Root Cause & Resolution |
+|---|---|---|---|---|
+| `inc-01-selector-blackhole` | SEV-1 (P0) | `cloud-networking` | 10 min | Service label selector mismatch (`app: checkout-legacy` instead of `app: checkout-api`) causing 0 endpoints. Patch selector to restore endpoints. |
+| `inc-02-bad-image-rollout` | SEV-1 (P0) | `kubernetes-core` | 8 min | Defective image tag (`auth:v2.9-broken`) triggering `ImagePullBackOff`. Roll back deployment or update image to stable tag. |
+| `inc-03-crashloop-missing-secret` | SEV-2 (P1) | `devsecops-security` | 12 min | Container failing with `CrashLoopBackOff` due to missing database password Secret key. Create missing secret key to allow successful boot. |
+| `inc-04-netpol-database-isolation` | SEV-1 (P0) | `devsecops-security` | 10 min | Default-deny `NetworkPolicy` inadvertently blocking API tier egress to backend PostgreSQL database. Create ingress rule for API selector. |
+| `inc-05-cpu-starvation-pending` | SEV-2 (P1) | `kubernetes-core` | 15 min | Deployment pods stuck in `Pending` due to an unrealistic CPU request exceeding node capacity. Right-size CPU request down to fit cluster nodes. |
+| `inc-06-istio-mtls-503-uc` | SEV-2 (P1) | `service-mesh` | 10 min | Istio `PeerAuthentication` enforces `STRICT` mTLS but client lacks sidecar proxy or matching `DestinationRule` TLS mode. Configure DestinationRule with `ISTIO_MUTUAL`. |
+| `inc-07-argocd-drift-out-of-sync` | SEV-1 (P0) | `gitops-delivery` | 8 min | Ingress configuration out-of-sync with git repository triggering Argo CD drift alert. Execute sync operation to restore desired declarative state. |
+| `inc-08-gpu-taint-scheduling-block` | SEV-1 (P0) | `aiops-autonomous` | 12 min | High-priority LLM inference pod pending because worker node is tainted `nvidia.com/gpu:NoSchedule`. Add matching toleration to pod spec. |
+| `inc-09-etcd-quorum-loss` | SEV-1 (P0) | `k8s-control-plane-lifecycle` | 15 min | etcd cluster lost member quorum leading to API server read-only freeze. Restore etcd snapshot with `etcdctl snapshot restore` and verify health. |
+| `inc-10-kyverno-admission-block` | SEV-1 (P0) | `policy-as-code-kyverno` | 10 min | Broken `ValidatingWebhookConfiguration` targeting unreachable endpoint rejecting all namespace creation. Patch failurePolicy to Ignore or delete invalid config. |
+| `inc-11-coredns-loop-crash` | SEV-1 (P0) | `cloud-networking` | 12 min | Upstream DNS loop detected in CoreDNS Corefile causing CoreDNS pods to crash and cluster-wide name resolution failure. Fix forward configuration in CoreDNS ConfigMap. |
+| `inc-12-pvc-storageclass-pending` | SEV-2 (P1) | `storage-csi-velero-dr` | 10 min | Stateful database PVC stuck in `Pending` because requested `StorageClass` does not exist. Create the required StorageClass to trigger dynamic volume binding. |
+
 
 

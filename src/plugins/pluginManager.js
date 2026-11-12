@@ -18,7 +18,14 @@ const ROLE_TRACKS = [
     role: 'Kubernetes & GitOps Administrator',
     certificationTitle: 'Certified Kubernetes & GitOps Administrator (CKGA)',
     summary: 'Operate production Kubernetes clusters, Helm/Kustomize packaging, Argo CD GitOps reconciliation, and cloud-native CI/CD.',
-    domainIds: ['kubernetes-core', 'cncf-packaging', 'gitops-delivery', 'devops-cicd']
+    domainIds: [
+      'kubernetes-core',
+      'cncf-packaging',
+      'gitops-delivery',
+      'devops-cicd',
+      'k8s-control-plane-lifecycle',
+      'gateway-api-cilium'
+    ]
   },
   {
     id: 'track-devsecops',
@@ -26,7 +33,12 @@ const ROLE_TRACKS = [
     role: 'DevSecOps & Service Mesh Engineer',
     certificationTitle: 'Certified Cloud-Native Security Specialist (CCNSS)',
     summary: 'Harden workloads with Pod Security Standards, NetworkPolicies, Trivy/Falco, SLSA supply chain security, and Istio mTLS.',
-    domainIds: ['devsecops-security', 'service-mesh']
+    domainIds: [
+      'devsecops-security',
+      'service-mesh',
+      'policy-as-code-kyverno',
+      'zero-trust-spiffe-externalsecrets'
+    ]
   },
   {
     id: 'track-sre',
@@ -34,7 +46,12 @@ const ROLE_TRACKS = [
     role: 'Principal Site Reliability Engineer',
     certificationTitle: 'Certified Site Reliability & Incident Commander (CSRIC)',
     summary: 'Instrument distributed systems with Prometheus/OpenTelemetry, enforce SLO error budgets, and lead chaos & incident recovery.',
-    domainIds: ['observability-stack', 'sre-incident-chaos']
+    domainIds: [
+      'observability-stack',
+      'sre-incident-chaos',
+      'autoscaling-keda-karpenter',
+      'storage-csi-velero-dr'
+    ]
   },
   {
     id: 'track-platform',
@@ -42,7 +59,12 @@ const ROLE_TRACKS = [
     role: 'Platform Engineering Architect',
     certificationTitle: 'Certified Platform Engineering Architect (CPEA)',
     summary: 'Build Internal Developer Platforms with Golden Paths, Crossplane control planes, OpenTofu/Terraform automation, and OpenCost/Kepler FinOps.',
-    domainIds: ['platform-engineering', 'iac-opentofu-terraform', 'finops-green-cloud']
+    domainIds: [
+      'platform-engineering',
+      'iac-opentofu-terraform',
+      'finops-green-cloud',
+      'multitenancy-vcluster-crossplane'
+    ]
   },
   {
     id: 'track-multicloud-aiops',
@@ -50,7 +72,13 @@ const ROLE_TRACKS = [
     role: 'Multi-Cloud & AI-Ops Principal Architect',
     certificationTitle: 'Certified Multi-Cloud & AI-Ops Principal (CMCAP)',
     summary: 'Architect federated workloads across AWS EKS, Azure AKS, and Google GKE with WebAssembly, eBPF Tetragon, GPU scheduling, and AI-Ops self-healing.',
-    domainIds: ['cloud-aws', 'cloud-azure-gcp', 'aiops-autonomous', 'wasm-ebpf-edge']
+    domainIds: [
+      'cloud-aws',
+      'cloud-azure-gcp',
+      'aiops-autonomous',
+      'wasm-ebpf-edge',
+      'cloud-native-aiml-kserve'
+    ]
   }
 ];
 

@@ -1,0 +1,232 @@
+{
+  "id": "k8s-control-plane-lifecycle",
+  "title": "19. K8s Control Plane Internals, etcd & Upgrades",
+  "category": "Kubernetes Administration & SRE",
+  "trackId": "track-k8s-admin",
+  "version": "1.0.0",
+  "difficulty": "Advanced",
+  "estimatedHours": 8,
+  "summary": "Deep-dive mastery of Kubernetes control plane architecture, static pod manifests, etcd backup/restore, kubeadm multi-node upgrades, certificate rotation, and disaster recovery.",
+  "prerequisites": [
+    "Linux systemd and journalctl daemon debugging",
+    "Kubernetes Core Architecture (API Server, Controller Manager, Scheduler, etcd)",
+    "PKI and TLS X.509 certificate validation"
+  ],
+  "learningObjectives": [
+    "Safely backup, snapshot, and restore the etcd key-value datastore without quorum loss",
+    "Inspect, modify, and troubleshoot kubelet static pod manifests in /etc/kubernetes/manifests",
+    "Execute zero-downtime control plane and worker node upgrades using kubeadm and drain policies",
+    "Check, rotate, and verify control plane TLS certificates with kubeadm certs"
+  ],
+  "curriculumModules": [
+    {
+      "id": "mod-cp-01",
+      "title": "etcd Architecture, Raft Consensus & Snapshot Restoration",
+      "conceptSummary": "etcd is the single source of truth in Kubernetes. Maintaining quorum (N/2 + 1) and executing periodic point-in-time snapshot saves to durable storage is essential for disaster recovery.",
+      "productionArchitecturePattern": "External or stacked multi-master etcd cluster with automated daily snapshots and cross-region replication.",
+      "keyCommands": [
+        "etcdctl snapshot save /var/lib/etcd/backup.db",
+        "etcdctl snapshot restore /var/lib/etcd/backup.db --data-dir=/var/lib/etcd/new.etcd",
+        "etcdctl endpoint health --write-out=table"
+      ]
+    },
+    {
+      "id": "mod-cp-02",
+      "title": "Control Plane Lifecycle, kubeadm Upgrades & Certificate Rotation",
+      "conceptSummary": "Kubernetes version upgrades require sequential minor version increments (e.g. 1.31 -> 1.32). Control plane components are cordoned, upgraded via kubeadm upgrade apply, and verified before workers.",
+      "productionArchitecturePattern": "Rolling canary node drain with PodDisruptionBudgets protecting stateful workloads during OS and kubelet upgrades.",
+      "keyCommands": [
+        "kubeadm upgrade plan",
+        "kubeadm upgrade apply v1.32.0",
+        "kubectl cordon <node>",
+        "kubectl drain <node> --ignore-daemonsets",
+        "kubeadm certs check-expiration"
+      ]
+    }
+  ],
+  "labs": [
+    {
+      "id": "lab-cp-01",
+      "title": "etcd Snapshot Backup and Point-in-Time Disaster Recovery",
+      "difficulty": "Advanced",
+      "durationMinutes": 35,
+      "xpReward": 250,
+      "scenario": "You are the Lead Kubernetes Administrator. Before a major cluster schema migration, company policy requires taking an immutable etcd snapshot and verifying its cryptographic integrity.",
+      "productionContext": "In enterprise production, etcd snapshot saves must run on dedicated volumes and verify key revisions before schema changes.",
+      "prerequisites": ["Linux CLI", "Kubernetes Core"],
+      "objectives": [
+        "Execute etcdctl snapshot save to persist cluster state to /var/lib/etcd/etcd-snapshot.db",
+        "Verify snapshot health using etcdctl endpoint health",
+        "Record backup metadata ConfigMap in the kube-system namespace"
+      ],
+      "initialClusterState": {
+        "resources": [
+          {
+            "apiVersion": "v1",
+            "kind": "Pod",
+            "metadata": { "name": "etcd-kubelabs", "namespace": "kube-system", "labels": { "component": "etcd", "tier": "control-plane" } },
+            "spec": { "containers": [{ "name": "etcd", "image": "registry.k8s.io/etcd:3.5.15-0" }] },
+            "status": { "phase": "Running", "ready": "1/1", "reason": "Running" }
+          }
+        ]
+      },
+      "starterManifest": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: etcd-backup-audit\n  namespace: kube-system\ndata:\n  snapshotPath: \"/var/lib/etcd/etcd-snapshot.db\"\n  status: \"verified\"\n",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Take etcd Database Snapshot",
+          "instruction": "Run etcdctl snapshot save to backup the key-value store to /var/lib/etcd/etcd-snapshot.db",
+          "commandHint": "etcdctl snapshot save /var/lib/etcd/etcd-snapshot.db"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Verify etcd Cluster Endpoint Health",
+          "instruction": "Check the health of the etcd endpoint before proceeding.",
+          "commandHint": "etcdctl endpoint health"
+        },
+        {
+          "stepNumber": 3,
+          "title": "Deploy Backup Audit ConfigMap",
+          "instruction": "Apply the etcd-backup-audit ConfigMap to kube-system to record verification proof.",
+          "commandHint": "kubectl apply -f manifest.yaml"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "val-cp-01-cmd",
+          "description": "etcdctl snapshot save command was successfully executed",
+          "type": "command_executed",
+          "commandSubstring": "etcdctl snapshot save",
+          "remediation": "Execute 'etcdctl snapshot save /var/lib/etcd/etcd-snapshot.db' in the terminal."
+        },
+        {
+          "id": "val-cp-01-audit",
+          "description": "ConfigMap etcd-backup-audit exists in kube-system with status verified",
+          "type": "resource_field_equals",
+          "kind": "ConfigMap",
+          "name": "etcd-backup-audit",
+          "namespace": "kube-system",
+          "fieldPath": "data.status",
+          "expectedValue": "verified",
+          "remediation": "Apply the starter manifest to create ConfigMap etcd-backup-audit in kube-system."
+        }
+      ],
+      "solutionCommands": [
+        "etcdctl snapshot save /var/lib/etcd/etcd-snapshot.db",
+        "etcdctl endpoint health",
+        "kubectl apply -f manifest.yaml"
+      ],
+      "troubleshootingGuide": "Ensure you specify the full path /var/lib/etcd/etcd-snapshot.db when running etcdctl snapshot save."
+    },
+    {
+      "id": "lab-cp-02",
+      "title": "Node Maintenance, Cordon/Drain & kubeadm Upgrades",
+      "difficulty": "Advanced",
+      "durationMinutes": 40,
+      "xpReward": 250,
+      "scenario": "A security advisory requires upgrading worker nodes to v1.32.0. Before performing the upgrade, safely cordon and drain worker-01 to evict non-DaemonSet workloads.",
+      "productionContext": "Node draining honors PodDisruptionBudgets (PDB) to prevent service degradation during OS patching and kubelet upgrades.",
+      "prerequisites": ["Kubernetes Nodes", "kubectl CLI"],
+      "objectives": [
+        "Cordon node kubelabs-worker-01 to mark it unschedulable",
+        "Drain node kubelabs-worker-01 to safely evict active pods",
+        "Plan control plane upgrade using kubeadm upgrade plan",
+        "Verify certificate expiration status using kubeadm certs check-expiration"
+      ],
+      "initialClusterState": {
+        "resources": [
+          {
+            "apiVersion": "v1",
+            "kind": "Deployment",
+            "metadata": { "name": "payment-api", "namespace": "default" },
+            "spec": { "replicas": 2, "template": { "spec": { "containers": [{ "name": "api", "image": "nginx:1.27-alpine" }] } } }
+          }
+        ]
+      },
+      "starterManifest": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: upgrade-maintenance-audit\n  namespace: default\ndata:\n  targetVersion: \"v1.32.0\"\n  nodeStatus: \"drained\"\n",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Cordon Worker Node",
+          "instruction": "Mark kubelabs-worker-01 as unschedulable to stop new pods from landing on it.",
+          "commandHint": "kubectl cordon kubelabs-worker-01"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Drain Worker Node",
+          "instruction": "Evict running workloads from kubelabs-worker-01.",
+          "commandHint": "kubectl drain kubelabs-worker-01"
+        },
+        {
+          "stepNumber": 3,
+          "title": "Inspect Upgrade Plan and Certificates",
+          "instruction": "Run kubeadm upgrade plan and kubeadm certs check-expiration to verify readiness.",
+          "commandHint": "kubeadm upgrade plan"
+        },
+        {
+          "stepNumber": 4,
+          "title": "Apply Maintenance Audit Record",
+          "instruction": "Deploy the upgrade-maintenance-audit ConfigMap.",
+          "commandHint": "kubectl apply -f manifest.yaml"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "val-cp-02-cordon",
+          "description": "Node kubelabs-worker-01 is marked unschedulable",
+          "type": "resource_field_equals",
+          "kind": "Node",
+          "name": "kubelabs-worker-01",
+          "fieldPath": "spec.unschedulable",
+          "expectedValue": true,
+          "remediation": "Run 'kubectl cordon kubelabs-worker-01' to mark the node unschedulable."
+        },
+        {
+          "id": "val-cp-02-audit",
+          "description": "ConfigMap upgrade-maintenance-audit exists with nodeStatus drained",
+          "type": "resource_field_equals",
+          "kind": "ConfigMap",
+          "name": "upgrade-maintenance-audit",
+          "namespace": "default",
+          "fieldPath": "data.nodeStatus",
+          "expectedValue": "drained",
+          "remediation": "Apply the starter manifest to record the upgrade audit."
+        }
+      ],
+      "solutionCommands": [
+        "kubectl cordon kubelabs-worker-01",
+        "kubectl drain kubelabs-worker-01",
+        "kubeadm upgrade plan",
+        "kubectl apply -f manifest.yaml"
+      ],
+      "troubleshootingGuide": "Check 'kubectl get nodes' to verify kubelabs-worker-01 displays 'SchedulingDisabled'."
+    }
+  ],
+  "assessmentQuestions": [
+    {
+      "id": "q-cp-01",
+      "question": "Which etcd command creates a point-in-time backup of the datastore?",
+      "options": [
+        "etcdctl snapshot save <path>",
+        "kubectl backup etcd <path>",
+        "etcdctl dump --all <path>",
+        "kubeadm etcd backup <path>"
+      ],
+      "correctIndex": 0,
+      "explanation": "etcdctl snapshot save <path> is the canonical CLI command to produce an immutable binary snapshot of etcd."
+    },
+    {
+      "id": "q-cp-02",
+      "question": "What is the primary difference between 'kubectl cordon' and 'kubectl drain'?",
+      "options": [
+        "cordon deletes the node; drain restarts the kubelet",
+        "cordon marks a node unschedulable; drain marks it unschedulable AND evicts running non-DaemonSet pods",
+        "cordon is for worker nodes only; drain is for control-plane nodes only",
+        "cordon deletes namespaces; drain removes secrets"
+      ],
+      "correctIndex": 1,
+      "explanation": "cordon only marks the node unschedulable for future pods, whereas drain marks it unschedulable and actively evicts existing pods."
+    }
+  ]
+}
+

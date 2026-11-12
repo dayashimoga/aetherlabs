@@ -1,0 +1,18 @@
+apiVersion: v2
+name: kubelabs
+description: Production-grade Helm chart for KubeLabs Learn-by-Doing Kubernetes & Cloud-Native Platform
+type: application
+version: 2.0.0
+appVersion: "2.0.0"
+keywords:
+  - kubernetes
+  - learning
+  - cloud-native
+  - offline
+home: https://kubelabs.internal
+sources:
+  - https://github.com/kubelabs-io/kubelabs
+maintainers:
+  - name: KubeLabs Core Architecture Team
+    email: maintainers@kubelabs.internal
+

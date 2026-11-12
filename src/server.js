@@ -6,6 +6,8 @@ const path = require('node:path');
 const { KubeLabsDatabase } = require('./db/database');
 const { PluginManager } = require('./plugins/pluginManager');
 const { VirtualCluster } = require('./engine/virtualCluster');
+const { VirtualFileSystem } = require('./engine/virtualFileSystem');
+const { SessionManager } = require('./engine/sessionManager');
 const { TerminalEngine } = require('./engine/terminalEngine');
 const { ValidationEngine } = require('./engine/validationEngine');
 const { IncidentEngine } = require('./engine/incidentEngine');
@@ -23,8 +25,11 @@ function createKubeLabsApp(options = {}) {
     path.join(rootDir, 'plugins'),
     path.join(rootDir, 'schemas', 'plugin.schema.json')
   );
-  const virtualCluster = new VirtualCluster();
-  const terminalEngine = new TerminalEngine(virtualCluster);
+  const virtualFileSystem = new VirtualFileSystem();
+  const sessionManager = new SessionManager({ database });
+  const defaultSession = sessionManager.getSession('default-session');
+  const virtualCluster = defaultSession.cluster;
+  const terminalEngine = defaultSession.terminal;
   const validationEngine = new ValidationEngine();
   const incidentEngine = new IncidentEngine(validationEngine);
   const projectEngine = new ProjectEngine(validationEngine);
@@ -42,6 +47,8 @@ function createKubeLabsApp(options = {}) {
   const router = new ApiRouter({
     database,
     pluginManager,
+    sessionManager,
+    virtualFileSystem,
     virtualCluster,
     terminalEngine,
     validationEngine,
@@ -62,6 +69,8 @@ function createKubeLabsApp(options = {}) {
     server,
     database,
     pluginManager,
+    sessionManager,
+    virtualFileSystem,
     virtualCluster,
     terminalEngine,
     validationEngine,
@@ -82,12 +91,28 @@ if (require.main === module) {
   app.server.listen(port, host, () => {
     const rssMB = Math.round((process.memoryUsage().rss / (1024 * 1024)) * 10) / 10;
     console.log('==============================================================================');
-    console.log(' KubeLabs Cloud-Native & Kubernetes Learn-by-Doing Platform (v1.0.0)');
+    console.log(' KubeLabs Cloud-Native & Kubernetes Learn-by-Doing Platform (v2.0.0)');
     console.log(` URL           : http://${host}:${port}`);
-    console.log(` Domains Loaded: ${app.pluginManager.getAllDomains().length} | Labs: ${app.pluginManager.getAllLabs().length} | Incidents: ${app.incidentEngine.listIncidents().length}`);
+    console.log(` Domains Loaded: ${app.pluginManager.getAllDomains().length} | Labs: ${app.pluginManager.getAllLabs().length} | Incidents: ${app.incidentEngine.listIncidents().length} | Projects: ${app.projectEngine.listProjects().length}`);
     console.log(` Memory Usage  : ${rssMB} MB RSS (Low-Resource Offline-Capable Mode)`);
     console.log('==============================================================================');
   });
+
+  const shutdown = () => {
+    console.log('\n[KubeLabs] SIGTERM/SIGINT received: gracefully closing HTTP server and flushing database...');
+    app.server.close(() => {
+      try {
+        if (app.database && app.database.db) app.database.close();
+      } catch {}
+      console.log('[KubeLabs] Server closed. Exit 0.');
+      process.exit(0);
+    });
+    setTimeout(() => {
+      process.exit(0);
+    }, 5000).unref();
+  };
+  process.on('SIGTERM', shutdown);
+  process.on('SIGINT', shutdown);
 }
 
 module.exports = { createKubeLabsApp };

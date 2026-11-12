@@ -23,6 +23,22 @@ class KubeLabsDatabase {
       PRAGMA journal_mode = WAL;
       PRAGMA foreign_keys = ON;
 
+      CREATE TABLE IF NOT EXISTS schema_migrations (
+        version INTEGER PRIMARY KEY,
+        name TEXT NOT NULL,
+        applied_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS session_snapshots (
+        session_id TEXT PRIMARY KEY,
+        cluster_snapshot_json TEXT NOT NULL,
+        vfs_snapshot_json TEXT,
+        active_lab_id TEXT,
+        active_incident_id TEXT,
+        active_project_id TEXT,
+        updated_at TEXT NOT NULL
+      );
+
       CREATE TABLE IF NOT EXISTS learner_profile (
         id TEXT PRIMARY KEY,
         display_name TEXT NOT NULL,
@@ -69,6 +85,7 @@ class KubeLabsDatabase {
         learner_name TEXT NOT NULL,
         score_percent INTEGER NOT NULL,
         signature_sha256 TEXT NOT NULL,
+        signature_ed25519 TEXT,
         issued_at TEXT NOT NULL
       );
 
@@ -100,6 +117,12 @@ class KubeLabsDatabase {
       );
     `);
 
+    try {
+      this.db.exec('ALTER TABLE certificates ADD COLUMN signature_ed25519 TEXT;');
+    } catch (_) {
+      // column already exists
+    }
+
     const existing = this.db
       .prepare('SELECT id FROM learner_profile WHERE id = ?')
       .get('default-learner');
@@ -120,6 +143,15 @@ class KubeLabsDatabase {
           null,
           new Date().toISOString()
         );
+    }
+
+    const migration = this.db
+      .prepare('SELECT version FROM schema_migrations WHERE version = 1')
+      .get();
+    if (!migration) {
+      this.db
+        .prepare('INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)')
+        .run(1, 'v2_session_snapshots_and_multitenancy', new Date().toISOString());
     }
   }
 
@@ -326,16 +358,17 @@ class KubeLabsDatabase {
       );
   }
 
-  saveCertificate({ certId, trackId, title, learnerName, scorePercent, signatureSha256, issuedAt }) {
+  saveCertificate({ certId, trackId, title, learnerName, scorePercent, signatureSha256, signatureEd25519, issuedAt }) {
     this.db
       .prepare(
-        `INSERT INTO certificates (cert_id, track_id, title, learner_name, score_percent, signature_sha256, issued_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO certificates (cert_id, track_id, title, learner_name, score_percent, signature_sha256, signature_ed25519, issued_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(cert_id) DO UPDATE SET
            score_percent = excluded.score_percent,
-           signature_sha256 = excluded.signature_sha256`
+           signature_sha256 = excluded.signature_sha256,
+           signature_ed25519 = excluded.signature_ed25519`
       )
-      .run(certId, trackId, title, learnerName, scorePercent, signatureSha256, issuedAt);
+      .run(certId, trackId, title, learnerName, scorePercent, signatureSha256, signatureEd25519 || null, issuedAt);
     return this.db.prepare('SELECT * FROM certificates WHERE cert_id = ?').get(certId);
   }
 
@@ -403,6 +436,116 @@ class KubeLabsDatabase {
     }
 
     return this.db.prepare('SELECT * FROM project_progress WHERE project_id = ?').get(projectId);
+  }
+
+  saveSessionSnapshot({ sessionId, clusterSnapshot, vfsSnapshot, activeLabId, activeIncidentId, activeProjectId, updatedAt }) {
+    this.db
+      .prepare(
+        `INSERT INTO session_snapshots (session_id, cluster_snapshot_json, vfs_snapshot_json, active_lab_id, active_incident_id, active_project_id, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(session_id) DO UPDATE SET
+           cluster_snapshot_json = excluded.cluster_snapshot_json,
+           vfs_snapshot_json = excluded.vfs_snapshot_json,
+           active_lab_id = excluded.active_lab_id,
+           active_incident_id = excluded.active_incident_id,
+           active_project_id = excluded.active_project_id,
+           updated_at = excluded.updated_at`
+      )
+      .run(
+        sessionId,
+        JSON.stringify(clusterSnapshot || {}),
+        vfsSnapshot ? JSON.stringify(vfsSnapshot) : null,
+        activeLabId || null,
+        activeIncidentId || null,
+        activeProjectId || null,
+        updatedAt || new Date().toISOString()
+      );
+  }
+
+  getSessionSnapshot(sessionId) {
+    const row = this.db
+      .prepare('SELECT * FROM session_snapshots WHERE session_id = ?')
+      .get(sessionId);
+    if (!row) return null;
+    return {
+      sessionId: row.session_id,
+      clusterSnapshot: row.cluster_snapshot_json ? JSON.parse(row.cluster_snapshot_json) : null,
+      vfsSnapshot: row.vfs_snapshot_json ? JSON.parse(row.vfs_snapshot_json) : null,
+      activeLabId: row.active_lab_id,
+      activeIncidentId: row.active_incident_id,
+      activeProjectId: row.active_project_id,
+      updatedAt: row.updated_at
+    };
+  }
+
+  deleteSessionSnapshot(sessionId) {
+    this.db.prepare('DELETE FROM session_snapshots WHERE session_id = ?').run(sessionId);
+  }
+
+  exportProfileBundle() {
+    return {
+      version: '2.0.0',
+      exportedAt: new Date().toISOString(),
+      profile: this.getProfile(),
+      savedArchitectures: this.listSavedArchitectures(),
+      terminalHistory: this.getTerminalHistory(null, 200)
+    };
+  }
+
+  importProfileBundle(bundle) {
+    if (!bundle || !bundle.profile) {
+      throw new Error('Invalid bundle format');
+    }
+    const { profile, completedLabs, incidents, certificates, projects } = bundle.profile;
+    if (profile) {
+      this.updateProfileFields({
+        displayName: profile.display_name,
+        xp: profile.xp,
+        activeLabId: profile.active_lab_id,
+        activeIncidentId: profile.active_incident_id
+      });
+    }
+    if (Array.isArray(completedLabs)) {
+      for (const lab of completedLabs) {
+        this.db
+          .prepare(
+            `INSERT INTO lab_progress (lab_id, domain_id, status, score, attempts, completed_at, verification_hash)
+             VALUES (?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(lab_id) DO UPDATE SET
+               status = excluded.status,
+               score = excluded.score,
+               attempts = excluded.attempts,
+               completed_at = excluded.completed_at,
+               verification_hash = excluded.verification_hash`
+          )
+          .run(lab.lab_id, lab.domain_id, lab.status, lab.score, lab.attempts, lab.completed_at, lab.verification_hash);
+      }
+    }
+    if (Array.isArray(certificates)) {
+      for (const c of certificates) {
+        this.saveCertificate({
+          certId: c.cert_id,
+          trackId: c.track_id,
+          title: c.title,
+          learnerName: c.learner_name,
+          scorePercent: c.score_percent,
+          signatureSha256: c.signature_sha256,
+          issuedAt: c.issued_at
+        });
+      }
+    }
+    if (Array.isArray(projects)) {
+      for (const p of projects) {
+        this.recordProjectAttempt({
+          projectId: p.project_id,
+          trackId: p.track_id,
+          passed: p.status === 'completed',
+          score: p.score,
+          xpReward: 0
+        });
+      }
+    }
+    return this.getProfile();
   }
 
   close() {

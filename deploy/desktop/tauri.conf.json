@@ -1,0 +1,43 @@
+{
+  "$schema": "https://raw.githubusercontent.com/tauri-apps/tauri/dev/tooling/cli/schema.json",
+  "build": {
+    "beforeDevCommand": "",
+    "beforeBuildCommand": "",
+    "devPath": "http://127.0.0.1:4100",
+    "distDir": "../../public"
+  },
+  "package": {
+    "productName": "KubeLabs",
+    "version": "2.0.0"
+  },
+  "tauri": {
+    "bundle": {
+      "active": true,
+      "category": "DeveloperTool",
+      "copyright": "2026 KubeLabs Core Contributors",
+      "deb": { "depends": [] },
+      "externalBin": [],
+      "icon": [
+        "icons/icon.ico",
+        "icons/icon.png"
+      ],
+      "identifier": "io.kubelabs.app",
+      "longDescription": "Standalone, Low-Resource, Cross-Platform Learn-by-Doing Kubernetes & Cloud-Native Lab Platform",
+      "shortDescription": "Kubernetes & Cloud-Native Lab Platform",
+      "targets": ["msi", "nsis", "deb", "appimage", "dmg"]
+    },
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' http://127.0.0.1:*"
+    },
+    "windows": [
+      {
+        "title": "KubeLabs — Kubernetes & Cloud-Native Lab Platform",
+        "width": 1440,
+        "height": 920,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ]
+  }
+}
+

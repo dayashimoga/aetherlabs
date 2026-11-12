@@ -1,0 +1,214 @@
+{
+  "id": "storage-csi-velero-dr",
+  "title": "23. Storage, CSI Snapshots & Velero DR",
+  "category": "Storage & Disaster Recovery",
+  "trackId": "track-sre",
+  "version": "1.0.0",
+  "difficulty": "Advanced",
+  "estimatedHours": 7,
+  "summary": "Master stateful workload storage in Kubernetes: Container Storage Interface (CSI), dynamic PVC provisioning, VolumeSnapshots, and cross-region disaster recovery using Velero.",
+  "prerequisites": [
+    "PersistentVolumes (PV) and PersistentVolumeClaims (PVC)",
+    "StorageClass provisioners and reclaim policies",
+    "Object storage (AWS S3 / GCP GCS / MinIO)"
+  ],
+  "learningObjectives": [
+    "Configure production StorageClass resources with volume expansion and immediate/WaitForFirstConsumer binding",
+    "Create and verify point-in-time VolumeSnapshot and VolumeSnapshotClass resources",
+    "Schedule automated cluster-wide state and storage backups using Velero",
+    "Execute cross-cluster disaster recovery restore drills with zero data loss"
+  ],
+  "curriculumModules": [
+    {
+      "id": "mod-dr-01",
+      "title": "Container Storage Interface (CSI) & Volume Snapshots",
+      "conceptSummary": "CSI decouples storage plugins from the Kubernetes core. Through VolumeSnapshotClass and VolumeSnapshot, operators capture instantaneous copy-on-write storage snapshots across cloud block stores.",
+      "productionArchitecturePattern": "CSI volume expansion with automated pre-upgrade VolumeSnapshots for PostgreSQL and Kafka persistent volumes.",
+      "keyCommands": [
+        "kubectl get storageclass",
+        "kubectl get volumesnapshotclasses",
+        "kubectl get volumesnapshots -A"
+      ]
+    },
+    {
+      "id": "mod-dr-02",
+      "title": "Velero: Enterprise Backup, Migration & Disaster Recovery",
+      "conceptSummary": "Velero backs up both Kubernetes control plane resources (YAML) and persistent volume data (via CSI or restic/kopia) to cloud object storage for disaster recovery and cross-region migrations.",
+      "productionArchitecturePattern": "Automated 6-hour Velero backup schedules with 30-day retention and automated weekly restore drill validation.",
+      "keyCommands": [
+        "velero backup create <name> --include-namespaces=<ns>",
+        "velero backup get",
+        "velero restore create --from-backup=<name>"
+      ]
+    }
+  ],
+  "labs": [
+    {
+      "id": "lab-dr-01",
+      "title": "CSI Dynamic Storage Provisioning & VolumeSnapshots",
+      "difficulty": "Advanced",
+      "durationMinutes": 35,
+      "xpReward": 250,
+      "scenario": "A stateful database requires dedicated persistent storage. Configure a high-performance StorageClass, deploy a 20Gi PersistentVolumeClaim, and capture a VolumeSnapshot before maintenance.",
+      "productionContext": "VolumeSnapshots provide fast recovery points without taking database pods offline.",
+      "prerequisites": ["CSI", "PVC"],
+      "objectives": [
+        "Deploy a StorageClass named fast-nvme with allowVolumeExpansion: true",
+        "Create PersistentVolumeClaim database-storage requesting 20Gi",
+        "Deploy VolumeSnapshot database-snapshot-01 to capture the storage state"
+      ],
+      "initialClusterState": {
+        "resources": [
+          {
+            "apiVersion": "v1",
+            "kind": "Namespace",
+            "metadata": { "name": "production" }
+          }
+        ]
+      },
+      "starterManifest": "apiVersion: storage.k8s.io/v1\nkind: StorageClass\nmetadata:\n  name: fast-nvme\nprovisioner: ebs.csi.aws.com\nvolumeBindingMode: Immediate\nallowVolumeExpansion: true\n---\napiVersion: v1\nkind: PersistentVolumeClaim\nmetadata:\n  name: database-storage\n  namespace: production\nspec:\n  storageClassName: fast-nvme\n  accessModes:\n    - ReadWriteOnce\n  resources:\n    requests:\n      storage: 20Gi\n---\napiVersion: snapshot.storage.k8s.io/v1\nkind: VolumeSnapshot\nmetadata:\n  name: database-snapshot-01\n  namespace: production\nspec:\n  volumeSnapshotClassName: csi-aws-vsc\n  source:\n    persistentVolumeClaimName: database-storage\n",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Review StorageClass, PVC & Snapshot Manifests",
+          "instruction": "Open the Manifest Editor to inspect the fast-nvme StorageClass, database-storage PVC, and database-snapshot-01.",
+          "commandHint": "kubectl get sc"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Apply Storage Architecture",
+          "instruction": "Deploy the storage resources to the cluster.",
+          "commandHint": "kubectl apply -f manifest.yaml"
+        },
+        {
+          "stepNumber": 3,
+          "title": "Verify PVC Binding Status",
+          "instruction": "Confirm that the PVC is created and associated with the fast-nvme StorageClass.",
+          "commandHint": "kubectl get pvc -n production"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "val-dr-01-sc",
+          "description": "StorageClass fast-nvme exists with allowVolumeExpansion: true",
+          "type": "resource_field_equals",
+          "kind": "StorageClass",
+          "name": "fast-nvme",
+          "fieldPath": "allowVolumeExpansion",
+          "expectedValue": true,
+          "remediation": "Deploy StorageClass fast-nvme with allowVolumeExpansion: true."
+        },
+        {
+          "id": "val-dr-01-pvc",
+          "description": "PersistentVolumeClaim database-storage exists in production namespace",
+          "type": "resource_exists",
+          "kind": "PersistentVolumeClaim",
+          "name": "database-storage",
+          "namespace": "production",
+          "remediation": "Apply the starter manifest to create PersistentVolumeClaim database-storage."
+        }
+      ],
+      "solutionCommands": [
+        "kubectl apply -f manifest.yaml"
+      ],
+      "troubleshootingGuide": "Verify that storageClassName in the PVC matches 'fast-nvme' exactly."
+    },
+    {
+      "id": "lab-dr-02",
+      "title": "Velero Cluster Backup and Disaster Recovery Drill",
+      "difficulty": "Advanced",
+      "durationMinutes": 35,
+      "xpReward": 250,
+      "scenario": "Execute a full production disaster recovery drill using Velero. Submit a backup for the production namespace, verify backup completion, and log the audit record.",
+      "productionContext": "Disaster recovery readiness requires regular automated backup creation and periodic test restorations.",
+      "prerequisites": ["Velero CLI", "Kubernetes Administration"],
+      "objectives": [
+        "Submit a Velero backup named production-backup-drill",
+        "Inspect backup status using velero backup get",
+        "Deploy the dr-drill-audit ConfigMap in production"
+      ],
+      "initialClusterState": {
+        "resources": [
+          {
+            "apiVersion": "v1",
+            "kind": "Namespace",
+            "metadata": { "name": "production" }
+          }
+        ]
+      },
+      "starterManifest": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: dr-drill-audit\n  namespace: production\ndata:\n  backupName: \"production-backup-drill\"\n  recoveryTier: \"Tier-1-Mission-Critical\"\n  status: \"success\"\n",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Create Velero Backup",
+          "instruction": "Run velero backup create to capture the cluster state.",
+          "commandHint": "velero backup create production-backup-drill"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Verify Backup Completion",
+          "instruction": "Check the status of Velero backups.",
+          "commandHint": "velero backup get"
+        },
+        {
+          "stepNumber": 3,
+          "title": "Record DR Audit Log",
+          "instruction": "Apply the dr-drill-audit ConfigMap to record drill completion.",
+          "commandHint": "kubectl apply -f manifest.yaml"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "val-dr-02-velero",
+          "description": "Velero backup command was executed",
+          "type": "command_executed",
+          "commandSubstring": "velero backup create",
+          "remediation": "Execute 'velero backup create production-backup-drill' in the terminal."
+        },
+        {
+          "id": "val-dr-02-audit",
+          "description": "ConfigMap dr-drill-audit exists in production with status success",
+          "type": "resource_field_equals",
+          "kind": "ConfigMap",
+          "name": "dr-drill-audit",
+          "namespace": "production",
+          "fieldPath": "data.status",
+          "expectedValue": "success",
+          "remediation": "Apply the starter manifest to create the dr-drill-audit ConfigMap."
+        }
+      ],
+      "solutionCommands": [
+        "velero backup create production-backup-drill",
+        "velero backup get",
+        "kubectl apply -f manifest.yaml"
+      ],
+      "troubleshootingGuide": "Confirm that the backup name matches 'production-backup-drill' in the command."
+    }
+  ],
+  "assessmentQuestions": [
+    {
+      "id": "q-dr-01",
+      "question": "What does setting allowVolumeExpansion: true in a StorageClass enable?",
+      "options": [
+        "It allows users to resize PVCs to a larger size without losing data or recreating the volume",
+        "It compresses all files on the volume by 50%",
+        "It automatically replicates the volume across all continents",
+        "It converts block volumes into NFS shares"
+      ],
+      "correctIndex": 0,
+      "explanation": "allowVolumeExpansion: true enables online or offline expansion of the underlying cloud block volume by editing the PVC storage request."
+    },
+    {
+      "id": "q-dr-02",
+      "question": "How does Velero protect stateful Kubernetes applications across disaster recovery events?",
+      "options": [
+        "By taking continuous video recordings of the dashboard",
+        "By backing up Kubernetes API manifests and invoking CSI VolumeSnapshot APIs to snapshot persistent disk data into cloud object storage",
+        "By cloning physical server motherboard firmware",
+        "By running only stateless containers"
+      ],
+      "correctIndex": 1,
+      "explanation": "Velero orchestrates Kubernetes metadata backup alongside storage snapshots to cloud object stores for reliable recovery."
+    }
+  ]
+}

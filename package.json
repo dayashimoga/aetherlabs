@@ -1,6 +1,6 @@
 {
   "name": "kubelabs",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "Standalone, low-resource, cross-platform Learn-by-Doing Kubernetes, CNCF, DevSecOps, SRE, Platform Engineering, Multi-Cloud & AI-Ops Lab Platform",
   "main": "src/server.js",
   "bin": {

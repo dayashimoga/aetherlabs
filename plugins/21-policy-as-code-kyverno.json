@@ -1,0 +1,209 @@
+{
+  "id": "policy-as-code-kyverno",
+  "title": "21. Policy-as-Code (Kyverno & CEL Admission)",
+  "category": "DevSecOps & Platform Governance",
+  "trackId": "track-devsecops",
+  "version": "1.0.0",
+  "difficulty": "Advanced",
+  "estimatedHours": 7,
+  "summary": "Master declarative Kubernetes policy enforcement using Kyverno ClusterPolicy, Mutating/Validating admission webhooks, and native Kubernetes ValidatingAdmissionPolicy with CEL.",
+  "prerequisites": [
+    "Kubernetes Pod Security Standards (Privileged, Baseline, Restricted)",
+    "YAML syntax and JSON schema validation",
+    "API Server admission control chain"
+  ],
+  "learningObjectives": [
+    "Deploy Kyverno ClusterPolicy resources to validate, mutate, and generate Kubernetes objects",
+    "Enforce non-root execution, read-only root filesystems, and approved container registries",
+    "Write and test native Kubernetes ValidatingAdmissionPolicy resources using Common Expression Language (CEL)",
+    "Audit existing cluster workloads for compliance violations using the Kyverno CLI"
+  ],
+  "curriculumModules": [
+    {
+      "id": "mod-pol-01",
+      "title": "Kyverno: Kubernetes-Native Policy Engine",
+      "conceptSummary": "Kyverno policies are written as plain Kubernetes YAML without requiring proprietary languages (like Rego). Kyverno intercepts admission requests, validates specs against security baselines, and generates default objects.",
+      "productionArchitecturePattern": "Cluster-wide admission controller enforcing CIS benchmarks, image provenance, and team resource quotas.",
+      "keyCommands": [
+        "kubectl get clusterpolicies",
+        "kyverno apply <policy.yaml> --resource <pod.yaml>",
+        "kubectl describe clusterpolicy <name>"
+      ]
+    },
+    {
+      "id": "mod-pol-02",
+      "title": "In-Tree ValidatingAdmissionPolicy with Common Expression Language (CEL)",
+      "conceptSummary": "Kubernetes 1.30+ features in-tree CEL admission control, executing declarative validation directly within the kube-apiserver binary without webhooks or network hops.",
+      "productionArchitecturePattern": "Ultra-low-latency in-tree CEL policies evaluating replica limits and mandatory team ownership labels.",
+      "keyCommands": [
+        "kubectl get validatingadmissionpolicies",
+        "kubectl get validatingadmissionpolicybindings"
+      ]
+    }
+  ],
+  "labs": [
+    {
+      "id": "lab-pol-01",
+      "title": "Kyverno ClusterPolicy for Disallowing Root Containers",
+      "difficulty": "Advanced",
+      "durationMinutes": 30,
+      "xpReward": 250,
+      "scenario": "Your CISO mandated that no container in the production namespace may run as root (UID 0). Deploy a Kyverno ClusterPolicy named disallow-root-user that enforces runAsNonRoot: true.",
+      "productionContext": "Running containers as root is the #1 vector for container breakout exploits. Enforcing non-root admission blocks misconfigured pods before scheduling.",
+      "prerequisites": ["Pod Security", "Kubernetes Admission"],
+      "objectives": [
+        "Deploy the disallow-root-user Kyverno ClusterPolicy in Enforce mode",
+        "Verify policy application using the Kyverno test command",
+        "Record verification proof in policy-audit ConfigMap"
+      ],
+      "initialClusterState": {
+        "resources": [
+          {
+            "apiVersion": "v1",
+            "kind": "Namespace",
+            "metadata": { "name": "production" }
+          }
+        ]
+      },
+      "starterManifest": "apiVersion: kyverno.io/v1\nkind: ClusterPolicy\nmetadata:\n  name: disallow-root-user\nspec:\n  validationFailureAction: Enforce\n  rules:\n    - name: check-runasnonroot\n      match:\n        any:\n          - resources:\n              kinds:\n                - Pod\n              namespaces:\n                - production\n      validate:\n        message: \"Containers must have runAsNonRoot: true\"\n        pattern:\n          spec:\n            securityContext:\n              runAsNonRoot: true\n---\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: policy-audit\n  namespace: production\ndata:\n  policyName: \"disallow-root-user\"\n  status: \"active\"\n",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Inspect Kyverno ClusterPolicy",
+          "instruction": "Open the Manifest Editor and review the disallow-root-user ClusterPolicy manifest.",
+          "commandHint": "kyverno version"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Deploy Policy and Audit Record",
+          "instruction": "Apply the ClusterPolicy and policy-audit ConfigMap to the cluster.",
+          "commandHint": "kubectl apply -f manifest.yaml"
+        },
+        {
+          "stepNumber": 3,
+          "title": "Execute Policy Test",
+          "instruction": "Run kyverno apply to test the policy against sample workloads.",
+          "commandHint": "kyverno apply policy.yaml"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "val-pol-01-policy",
+          "description": "ClusterPolicy disallow-root-user exists with validationFailureAction Enforce",
+          "type": "resource_field_equals",
+          "kind": "ClusterPolicy",
+          "name": "disallow-root-user",
+          "fieldPath": "spec.validationFailureAction",
+          "expectedValue": "Enforce",
+          "remediation": "Deploy ClusterPolicy disallow-root-user with spec.validationFailureAction: Enforce."
+        },
+        {
+          "id": "val-pol-01-audit",
+          "description": "ConfigMap policy-audit exists in production with status active",
+          "type": "resource_field_equals",
+          "kind": "ConfigMap",
+          "name": "policy-audit",
+          "namespace": "production",
+          "fieldPath": "data.status",
+          "expectedValue": "active",
+          "remediation": "Apply the starter manifest to create the policy-audit ConfigMap."
+        }
+      ],
+      "solutionCommands": [
+        "kubectl apply -f manifest.yaml",
+        "kyverno apply policy.yaml"
+      ],
+      "troubleshootingGuide": "Ensure validationFailureAction is set to 'Enforce' rather than 'Audit'."
+    },
+    {
+      "id": "lab-pol-02",
+      "title": "Native ValidatingAdmissionPolicy with CEL Expressions",
+      "difficulty": "Advanced",
+      "durationMinutes": 35,
+      "xpReward": 250,
+      "scenario": "To avoid external webhook latency, use Kubernetes native ValidatingAdmissionPolicy with Common Expression Language (CEL) to require all Deployments to have at least 2 replicas.",
+      "productionContext": "CEL-based ValidatingAdmissionPolicy eliminates admission webhook failure modes (e.g. timeout on apiserver when webhook pod is down).",
+      "prerequisites": ["Kubernetes 1.30+", "Admission Control"],
+      "objectives": [
+        "Create ValidatingAdmissionPolicy check-min-replicas requiring object.spec.replicas >= 2",
+        "Bind policy to production namespace with ValidatingAdmissionPolicyBinding",
+        "Verify policy in cluster state"
+      ],
+      "initialClusterState": {
+        "resources": [
+          {
+            "apiVersion": "v1",
+            "kind": "Namespace",
+            "metadata": { "name": "production" }
+          }
+        ]
+      },
+      "starterManifest": "apiVersion: admissionregistration.k8s.io/v1\nkind: ValidatingAdmissionPolicy\nmetadata:\n  name: check-min-replicas\nspec:\n  failurePolicy: Fail\n  matchConstraints:\n    resourceRules:\n      - apiGroups: [\"apps\"]\n        apiVersions: [\"v1\"]\n        operations: [\"CREATE\", \"UPDATE\"]\n        resources: [\"deployments\"]\n  validations:\n    - expression: \"object.spec.replicas >= 2\"\n      message: \"Deployments in production must have at least 2 replicas for high availability.\"\n---\napiVersion: admissionregistration.k8s.io/v1\nkind: ValidatingAdmissionPolicyBinding\nmetadata:\n  name: check-min-replicas-binding\nspec:\n  policyName: check-min-replicas\n  validationActions: [Deny]\n  matchResources:\n    namespaceSelector:\n      matchLabels:\n        environment: production\n",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Review CEL ValidatingAdmissionPolicy",
+          "instruction": "Inspect the ValidatingAdmissionPolicy manifest and its CEL expression.",
+          "commandHint": "cat /etc/hosts"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Apply CEL Policy and Binding",
+          "instruction": "Deploy the ValidatingAdmissionPolicy and its binding to the cluster.",
+          "commandHint": "kubectl apply -f manifest.yaml"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "val-pol-02-policy",
+          "description": "ValidatingAdmissionPolicy check-min-replicas exists with failurePolicy Fail",
+          "type": "resource_field_equals",
+          "kind": "ValidatingAdmissionPolicy",
+          "name": "check-min-replicas",
+          "fieldPath": "spec.failurePolicy",
+          "expectedValue": "Fail",
+          "remediation": "Apply ValidatingAdmissionPolicy check-min-replicas with spec.failurePolicy: Fail."
+        },
+        {
+          "id": "val-pol-02-binding",
+          "description": "ValidatingAdmissionPolicyBinding check-min-replicas-binding exists",
+          "type": "resource_exists",
+          "kind": "ValidatingAdmissionPolicyBinding",
+          "name": "check-min-replicas-binding",
+          "remediation": "Apply the starter manifest to create ValidatingAdmissionPolicyBinding."
+        }
+      ],
+      "solutionCommands": [
+        "kubectl apply -f manifest.yaml"
+      ],
+      "troubleshootingGuide": "Confirm the CEL expression syntax matches 'object.spec.replicas >= 2'."
+    }
+  ],
+  "assessmentQuestions": [
+    {
+      "id": "q-pol-01",
+      "question": "What is the primary advantage of Kubernetes ValidatingAdmissionPolicy over traditional admission webhooks?",
+      "options": [
+        "It runs in the apiserver using CEL without external network latency or webhook dependencies",
+        "It can run without a kube-apiserver",
+        "It only works on Windows nodes",
+        "It requires a separate etcd cluster"
+      ],
+      "correctIndex": 0,
+      "explanation": "ValidatingAdmissionPolicy executes Common Expression Language (CEL) directly within the kube-apiserver process, eliminating webhook timeouts."
+    },
+    {
+      "id": "q-pol-02",
+      "question": "In Kyverno, which validationFailureAction setting rejects non-compliant resources at admission time?",
+      "options": [
+        "Enforce",
+        "Audit",
+        "Ignore",
+        "Warn"
+      ],
+      "correctIndex": 0,
+      "explanation": "validationFailureAction: Enforce causes Kyverno to actively block and reject the admission request."
+    }
+  ]
+}
+

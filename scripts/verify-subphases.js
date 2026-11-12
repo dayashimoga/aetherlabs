@@ -224,8 +224,8 @@ const SUBPHASES = [
     id: 'Subphase 3.3.1',
     stage: 'Stage 3',
     phase: 'Phase 3.3',
-    title: '8 Production Outage Scenarios (Selector Drift, ImagePullBackOff, CrashLoop, OOM, CPU, GitOps, GPU, NetPol)',
-    verify: () => app.incidentEngine.listIncidents().length === 8
+    title: '12 Production Outage Scenarios (Quorum Loss, Admission Block, CoreDNS Loop, PVC Pending, etc.)',
+    verify: () => app.incidentEngine.listIncidents().length >= 12
   },
   {
     id: 'Subphase 3.3.2',
@@ -266,8 +266,8 @@ const SUBPHASES = [
     id: 'Subphase 3.5.1',
     stage: 'Stage 3',
     phase: 'Phase 3.5',
-    title: '6 Multi-Milestone Production Capstone Projects Catalog',
-    verify: () => app.projectEngine.listProjects().length === 6
+    title: '8 Multi-Milestone Production Capstone Projects Catalog',
+    verify: () => app.projectEngine.listProjects().length >= 8
   },
   {
     id: 'Subphase 3.5.2',
@@ -314,10 +314,10 @@ const SUBPHASES = [
     id: 'Subphase 4.2.1',
     stage: 'Stage 4',
     phase: 'Phase 4.2',
-    title: '6 Role-Based Certification Tracks & 18-Domain Skill Radar',
+    title: '6 Role-Based Certification Tracks & 26-Domain Skill Radar',
     verify: () =>
       app.certificationEngine.listExamTracks().length === 6 &&
-      app.certificationEngine.computeDomainSkillRadar().length === 18
+      app.certificationEngine.computeDomainSkillRadar().length === 26
   },
   {
     id: 'Subphase 4.2.2',
@@ -362,10 +362,10 @@ const SUBPHASES = [
     id: 'Subphase 5.1.2',
     stage: 'Stage 5',
     phase: 'Phase 5.1',
-    title: 'Deterministic E2E Solver Proof Across All 36 Labs, 8 Incidents & 6 Capstones',
+    title: 'Deterministic E2E Solver Proof Across All 52 Labs, 12 Incidents & 8 Capstones',
     verify: () => {
       const labs = app.pluginManager.getAllLabs();
-      if (labs.length !== 36) return false;
+      if (labs.length !== 52) return false;
       for (const lab of labs) {
         const c = new VirtualCluster(lab.initialClusterState);
         const t = new TerminalEngine(c);

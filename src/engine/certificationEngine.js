@@ -6,9 +6,46 @@ const { ROLE_TRACKS } = require('../plugins/pluginManager');
 const SIGNING_SECRET = process.env.KUBELABS_CERT_SECRET || 'kubelabs-production-hmac-key-2026-v1';
 
 class CertificationEngine {
-  constructor(pluginManager, database) {
+  constructor(pluginManager, database, options = {}) {
     this.pluginManager = pluginManager;
     this.database = database;
+
+    if (options.publicKey && options.privateKey) {
+      this.publicKey = options.publicKey;
+      this.privateKey = options.privateKey;
+    } else {
+      const pair = crypto.generateKeyPairSync('ed25519', {
+        publicKeyEncoding: { type: 'spki', format: 'pem' },
+        privateKeyEncoding: { type: 'pkcs8', format: 'pem' }
+      });
+      this.publicKey = pair.publicKey;
+      this.privateKey = pair.privateKey;
+    }
+  }
+
+  getPublicKey() {
+    return this.publicKey;
+  }
+
+  getPublicKeyPem() {
+    return this.publicKey;
+  }
+
+  signCertificatePayloadEd25519({ certId, trackId, title, learnerName, scorePercent }) {
+    const canonical = `${certId}|${trackId}|${title}|${learnerName}|${scorePercent}`;
+    const data = Buffer.from(canonical, 'utf8');
+    return crypto.sign(null, data, this.privateKey).toString('hex');
+  }
+
+  verifyCertificateEd25519({ certId, trackId, title, learnerName, scorePercent }, signatureHex, publicKey = this.publicKey) {
+    try {
+      const canonical = `${certId}|${trackId}|${title}|${learnerName}|${scorePercent}`;
+      const data = Buffer.from(canonical, 'utf8');
+      const sigBuffer = Buffer.from(signatureHex, 'hex');
+      return crypto.verify(null, data, publicKey, sigBuffer);
+    } catch {
+      return false;
+    }
   }
 
   listExamTracks() {
@@ -117,6 +154,14 @@ class CertificationEngine {
         scorePercent
       });
 
+      const signatureEd25519 = this.signCertificatePayloadEd25519({
+        certId,
+        trackId: track.id,
+        title: track.certificationTitle,
+        learnerName,
+        scorePercent
+      });
+
       certificate = {
         certId,
         trackId: track.id,
@@ -124,6 +169,8 @@ class CertificationEngine {
         learnerName,
         scorePercent,
         signatureSha256,
+        signatureEd25519,
+        publicKeyPem: this.publicKey,
         issuedAt
       };
 
@@ -162,18 +209,37 @@ class CertificationEngine {
     if (!cert) {
       return { valid: false, reason: `Certificate "${certId}" not found` };
     }
-    const expectedSig = this.signCertificatePayload({
+
+    const payload = {
       certId: cert.cert_id,
       trackId: cert.track_id,
       title: cert.title,
       learnerName: cert.learner_name,
       scorePercent: cert.score_percent
-    });
-    const sigToCheck = providedSignature || cert.signature_sha256;
-    const valid = sigToCheck === expectedSig;
+    };
+
+    let valid = false;
+    let algorithm = 'hmac-sha256';
+
+    // If an Ed25519 signature is provided or saved in the database
+    const edSig = providedSignature && providedSignature.length === 128 ? providedSignature : cert.signature_ed25519;
+    if (edSig) {
+      valid = this.verifyCertificateEd25519(payload, edSig);
+      algorithm = 'ed25519';
+    }
+
+    if (!valid) {
+      const expectedShaSig = this.signCertificatePayload(payload);
+      const shaSigToCheck = providedSignature || cert.signature_sha256;
+      valid = shaSigToCheck === expectedShaSig;
+      algorithm = 'hmac-sha256';
+    }
+
     return {
       valid,
+      algorithm,
       certificate: cert,
+      publicKeyPem: this.publicKey,
       verifiedAt: new Date().toISOString()
     };
   }

@@ -1,0 +1,217 @@
+{
+  "id": "gateway-api-cilium",
+  "title": "20. Gateway API & Cilium eBPF Networking",
+  "category": "Cloud-Native Networking & Service Mesh",
+  "trackId": "track-k8s-admin",
+  "version": "1.0.0",
+  "difficulty": "Advanced",
+  "estimatedHours": 7,
+  "summary": "Master the next-generation Kubernetes Gateway API spec (Gateway, HTTPRoute, GRPCRoute) and Cilium eBPF L7 kernel-level network security policies.",
+  "prerequisites": [
+    "Kubernetes Ingress and Services",
+    "Layer 4 vs Layer 7 traffic routing",
+    "eBPF fundamentals and Linux socket filtering"
+  ],
+  "learningObjectives": [
+    "Design and deploy Kubernetes Gateway API Gateway and HTTPRoute resources for canary traffic splitting",
+    "Configure fine-grained weight-based traffic routing without external service mesh proxies",
+    "Author and enforce Cilium L7 HTTP-aware CiliumNetworkPolicy resources in the Linux kernel",
+    "Troubleshoot Gateway listener attachment and HTTPRoute parent binding status"
+  ],
+  "curriculumModules": [
+    {
+      "id": "mod-gw-01",
+      "title": "Kubernetes Gateway API: Role-Oriented Ingress Architecture",
+      "conceptSummary": "Gateway API splits ingress into GatewayClass (Infra Provider), Gateway (Cluster Operator), and HTTPRoute (Application Developer), providing expressive canary splitting, header matching, and multi-namespace routing.",
+      "productionArchitecturePattern": "Shared enterprise Edge Gateway with delegated HTTPRoute objects across product development namespaces.",
+      "keyCommands": [
+        "kubectl get gateways -A",
+        "kubectl get httproutes -A",
+        "kubectl describe httproute <name>"
+      ]
+    },
+    {
+      "id": "mod-gw-02",
+      "title": "Cilium eBPF CNI & Layer 7 Kernel Security Policies",
+      "conceptSummary": "Cilium leverages eBPF programs loaded directly into the Linux socket layer, enforcing Layer 7 HTTP path and method restrictions without iptables or userspace Envoy proxy overhead.",
+      "productionArchitecturePattern": "Zero-trust kernel-enforced CiliumNetworkPolicy blocking unapproved HTTP verbs (e.g. enforcing GET only on public endpoints).",
+      "keyCommands": [
+        "kubectl get ciliumnetworkpolicies -A",
+        "kubectl describe ciliumnetworkpolicy <name>"
+      ]
+    }
+  ],
+  "labs": [
+    {
+      "id": "lab-gw-01",
+      "title": "Gateway API Weighted Canary Traffic Splitting",
+      "difficulty": "Advanced",
+      "durationMinutes": 35,
+      "xpReward": 250,
+      "scenario": "Your product team is releasing a new checkout service version. Configure a Kubernetes Gateway API HTTPRoute that splits ingress traffic 80% to checkout-v1 and 20% to checkout-v2 canary.",
+      "productionContext": "Gateway API HTTPRoute rules provide standardized weight-based canary deployments across cloud providers without proprietary ingress annotations.",
+      "prerequisites": ["Kubernetes Services", "Gateway API"],
+      "objectives": [
+        "Deploy the core Gateway resource edge-gateway listening on port 80",
+        "Deploy the HTTPRoute checkout-route with 80% weight to checkout-v1 and 20% to checkout-v2",
+        "Validate route attachment to parent Gateway"
+      ],
+      "initialClusterState": {
+        "resources": [
+          {
+            "apiVersion": "v1",
+            "kind": "Service",
+            "metadata": { "name": "checkout-v1", "namespace": "production", "labels": { "app": "checkout", "version": "v1" } },
+            "spec": { "selector": { "app": "checkout", "version": "v1" }, "ports": [{ "port": 80, "targetPort": 8080 }] }
+          },
+          {
+            "apiVersion": "v1",
+            "kind": "Service",
+            "metadata": { "name": "checkout-v2", "namespace": "production", "labels": { "app": "checkout", "version": "v2" } },
+            "spec": { "selector": { "app": "checkout", "version": "v2" }, "ports": [{ "port": 80, "targetPort": 8080 }] }
+          }
+        ]
+      },
+      "starterManifest": "apiVersion: gateway.networking.k8s.io/v1\nkind: Gateway\nmetadata:\n  name: edge-gateway\n  namespace: production\nspec:\n  gatewayClassName: cilium\n  listeners:\n    - name: http\n      port: 80\n      protocol: HTTP\n---\napiVersion: gateway.networking.k8s.io/v1\nkind: HTTPRoute\nmetadata:\n  name: checkout-route\n  namespace: production\nspec:\n  parentRefs:\n    - name: edge-gateway\n  rules:\n    - backendRefs:\n        - name: checkout-v1\n          port: 80\n          weight: 80\n        - name: checkout-v2\n          port: 80\n          weight: 20\n",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Review Gateway and HTTPRoute Definitions",
+          "instruction": "Open the Manifest Editor and inspect the edge-gateway and checkout-route manifests.",
+          "commandHint": "cat /etc/hosts"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Apply Gateway API Resources",
+          "instruction": "Deploy the Gateway and HTTPRoute to the production namespace.",
+          "commandHint": "kubectl apply -f manifest.yaml"
+        },
+        {
+          "stepNumber": 3,
+          "title": "Verify HTTPRoute Traffic Weights",
+          "instruction": "Check that the HTTPRoute has the 80/20 weights configured.",
+          "commandHint": "kubectl get httproute checkout-route -n production"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "val-gw-01-gateway",
+          "description": "Gateway edge-gateway exists in production namespace with cilium GatewayClass",
+          "type": "resource_field_equals",
+          "kind": "Gateway",
+          "name": "edge-gateway",
+          "namespace": "production",
+          "fieldPath": "spec.gatewayClassName",
+          "expectedValue": "cilium",
+          "remediation": "Apply the Gateway manifest with gatewayClassName: cilium in production."
+        },
+        {
+          "id": "val-gw-01-route",
+          "description": "HTTPRoute checkout-route exists in production namespace",
+          "type": "resource_exists",
+          "kind": "HTTPRoute",
+          "name": "checkout-route",
+          "namespace": "production",
+          "remediation": "Apply the HTTPRoute manifest in production namespace."
+        }
+      ],
+      "solutionCommands": [
+        "kubectl apply -f manifest.yaml"
+      ],
+      "troubleshootingGuide": "Ensure namespace is explicitly set to 'production' on both the Gateway and HTTPRoute resources."
+    },
+    {
+      "id": "lab-gw-02",
+      "title": "Cilium L7 HTTP-Aware eBPF Security Policy Enforcement",
+      "difficulty": "Advanced",
+      "durationMinutes": 30,
+      "xpReward": 250,
+      "scenario": "A security audit requires restricting frontend-to-backend traffic so that only HTTP GET requests on /api/v1/products are permitted, dropping all other methods in the kernel via eBPF.",
+      "productionContext": "Traditional NetworkPolicies only filter IP:Port (Layer 4). CiliumNetworkPolicy filters HTTP methods, paths, and headers (Layer 7) with sub-millisecond eBPF performance.",
+      "prerequisites": ["NetworkPolicy", "Cilium CNI"],
+      "objectives": [
+        "Author a CiliumNetworkPolicy named secure-backend-l7",
+        "Allow ingress traffic to pods labeled app: catalog",
+        "Enforce Layer 7 rule permitting only GET requests on /api/v1/.*"
+      ],
+      "initialClusterState": {
+        "resources": [
+          {
+            "apiVersion": "v1",
+            "kind": "Pod",
+            "metadata": { "name": "catalog-api", "namespace": "production", "labels": { "app": "catalog", "tier": "backend" } },
+            "spec": { "containers": [{ "name": "catalog", "image": "nginx:1.27-alpine" }] },
+            "status": { "phase": "Running", "ready": "1/1", "reason": "Running" }
+          }
+        ]
+      },
+      "starterManifest": "apiVersion: cilium.io/v2\nkind: CiliumNetworkPolicy\nmetadata:\n  name: secure-backend-l7\n  namespace: production\nspec:\n  endpointSelector:\n    matchLabels:\n      app: catalog\n  ingress:\n    - fromEndpoints:\n        - matchLabels:\n            tier: frontend\n      toPorts:\n        - ports:\n            - port: \"80\"\n              protocol: TCP\n          rules:\n            http:\n              - method: \"GET\"\n                path: \"/api/v1/.*\"\n",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Inspect Cilium Network Policy Manifest",
+          "instruction": "Open the Manifest Editor and review the CiliumNetworkPolicy specification.",
+          "commandHint": "kubectl get pods -n production --show-labels"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Deploy Cilium L7 Policy",
+          "instruction": "Apply the secure-backend-l7 policy to the production namespace.",
+          "commandHint": "kubectl apply -f manifest.yaml"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "val-gw-02-policy",
+          "description": "CiliumNetworkPolicy secure-backend-l7 exists in production namespace",
+          "type": "resource_exists",
+          "kind": "CiliumNetworkPolicy",
+          "name": "secure-backend-l7",
+          "namespace": "production",
+          "remediation": "Apply the starter manifest to create CiliumNetworkPolicy secure-backend-l7 in production."
+        },
+        {
+          "id": "val-gw-02-target",
+          "description": "CiliumNetworkPolicy targets app: catalog",
+          "type": "resource_field_equals",
+          "kind": "CiliumNetworkPolicy",
+          "name": "secure-backend-l7",
+          "namespace": "production",
+          "fieldPath": "spec.endpointSelector.matchLabels.app",
+          "expectedValue": "catalog",
+          "remediation": "Verify spec.endpointSelector.matchLabels.app equals 'catalog'."
+        }
+      ],
+      "solutionCommands": [
+        "kubectl apply -f manifest.yaml"
+      ],
+      "troubleshootingGuide": "Confirm that the port in toPorts is specified as a string '80' and the protocol is TCP."
+    }
+  ],
+  "assessmentQuestions": [
+    {
+      "id": "q-gw-01",
+      "question": "Which Gateway API resource is responsible for defining how client HTTP requests match and route to backend services?",
+      "options": [
+        "HTTPRoute",
+        "GatewayClass",
+        "IngressRoute",
+        "VirtualService"
+      ],
+      "correctIndex": 0,
+      "explanation": "HTTPRoute is the standardized Gateway API resource created by application developers to route HTTP traffic."
+    },
+    {
+      "id": "q-gw-02",
+      "question": "How does Cilium enforce Layer 7 HTTP filtering compared to standard Kubernetes NetworkPolicies?",
+      "options": [
+        "By modifying host iptables rules only",
+        "By using Linux eBPF programs attached to the kernel socket layer for line-rate L7 parsing",
+        "By routing all cluster traffic through a central external load balancer",
+        "By killing unauthorized pods automatically"
+      ],
+      "correctIndex": 1,
+      "explanation": "Cilium uses kernel-level eBPF programs to inspect Layer 7 HTTP headers and paths with near-zero latency."
+    }
+  ]
+}

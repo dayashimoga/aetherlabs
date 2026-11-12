@@ -3,6 +3,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { URL } = require('node:url');
+const { SessionManager } = require('../engine/sessionManager');
 
 const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -61,10 +62,38 @@ function readJsonBody(req) {
   });
 }
 
+class RateLimiter {
+  constructor(maxTokens = 180, refillRatePerSec = 3) {
+    this.maxTokens = maxTokens;
+    this.refillRatePerSec = refillRatePerSec;
+    this.buckets = new Map();
+  }
+
+  isAllowed(ip) {
+    const now = Date.now();
+    let bucket = this.buckets.get(ip);
+    if (!bucket) {
+      bucket = { tokens: this.maxTokens, lastRefill: now };
+      this.buckets.set(ip, bucket);
+    } else {
+      const elapsedSec = (now - bucket.lastRefill) / 1000;
+      bucket.tokens = Math.min(this.maxTokens, bucket.tokens + elapsedSec * this.refillRatePerSec);
+      bucket.lastRefill = now;
+    }
+
+    if (bucket.tokens >= 1) {
+      bucket.tokens -= 1;
+      return true;
+    }
+    return false;
+  }
+}
+
 class ApiRouter {
   constructor({
     database,
     pluginManager,
+    sessionManager,
     virtualCluster,
     terminalEngine,
     validationEngine,
@@ -78,8 +107,9 @@ class ApiRouter {
   }) {
     this.db = database;
     this.plugins = pluginManager;
-    this.cluster = virtualCluster;
-    this.terminal = terminalEngine;
+    this.sessionManager =
+      sessionManager ||
+      new SessionManager({ database: this.db, maxSessions: 500 });
     this.validator = validationEngine;
     this.incidents = incidentEngine;
     this.projects = projectEngine;
@@ -88,17 +118,126 @@ class ApiRouter {
     this.certifications = certificationEngine;
     this.orchestrator = agentOrchestrator;
     this.publicDir = publicDir || path.join(__dirname, '..', '..', 'public');
-    this.activeLabId = 'lab-k8s-01';
-    this.activeIncidentId = null;
+    this.rateLimiter = new RateLimiter(180, 3);
+    this.requestCount = 0;
+
+    // Ensure default session has initial cluster/terminal if passed
+    const defaultSession = this.sessionManager.getSession('default-session');
+    if (virtualCluster) defaultSession.cluster = virtualCluster;
+    if (terminalEngine) defaultSession.terminal = terminalEngine;
+  }
+
+  resolveSession(req) {
+    let sessionId = 'default-session';
+    if (req && req.headers && req.headers['x-kubelabs-session']) {
+      sessionId = String(req.headers['x-kubelabs-session']).trim();
+    } else if (req && req.url && req.url.includes('sessionId=')) {
+      try {
+        const parsedUrl = new URL(req.url, 'http://localhost');
+        sessionId = parsedUrl.searchParams.get('sessionId') || 'default-session';
+      } catch {}
+    }
+    return this.sessionManager.getSession(sessionId);
+  }
+
+  get cluster() {
+    return this.sessionManager.getSession('default-session').cluster;
+  }
+  set cluster(val) {
+    this.sessionManager.getSession('default-session').cluster = val;
+  }
+  get terminal() {
+    return this.sessionManager.getSession('default-session').terminal;
+  }
+  set terminal(val) {
+    this.sessionManager.getSession('default-session').terminal = val;
+  }
+  get vfs() {
+    return this.sessionManager.getSession('default-session').vfs;
+  }
+  get activeLabId() {
+    return this.sessionManager.getSession('default-session').activeLabId;
+  }
+  set activeLabId(val) {
+    this.sessionManager.getSession('default-session').activeLabId = val;
+  }
+  get activeIncidentId() {
+    return this.sessionManager.getSession('default-session').activeIncidentId;
+  }
+  set activeIncidentId(val) {
+    this.sessionManager.getSession('default-session').activeIncidentId = val;
   }
 
   async handle(req, res) {
     try {
+      this.requestCount += 1;
       const parsedUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
       const pathname = parsedUrl.pathname;
       const method = req.method.toUpperCase();
 
+      // Prometheus metrics endpoint
+      if (method === 'GET' && pathname === '/metrics') {
+        applySecurityHeaders(res);
+        res.statusCode = 200;
+        res.setHeader('Content-Type', 'text/plain; version=0.0.4; charset=utf-8');
+        const mem = process.memoryUsage();
+        const activeSessions = this.sessionManager ? this.sessionManager.activeSessionsCount : 1;
+        const metrics = [
+          '# HELP kubelabs_http_requests_total Total number of HTTP requests handled',
+          '# TYPE kubelabs_http_requests_total counter',
+          `kubelabs_http_requests_total ${this.requestCount}`,
+          '',
+          '# HELP kubelabs_active_sessions Number of active virtual cluster sessions',
+          '# TYPE kubelabs_active_sessions gauge',
+          `kubelabs_active_sessions ${activeSessions}`,
+          '',
+          '# HELP kubelabs_memory_rss_bytes Resident set size in bytes',
+          '# TYPE kubelabs_memory_rss_bytes gauge',
+          `kubelabs_memory_rss_bytes ${mem.rss}`,
+          '',
+          '# HELP kubelabs_memory_heap_used_bytes Heap used in bytes',
+          '# TYPE kubelabs_memory_heap_used_bytes gauge',
+          `kubelabs_memory_heap_used_bytes ${mem.heapUsed}`,
+          '',
+          '# HELP kubelabs_uptime_seconds Total application uptime in seconds',
+          '# TYPE kubelabs_uptime_seconds gauge',
+          `kubelabs_uptime_seconds ${Math.floor(process.uptime())}`
+        ].join('\n');
+        res.end(metrics + '\n');
+        return;
+      }
+
+      // Kubernetes Liveness Probe
+      if (method === 'GET' && (pathname === '/livez' || pathname === '/api/livez')) {
+        return sendJson(res, 200, {
+          status: 'ok',
+          uptimeSeconds: process.uptime(),
+          timestamp: new Date().toISOString()
+        });
+      }
+
+      // Kubernetes Readiness Probe
+      if (method === 'GET' && (pathname === '/readyz' || pathname === '/api/readyz')) {
+        return sendJson(res, 200, {
+          status: 'ready',
+          uptimeSeconds: process.uptime(),
+          pluginsLoaded: this.plugins ? this.plugins.getAllDomains().length : 26,
+          activeSessions: this.sessionManager ? this.sessionManager.activeSessionsCount : 1,
+          timestamp: new Date().toISOString()
+        });
+      }
+
       if (pathname.startsWith('/api/')) {
+        const clientIp = (req.socket && req.socket.remoteAddress) || '127.0.0.1';
+        if (!this.rateLimiter.isAllowed(clientIp)) {
+          res.setHeader('Retry-After', '60');
+          return sendJson(res, 429, {
+            error: {
+              code: 'RATE_LIMIT_EXCEEDED',
+              message: 'Rate limit of 180 requests/minute exceeded. Please retry shortly.'
+            }
+          });
+        }
         await this.handleApi(method, pathname, req, res);
         return;
       }
@@ -115,20 +254,34 @@ class ApiRouter {
   }
 
   async handleApi(method, pathname, req, res) {
+    const session = this.resolveSession(req);
+
     // 1. Health & Telemetry
     if (method === 'GET' && pathname === '/api/health') {
       return sendJson(res, 200, {
         status: 'ok',
         platform: 'KubeLabs Cloud-Native Learn-by-Doing Platform',
-        version: '1.0.0',
+        version: '2.0.0',
         offlineCapable: true,
         domainsCount: this.plugins.getAllDomains().length,
         labsCount: this.plugins.getAllLabs().length,
         incidentsCount: this.incidents.listIncidents().length,
         projectsCount: this.projects ? this.projects.listProjects().length : 0,
+        activeSessionsCount: this.sessionManager.getActiveSessionsCount(),
         memoryRssMB: Math.round((process.memoryUsage().rss / (1024 * 1024)) * 10) / 10,
         timestamp: new Date().toISOString()
       });
+    }
+
+    // 1b. Profile Export & Import
+    if (method === 'GET' && pathname === '/api/profile/export') {
+      return sendJson(res, 200, this.db.exportProfileBundle());
+    }
+
+    if (method === 'POST' && pathname === '/api/profile/import') {
+      const body = await readJsonBody(req);
+      const updated = this.db.importProfileBundle(body);
+      return sendJson(res, 200, { success: true, profile: updated });
     }
 
     // 2. Full Platform Overview
@@ -145,9 +298,9 @@ class ApiRouter {
         certificationTracks: this.certifications.listExamTracks(),
         skillRadar: this.certifications.computeDomainSkillRadar(),
         learner: profileData,
-        clusterState: this.cluster.exportSnapshot(),
-        activeLabId: this.activeLabId,
-        activeIncidentId: this.activeIncidentId
+        clusterState: session.cluster.exportSnapshot(),
+        activeLabId: session.activeLabId,
+        activeIncidentId: session.activeIncidentId
       });
     }
 
@@ -178,7 +331,7 @@ class ApiRouter {
       if (!lab) {
         return sendJson(res, 404, { error: { code: 'LAB_NOT_FOUND', message: `Lab ${labGetMatch[1]} not found` } });
       }
-      return sendJson(res, 200, { lab, clusterState: this.cluster.exportSnapshot() });
+      return sendJson(res, 200, { lab, clusterState: session.cluster.exportSnapshot() });
     }
 
     const labStartMatch = pathname.match(/^\/api\/labs\/([a-z0-9-]+)\/start$/);
@@ -187,18 +340,18 @@ class ApiRouter {
       if (!lab) {
         return sendJson(res, 404, { error: { code: 'LAB_NOT_FOUND', message: `Lab ${labStartMatch[1]} not found` } });
       }
-      this.activeLabId = lab.id;
-      this.activeIncidentId = null;
-      this.terminal.commandHistory = [];
-      this.cluster.reset(lab.initialClusterState);
+      session.activeLabId = lab.id;
+      session.activeIncidentId = null;
+      session.terminal.commandHistory = [];
+      session.cluster.reset(lab.initialClusterState);
       this.db.updateProfileFields({
         activeLabId: lab.id,
         activeIncidentId: null,
-        clusterSnapshotJson: JSON.stringify(this.cluster.exportSnapshot())
+        clusterSnapshotJson: JSON.stringify(session.cluster.exportSnapshot())
       });
       return sendJson(res, 200, {
         lab,
-        clusterState: this.cluster.exportSnapshot(),
+        clusterState: session.cluster.exportSnapshot(),
         message: `Initialized virtual cluster for lab "${lab.title}"`
       });
     }
@@ -209,7 +362,7 @@ class ApiRouter {
       if (!lab) {
         return sendJson(res, 404, { error: { code: 'LAB_NOT_FOUND', message: `Lab ${labValidateMatch[1]} not found` } });
       }
-      const report = this.validator.evaluate(lab.validationRules, this.cluster, this.terminal.commandHistory);
+      const report = this.validator.evaluate(lab.validationRules, session.cluster, session.terminal.commandHistory);
       const progressRecord = this.db.recordLabAttempt({
         labId: lab.id,
         domainId: lab.domainId,
@@ -223,7 +376,7 @@ class ApiRouter {
         progressRecord,
         learner: this.db.getProfile(),
         skillRadar: this.certifications.computeDomainSkillRadar(),
-        clusterState: this.cluster.exportSnapshot()
+        clusterState: session.cluster.exportSnapshot()
       });
     }
 
@@ -233,16 +386,16 @@ class ApiRouter {
       if (!lab) {
         return sendJson(res, 404, { error: { code: 'LAB_NOT_FOUND', message: `Lab ${labSolveMatch[1]} not found` } });
       }
-      this.activeLabId = lab.id;
-      this.terminal.commandHistory = [];
-      this.cluster.reset(lab.initialClusterState);
+      session.activeLabId = lab.id;
+      session.terminal.commandHistory = [];
+      session.cluster.reset(lab.initialClusterState);
       const commandOutputs = [];
       for (const cmd of lab.solutionCommands) {
-        const resCmd = this.terminal.execute(cmd, { manifestText: lab.starterManifest });
+        const resCmd = session.terminal.execute(cmd, { manifestText: lab.starterManifest });
         commandOutputs.push(resCmd);
         this.db.recordTerminalCommand(lab.id, cmd, resCmd.exitCode, resCmd.output);
       }
-      const report = this.validator.evaluate(lab.validationRules, this.cluster, this.terminal.commandHistory);
+      const report = this.validator.evaluate(lab.validationRules, session.cluster, session.terminal.commandHistory);
       const progressRecord = this.db.recordLabAttempt({
         labId: lab.id,
         domainId: lab.domainId,
@@ -257,7 +410,7 @@ class ApiRouter {
         progressRecord,
         learner: this.db.getProfile(),
         skillRadar: this.certifications.computeDomainSkillRadar(),
-        clusterState: this.cluster.exportSnapshot()
+        clusterState: session.cluster.exportSnapshot()
       });
     }
 
@@ -267,24 +420,24 @@ class ApiRouter {
       if (!body.command || !String(body.command).trim()) {
         return sendJson(res, 400, { error: { code: 'EMPTY_COMMAND', message: 'Command string is required' } });
       }
-      const result = this.terminal.execute(body.command, { manifestText: body.manifestText || '' });
-      const contextId = body.contextId || this.activeIncidentId || this.activeLabId || 'global';
+      const result = session.terminal.execute(body.command, { manifestText: body.manifestText || '' });
+      const contextId = body.contextId || session.activeIncidentId || session.activeLabId || 'global';
       this.db.recordTerminalCommand(contextId, body.command, result.exitCode, result.output);
       return sendJson(res, 200, {
         ...result,
-        clusterState: this.cluster.exportSnapshot()
+        clusterState: session.cluster.exportSnapshot()
       });
     }
 
     if (method === 'GET' && pathname === '/api/cluster/state') {
-      return sendJson(res, 200, { clusterState: this.cluster.exportSnapshot() });
+      return sendJson(res, 200, { clusterState: session.cluster.exportSnapshot() });
     }
 
     if (method === 'POST' && pathname === '/api/cluster/reset') {
       const body = await readJsonBody(req);
-      this.terminal.commandHistory = [];
-      this.cluster.reset(body.initialClusterState || null);
-      return sendJson(res, 200, { clusterState: this.cluster.exportSnapshot() });
+      session.terminal.commandHistory = [];
+      session.cluster.reset(body.initialClusterState || null);
+      return sendJson(res, 200, { clusterState: session.cluster.exportSnapshot() });
     }
 
     if (method === 'POST' && pathname === '/api/cluster/apply') {
@@ -293,7 +446,7 @@ class ApiRouter {
         return sendJson(res, 400, { error: { code: 'EMPTY_MANIFEST', message: 'YAML/JSON manifest is required' } });
       }
       try {
-        const applied = this.cluster.applyManifest(body.manifest);
+        const applied = session.cluster.applyManifest(body.manifest);
         return sendJson(res, 200, {
           applied: applied.map((a) => ({
             kind: a.resource.kind,
@@ -301,7 +454,7 @@ class ApiRouter {
             namespace: a.resource.metadata.namespace || 'default',
             action: a.action
           })),
-          clusterState: this.cluster.exportSnapshot()
+          clusterState: session.cluster.exportSnapshot()
         });
       } catch (err) {
         return sendJson(res, 422, { error: { code: 'MANIFEST_PARSE_ERROR', message: err.message } });
@@ -322,14 +475,14 @@ class ApiRouter {
       if (!inc) {
         return sendJson(res, 404, { error: { code: 'INCIDENT_NOT_FOUND', message: `Incident ${incStartMatch[1]} not found` } });
       }
-      this.activeIncidentId = inc.id;
-      this.terminal.commandHistory = [];
-      this.incidents.injectIncident(inc.id, this.cluster);
+      session.activeIncidentId = inc.id;
+      session.terminal.commandHistory = [];
+      this.incidents.injectIncident(inc.id, session.cluster);
       const runRecord = this.db.startIncidentRun(inc.id);
       return sendJson(res, 200, {
         incident: inc,
         runRecord,
-        clusterState: this.cluster.exportSnapshot()
+        clusterState: session.cluster.exportSnapshot()
       });
     }
 
@@ -339,7 +492,7 @@ class ApiRouter {
       if (!inc) {
         return sendJson(res, 404, { error: { code: 'INCIDENT_NOT_FOUND', message: `Incident ${incVerifyMatch[1]} not found` } });
       }
-      const report = this.incidents.verifyIncidentResolution(inc.id, this.cluster, this.terminal.commandHistory);
+      const report = this.incidents.verifyIncidentResolution(inc.id, session.cluster, session.terminal.commandHistory);
       let runRecord = null;
       if (report.passed) {
         runRecord = this.db.resolveIncidentRun(inc.id, inc.xpReward);
@@ -348,7 +501,7 @@ class ApiRouter {
         ...report,
         runRecord,
         learner: this.db.getProfile(),
-        clusterState: this.cluster.exportSnapshot()
+        clusterState: session.cluster.exportSnapshot()
       });
     }
 
@@ -358,23 +511,23 @@ class ApiRouter {
       if (!inc) {
         return sendJson(res, 404, { error: { code: 'INCIDENT_NOT_FOUND', message: `Incident ${incSolveMatch[1]} not found` } });
       }
-      this.activeIncidentId = inc.id;
-      this.terminal.commandHistory = [];
-      this.incidents.injectIncident(inc.id, this.cluster);
+      session.activeIncidentId = inc.id;
+      session.terminal.commandHistory = [];
+      this.incidents.injectIncident(inc.id, session.cluster);
       this.db.startIncidentRun(inc.id);
       const commandOutputs = [];
       for (const cmd of inc.solutionCommands) {
-        const out = this.terminal.execute(cmd);
+        const out = session.terminal.execute(cmd);
         commandOutputs.push(out);
       }
-      const report = this.incidents.verifyIncidentResolution(inc.id, this.cluster, this.terminal.commandHistory);
+      const report = this.incidents.verifyIncidentResolution(inc.id, session.cluster, session.terminal.commandHistory);
       const runRecord = report.passed ? this.db.resolveIncidentRun(inc.id, inc.xpReward) : null;
       return sendJson(res, 200, {
         commandOutputs,
         ...report,
         runRecord,
         learner: this.db.getProfile(),
-        clusterState: this.cluster.exportSnapshot()
+        clusterState: session.cluster.exportSnapshot()
       });
     }
 
@@ -392,11 +545,11 @@ class ApiRouter {
       if (!proj) {
         return sendJson(res, 404, { error: { code: 'PROJECT_NOT_FOUND', message: `Project ${projStartMatch[1]} not found` } });
       }
-      this.terminal.commandHistory = [];
-      this.projects.startProject(proj.id, this.cluster);
+      session.terminal.commandHistory = [];
+      this.projects.startProject(proj.id, session.cluster);
       return sendJson(res, 200, {
         project: proj,
-        clusterState: this.cluster.exportSnapshot()
+        clusterState: session.cluster.exportSnapshot()
       });
     }
 
@@ -406,7 +559,7 @@ class ApiRouter {
       if (!proj) {
         return sendJson(res, 404, { error: { code: 'PROJECT_NOT_FOUND', message: `Project ${projValidateMatch[1]} not found` } });
       }
-      const report = this.projects.validateProject(proj.id, this.cluster, this.terminal.commandHistory);
+      const report = this.projects.validateProject(proj.id, session.cluster, session.terminal.commandHistory);
       const progressRecord = this.db.recordProjectAttempt({
         projectId: proj.id,
         trackId: proj.trackId,
@@ -418,8 +571,27 @@ class ApiRouter {
         ...report,
         progressRecord,
         learner: this.db.getProfile(),
-        clusterState: this.cluster.exportSnapshot()
+        clusterState: session.cluster.exportSnapshot()
       });
+    }
+
+    const projMilestoneValidateMatch = pathname.match(/^\/api\/projects\/([a-z0-9-]+)\/milestones\/([0-9]+)\/validate$/);
+    if (method === 'POST' && projMilestoneValidateMatch && this.projects) {
+      const projId = projMilestoneValidateMatch[1];
+      const mNum = parseInt(projMilestoneValidateMatch[2], 10);
+      const proj = this.projects.getProject(projId);
+      if (!proj) {
+        return sendJson(res, 404, { error: { code: 'PROJECT_NOT_FOUND', message: `Project ${projId} not found` } });
+      }
+      try {
+        const report = this.projects.validateMilestone(proj.id, mNum, session.cluster, session.terminal.commandHistory);
+        return sendJson(res, 200, {
+          ...report,
+          clusterState: session.cluster.exportSnapshot()
+        });
+      } catch (err) {
+        return sendJson(res, 400, { error: { code: 'MILESTONE_VALIDATE_ERROR', message: err.message } });
+      }
     }
 
     const projSolveMatch = pathname.match(/^\/api\/projects\/([a-z0-9-]+)\/solve$/);
@@ -428,14 +600,14 @@ class ApiRouter {
       if (!proj) {
         return sendJson(res, 404, { error: { code: 'PROJECT_NOT_FOUND', message: `Project ${projSolveMatch[1]} not found` } });
       }
-      this.terminal.commandHistory = [];
-      this.projects.startProject(proj.id, this.cluster);
+      session.terminal.commandHistory = [];
+      this.projects.startProject(proj.id, session.cluster);
       const commandOutputs = [];
       for (const cmd of proj.solutionCommands) {
-        const out = this.terminal.execute(cmd);
+        const out = session.terminal.execute(cmd);
         commandOutputs.push(out);
       }
-      const report = this.projects.validateProject(proj.id, this.cluster, this.terminal.commandHistory);
+      const report = this.projects.validateProject(proj.id, session.cluster, session.terminal.commandHistory);
       const progressRecord = this.db.recordProjectAttempt({
         projectId: proj.id,
         trackId: proj.trackId,
@@ -448,7 +620,7 @@ class ApiRouter {
         ...report,
         progressRecord,
         learner: this.db.getProfile(),
-        clusterState: this.cluster.exportSnapshot()
+        clusterState: session.cluster.exportSnapshot()
       });
     }
 
@@ -470,11 +642,11 @@ class ApiRouter {
       const body = await readJsonBody(req);
       const compiled = this.architectures.compileToManifests(body.nodes || [], body.edges || []);
       if (compiled.kubernetesYaml && compiled.kubernetesYaml.trim()) {
-        this.cluster.applyManifest(compiled.kubernetesYaml);
+        session.cluster.applyManifest(compiled.kubernetesYaml);
       }
       return sendJson(res, 200, {
         ...compiled,
-        clusterState: this.cluster.exportSnapshot()
+        clusterState: session.cluster.exportSnapshot()
       });
     }
 
@@ -499,15 +671,15 @@ class ApiRouter {
     // 7. Contextual Socratic AI Mentor & CIS Auditor
     if (method === 'POST' && pathname === '/api/mentor/ask') {
       const body = await readJsonBody(req);
-      const activeLab = this.plugins.getLab(body.labId || this.activeLabId);
-      const activeIncident = this.incidents.getIncident(body.incidentId || this.activeIncidentId);
+      const activeLab = this.plugins.getLab(body.labId || session.activeLabId);
+      const activeIncident = this.incidents.getIncident(body.incidentId || session.activeIncidentId);
       const reply = this.mentor.respond({
         mode: body.mode || 'hint',
         query: body.query || '',
         activeLab,
         activeIncident,
-        cluster: this.cluster,
-        commandHistory: this.terminal.commandHistory
+        cluster: session.cluster,
+        commandHistory: session.terminal.commandHistory
       });
       return sendJson(res, 200, reply);
     }
@@ -543,6 +715,13 @@ class ApiRouter {
       return sendJson(res, 200, {
         ...graded,
         learner: this.db.getProfile()
+      });
+    }
+
+    if (method === 'GET' && pathname === '/api/certifications/public-key') {
+      return sendJson(res, 200, {
+        algorithm: 'ed25519',
+        publicKeyPem: this.certifications.getPublicKeyPem()
       });
     }
 

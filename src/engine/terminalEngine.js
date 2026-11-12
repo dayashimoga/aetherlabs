@@ -1,6 +1,7 @@
 'use strict';
 
-const { normalizeKind, getFieldByPath, CLUSTER_SCOPED_KINDS } = require('./virtualCluster');
+const { normalizeKind, getFieldByPath, evaluateJsonPath, CLUSTER_SCOPED_KINDS } = require('./virtualCluster');
+const { VirtualFileSystem } = require('./virtualFileSystem');
 
 function tokenizeCommand(cmdString) {
   const tokens = [];
@@ -44,6 +45,7 @@ function parseKubeFlags(tokens) {
   let targetPort = null;
   let patchJson = null;
   const fromLiterals = {};
+  const hardLimits = {};
   const rest = [];
 
   for (let i = 0; i < tokens.length; i++) {
@@ -86,6 +88,19 @@ function parseKubeFlags(tokens) {
       if (eq > -1) {
         fromLiterals[kv.slice(0, eq)] = kv.slice(eq + 1);
       }
+    } else if (t.startsWith('--hard=')) {
+      const parts = t.slice('--hard='.length).split(',');
+      for (const p of parts) {
+        const [k, v] = p.split('=');
+        if (k && v) hardLimits[k] = v;
+      }
+    } else if (t === '--hard') {
+      const raw = tokens[++i] || '';
+      const parts = raw.split(',');
+      for (const p of parts) {
+        const [k, v] = p.split('=');
+        if (k && v) hardLimits[k] = v;
+      }
     } else if (t === '--overwrite') {
       // ignore flag
     } else {
@@ -104,6 +119,7 @@ function parseKubeFlags(tokens) {
     targetPort,
     patchJson,
     fromLiterals,
+    hardLimits,
     rest
   };
 }
@@ -133,8 +149,9 @@ function padRight(str, width) {
 }
 
 class TerminalEngine {
-  constructor(virtualCluster) {
+  constructor(virtualCluster, virtualFileSystem) {
     this.cluster = virtualCluster;
+    this.vfs = virtualFileSystem || (virtualCluster && virtualCluster.vfs) || new VirtualFileSystem();
     this.commandHistory = [];
   }
 
@@ -148,6 +165,52 @@ class TerminalEngine {
       command: trimmed,
       timestamp: new Date().toISOString()
     });
+
+    // Support command chaining: `&&` and `;`
+    if (trimmed.includes('&&') && !trimmed.includes('<<')) {
+      const subcmds = trimmed.split('&&');
+      const outputs = [];
+      for (const sc of subcmds) {
+        const res = this.execute(sc.trim(), options);
+        if (res.output) outputs.push(res.output);
+        if (res.exitCode !== 0) {
+          return { exitCode: res.exitCode, output: outputs.join('\n'), command: trimmed };
+        }
+      }
+      return { exitCode: 0, output: outputs.join('\n'), command: trimmed };
+    }
+
+    if (trimmed.includes(';') && !trimmed.includes('<<')) {
+      const subcmds = trimmed.split(';');
+      const outputs = [];
+      for (const sc of subcmds) {
+        if (!sc.trim()) continue;
+        const res = this.execute(sc.trim(), options);
+        if (res.output) outputs.push(res.output);
+      }
+      return { exitCode: 0, output: outputs.join('\n'), command: trimmed };
+    }
+
+    // Support output redirection to VFS (> and >>)
+    const redirMatch = trimmed.match(/^(.*?)\s*(>>|>)\s*([^>|]+)$/);
+    if (redirMatch && !trimmed.includes('<<')) {
+      const mainCmd = redirMatch[1].trim();
+      const op = redirMatch[2];
+      const targetFile = redirMatch[3].trim();
+      const res = this.execute(mainCmd, options);
+      if (this.vfs) {
+        try {
+          if (op === '>>') {
+            this.vfs.appendFile(targetFile, (res.output || '') + '\n');
+          } else {
+            this.vfs.writeFile(targetFile, (res.output || '') + '\n');
+          }
+        } catch (e) {
+          return { exitCode: 1, output: `sh: ${e.message}`, command: trimmed };
+        }
+      }
+      return { exitCode: res.exitCode, output: '', command: trimmed };
+    }
 
     // Support pipe to grep (`| grep <pattern>`)
     let grepPattern = null;
@@ -230,6 +293,18 @@ class TerminalEngine {
         return this.handleSecurityTools(bin, args);
       case 'aiops':
         return this.handleAiOps(args);
+      case 'etcdctl':
+        return this.handleEtcdctl(args);
+      case 'kubeadm':
+        return this.handleKubeadm(args);
+      case 'velero':
+        return this.handleVelero(args);
+      case 'kyverno':
+        return this.handleKyverno(args);
+      case 'vcluster':
+        return this.handleVcluster(args);
+      case 'crossplane':
+        return this.handleCrossplane(args);
       case 'systemctl':
       case 'sysctl':
       case 'journalctl':
@@ -240,6 +315,10 @@ class TerminalEngine {
       case 'uname':
       case 'id':
       case 'whoami':
+      case 'pwd':
+      case 'echo':
+      case 'mkdir':
+      case 'rm':
       case 'ls':
       case 'cat':
       case 'ip':
@@ -291,7 +370,14 @@ class TerminalEngine {
       return this.kubectlDescribe(subArgs, flags);
     }
     if (sub === 'apply') {
-      const manifestText = options.manifestText || '';
+      let manifestText = options.manifestText || '';
+      const fIdx = (args || []).indexOf('-f');
+      if (fIdx > -1 && args[fIdx + 1] && args[fIdx + 1] !== '-') {
+        const filePath = args[fIdx + 1];
+        if (this.vfs && this.vfs.exists(filePath)) {
+          manifestText = this.vfs.readFile(filePath);
+        }
+      }
       if (manifestText && manifestText.trim()) {
         const applied = this.cluster.applyManifest(manifestText);
         return {
@@ -301,7 +387,7 @@ class TerminalEngine {
             .join('\n')
         };
       }
-      throw new Error('Provide YAML in the Manifest Editor or pass inline manifest to apply.');
+      throw new Error('Provide YAML in the Manifest Editor or pass valid -f <file> to apply.');
     }
     if (sub === 'create') {
       return this.kubectlCreate(subArgs, flags);
@@ -339,6 +425,35 @@ class TerminalEngine {
     if (sub === 'auth') {
       return this.kubectlAuth(subArgs, flags, args);
     }
+    if (sub === 'cordon') {
+      const nodeName = subArgs[0];
+      if (!nodeName) throw new Error('Usage: kubectl cordon <node-name>');
+      this.cluster.cordonNode(nodeName);
+      return { exitCode: 0, output: `node/${nodeName} cordoned` };
+    }
+    if (sub === 'uncordon') {
+      const nodeName = subArgs[0];
+      if (!nodeName) throw new Error('Usage: kubectl uncordon <node-name>');
+      this.cluster.uncordonNode(nodeName);
+      return { exitCode: 0, output: `node/${nodeName} uncordoned` };
+    }
+    if (sub === 'drain') {
+      const nodeName = subArgs[0];
+      if (!nodeName) throw new Error('Usage: kubectl drain <node-name>');
+      this.cluster.drainNode(nodeName);
+      return { exitCode: 0, output: `node/${nodeName} cordoned\nevicting pods...\nnode/${nodeName} drained` };
+    }
+    if (sub === 'taint') {
+      const nodeIdx = subArgs[0] === 'nodes' || subArgs[0] === 'node' ? 1 : 0;
+      const nodeName = subArgs[nodeIdx];
+      const taintExpr = subArgs[nodeIdx + 1];
+      if (!nodeName || !taintExpr) throw new Error('Usage: kubectl taint nodes <node-name> <key>=<value>:<effect>');
+      const parts = taintExpr.split(':');
+      const effect = parts[1] || 'NoSchedule';
+      const kv = parts[0].split('=');
+      this.cluster.taintNode(nodeName, kv[0], kv[1] || '', effect);
+      return { exitCode: 0, output: `node/${nodeName} tainted` };
+    }
     if (sub === 'delete') {
       const kind = subArgs[0];
       const name = subArgs[1];
@@ -372,6 +487,12 @@ class TerminalEngine {
       if (items.length === 0) {
         throw new Error(`Error from server (NotFound): ${kind.toLowerCase()} "${targetName}" not found`);
       }
+    }
+
+    if (flags.output && flags.output.startsWith('jsonpath=')) {
+      const expr = flags.output.slice('jsonpath='.length);
+      const payload = targetName ? items[0] : { apiVersion: 'v1', kind: 'List', items };
+      return { exitCode: 0, output: evaluateJsonPath(payload, expr) };
     }
 
     if (flags.output === 'json' || flags.output === 'yaml') {
@@ -563,6 +684,28 @@ class TerminalEngine {
       return { exitCode: 0, output: `serviceaccount/${name} created` };
     }
 
+    if (kind === 'Service') {
+      let svcType = 'ClusterIP';
+      let svcName = name;
+      if (['clusterip', 'nodeport', 'loadbalancer', 'headless'].includes(name.toLowerCase())) {
+        svcType = name.toLowerCase() === 'clusterip' ? 'ClusterIP' : name.toLowerCase() === 'nodeport' ? 'NodePort' : 'LoadBalancer';
+        svcName = subArgs[2] || name;
+      }
+      const port = flags.port || 80;
+      const targetPort = flags.targetPort || port;
+      this.cluster.applyResource({
+        apiVersion: 'v1',
+        kind: 'Service',
+        metadata: { name: svcName, namespace: flags.namespace, labels: { app: svcName } },
+        spec: {
+          type: svcType,
+          selector: { app: svcName },
+          ports: [{ port, targetPort }]
+        }
+      });
+      return { exitCode: 0, output: `service/${svcName} created` };
+    }
+
     if (kind === 'Secret') {
       const secretName = subArgs[2] || name;
       this.cluster.applyResource({
@@ -583,6 +726,18 @@ class TerminalEngine {
         data: { ...flags.fromLiterals }
       });
       return { exitCode: 0, output: `configmap/${name} created` };
+    }
+
+    if (kind === 'ResourceQuota') {
+      this.cluster.applyResource({
+        apiVersion: 'v1',
+        kind: 'ResourceQuota',
+        metadata: { name, namespace: flags.namespace },
+        spec: {
+          hard: { ...flags.hardLimits }
+        }
+      });
+      return { exitCode: 0, output: `resourcequota/${name} created` };
     }
 
     this.cluster.applyResource({
@@ -862,9 +1017,27 @@ class TerminalEngine {
     };
   }
 
-  kubectlAuth(subArgs, flags) {
+  kubectlAuth(subArgs, flags, args = []) {
     const verb = subArgs[1] || 'get';
     const resource = subArgs[2] || 'pods';
+    let asUser = 'kubernetes-admin';
+    const asFlag = args.find((a) => a.startsWith('--as='));
+    if (asFlag) asUser = asFlag.split('=')[1];
+    const asIdx = args.indexOf('--as');
+    if (asIdx > -1 && args[asIdx + 1]) asUser = args[asIdx + 1];
+
+    if (this.cluster && typeof this.cluster.evaluateRBAC === 'function') {
+      const allowed = this.cluster.evaluateRBAC({
+        user: asUser,
+        verb,
+        resource,
+        namespace: flags.namespace || 'default'
+      });
+      return {
+        exitCode: 0,
+        output: allowed ? 'yes' : 'no'
+      };
+    }
     const roles = this.cluster.getResources('Role', flags.namespace);
     const bindings = this.cluster.getResources('RoleBinding', flags.namespace);
     const allowed = roles.length > 0 && bindings.length > 0;
@@ -1398,9 +1571,254 @@ class TerminalEngine {
       };
     }
 
+    if (bin === 'pwd') {
+      return { exitCode: 0, output: '/home/learner' };
+    }
+
+    if (bin === 'echo') {
+      return { exitCode: 0, output: args.join(' ').replace(/^['"]|['"]$/g, '') };
+    }
+
+    if (bin === 'ls') {
+      const target = args.find((a) => !a.startsWith('-')) || '/home/learner';
+      if (this.vfs) {
+        try {
+          const files = this.vfs.listDir(target);
+          return { exitCode: 0, output: files.join('  ') || '(empty directory)' };
+        } catch (e) {
+          return { exitCode: 1, output: `ls: cannot access '${target}': ${e.message}` };
+        }
+      }
+      return { exitCode: 0, output: 'manifest.yaml  deployment.yaml  service.yaml' };
+    }
+
+    if (bin === 'cat') {
+      const target = args.find((a) => !a.startsWith('-'));
+      if (target && this.vfs) {
+        try {
+          const content = this.vfs.readFile(target);
+          return { exitCode: 0, output: content };
+        } catch (e) {
+          return { exitCode: 1, output: `cat: ${target}: ${e.message}` };
+        }
+      }
+      return { exitCode: 0, output: '' };
+    }
+
+    if (bin === 'mkdir') {
+      const target = args[args.length - 1];
+      if (target && this.vfs) {
+        try {
+          this.vfs.mkdir(target);
+          return { exitCode: 0, output: '' };
+        } catch (e) {
+          return { exitCode: 1, output: `mkdir: cannot create directory '${target}': ${e.message}` };
+        }
+      }
+      return { exitCode: 0, output: '' };
+    }
+
+    if (bin === 'rm') {
+      const target = args[args.length - 1];
+      if (target && this.vfs) {
+        try {
+          this.vfs.rm(target);
+          return { exitCode: 0, output: '' };
+        } catch (e) {
+          return { exitCode: 1, output: `rm: cannot remove '${target}': ${e.message}` };
+        }
+      }
+      return { exitCode: 0, output: '' };
+    }
+
     return {
       exitCode: 0,
       output: 'Linux kubelabs-control-plane 6.12.0-cloud-amd64 #1 SMP PREEMPT_DYNAMIC x86_64 GNU/Linux'
+    };
+  }
+
+  handleEtcdctl(args) {
+    const sub = args[0] || 'endpoint';
+    if (sub === 'snapshot') {
+      const action = args[1];
+      const target = args[2] || '/var/lib/etcd/backup.db';
+      if (action === 'save') {
+        if (this.vfs) {
+          this.vfs.writeFile(target, 'etcd-snapshot-v3.5.15-binary-data');
+        }
+        return {
+          exitCode: 0,
+          output: `Snapshot saved at ${target}\n{"hash":1098273645,"revision":34892,"totalKey":4520,"totalSize":26843545}`
+        };
+      }
+      if (action === 'restore') {
+        const etcdPods = this.cluster.getResources('Pod', 'kube-system').filter(
+          (p) => p.metadata && p.metadata.labels && p.metadata.labels['component'] === 'etcd'
+        );
+        for (const p of etcdPods) {
+          if (p.metadata && p.metadata.labels) {
+            delete p.metadata.labels['etcd-unhealthy'];
+          }
+        }
+        this.cluster.reconcile();
+        return {
+          exitCode: 0,
+          output: `2026-11-12 06:00:00.000000 I | etcdmain: restored snapshot ${target} to /var/lib/etcd/default.etcd\nQuorum restored across all etcd members.`
+        };
+      }
+    }
+    if (sub === 'endpoint' && args[1] === 'health') {
+      return {
+        exitCode: 0,
+        output: 'https://127.0.0.1:2379 is healthy: successfully committed proposal: took = 1.942ms'
+      };
+    }
+    return {
+      exitCode: 0,
+      output: 'etcdctl version: 3.5.15\nAPI version: 3.5\nEndpoint: https://127.0.0.1:2379 (healthy)'
+    };
+  }
+
+  handleKubeadm(args) {
+    const sub = args[0];
+    if (sub === 'upgrade') {
+      const action = args[1] || 'plan';
+      if (action === 'plan') {
+        return {
+          exitCode: 0,
+          output: [
+            '[upgrade/plan] Components that must be upgraded manually after you have upgraded the control plane with kubeadm upgrade apply:',
+            'COMPONENT     CURRENT       AVAILABLE',
+            'Kubelet       v1.31.0       v1.32.0',
+            '',
+            'Upgrade to the latest version in the v1.32 series:',
+            'COMPONENT            CURRENT   AVAILABLE',
+            'kube-apiserver       v1.31.0   v1.32.0',
+            'kube-controller-mgr  v1.31.0   v1.32.0',
+            'kube-scheduler       v1.31.0   v1.32.0',
+            'kube-proxy           v1.31.0   v1.32.0',
+            'CoreDNS              v1.11.1   v1.11.3',
+            'etcd                 3.5.14-0  3.5.15-0',
+            '',
+            'You can now apply the upgrade by executing: kubeadm upgrade apply v1.32.0'
+          ].join('\n')
+        };
+      }
+      if (action === 'apply') {
+        const ver = args[2] || 'v1.32.0';
+        return {
+          exitCode: 0,
+          output: `[upgrade/apply] SUCCESS! Your cluster was upgraded to "${ver}". Enjoy!`
+        };
+      }
+    }
+    if (sub === 'certs') {
+      const action = args[1] || 'check-expiration';
+      if (action === 'check-expiration') {
+        return {
+          exitCode: 0,
+          output: [
+            'CERTIFICATE                EXPIRES                  RESIDUAL TIME   CERTIFICATE AUTHORITY   EXTERNALLY MANAGED',
+            'admin.conf                 Nov 11, 2027 05:00 UTC   364d            ca                      no',
+            'apiserver                  Nov 11, 2027 05:00 UTC   364d            ca                      no',
+            'apiserver-etcd-client      Nov 11, 2027 05:00 UTC   364d            etcd-ca                 no',
+            'apiserver-kubelet-client   Nov 11, 2027 05:00 UTC   364d            ca                      no',
+            'front-proxy-client         Nov 11, 2027 05:00 UTC   364d            front-proxy-ca          no'
+          ].join('\n')
+        };
+      }
+      if (action === 'renew') {
+        return {
+          exitCode: 0,
+          output: '[certs] All certificates have been renewed successfully for 365 days.'
+        };
+      }
+    }
+    return { exitCode: 0, output: 'kubeadm version: v1.32.0' };
+  }
+
+  handleVelero(args) {
+    const sub = args[0] || 'backup';
+    if (sub === 'backup') {
+      const action = args[1] || 'get';
+      if (action === 'create') {
+        const name = args[2] || 'cluster-daily-backup';
+        return {
+          exitCode: 0,
+          output: `Backup request "${name}" submitted successfully.\nRun \`velero backup describe ${name}\` or \`velero backup logs ${name}\` for more details.`
+        };
+      }
+      return {
+        exitCode: 0,
+        output: [
+          'NAME                     STATUS      ERRORS   WARNINGS   CREATED                         EXPIRES   STORAGE LOCATION   SELECTOR',
+          'cluster-daily-backup     Completed   0        0          2026-11-12 04:00:00 +0000 UTC   29d       default            <none>'
+        ].join('\n')
+      };
+    }
+    if (sub === 'restore') {
+      const action = args[1] || 'get';
+      if (action === 'create') {
+        return {
+          exitCode: 0,
+          output: 'Restore request "cluster-restore-drill" submitted successfully.'
+        };
+      }
+    }
+    return { exitCode: 0, output: 'Velero client v1.14.0' };
+  }
+
+  handleKyverno(args) {
+    const sub = args[0] || 'version';
+    if (sub === 'apply' || sub === 'test') {
+      return {
+        exitCode: 0,
+        output: [
+          'Applying 1 policy to 3 resources...',
+          '(flag) pass: 3, fail: 0, warn: 0, error: 0, skip: 0',
+          'Policies validated successfully against Pod Security Standards (Restricted).'
+        ].join('\n')
+      };
+    }
+    return { exitCode: 0, output: 'Kyverno CLI Version: v1.12.5' };
+  }
+
+  handleVcluster(args) {
+    const sub = args[0] || 'list';
+    if (sub === 'create') {
+      const name = args[1] || 'tenant-alpha';
+      return {
+        exitCode: 0,
+        output: `[INFO] Creating virtual cluster "${name}" in namespace "vcluster-${name}"...\n[SUCCESS] Virtual cluster "${name}" created and ready.`
+      };
+    }
+    if (sub === 'list') {
+      return {
+        exitCode: 0,
+        output: [
+          'NAME           NAMESPACE            STATUS    CONNECTED   CREATED',
+          'tenant-alpha   vcluster-tenant-a    Running   true        2026-11-12 05:00:00'
+        ].join('\n')
+      };
+    }
+    if (sub === 'connect') {
+      const name = args[1] || 'tenant-alpha';
+      return {
+        exitCode: 0,
+        output: `Switched kubeconfig context to "vcluster_${name}".`
+      };
+    }
+    return { exitCode: 0, output: 'vcluster version 0.20.0' };
+  }
+
+  handleCrossplane(args) {
+    return {
+      exitCode: 0,
+      output: [
+        'NAME                                           SYNCED   READY   STATUS',
+        'PostgresInstance/fintech-payment-db            True     True    Available',
+        '└─ CompositePostgreSQLTable/fintech-table-01   True     True    Available'
+      ].join('\n')
     };
   }
 }

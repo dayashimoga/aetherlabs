@@ -20,9 +20,9 @@
     </div>
 
     <nav class="main-nav" role="navigation" aria-label="Primary Workspace Navigation">
-      <button class="nav-tab active" data-view="view-paths" type="button">1. Curriculum &amp; Paths (16 Domains)</button>
+      <button class="nav-tab active" data-view="view-paths" type="button">1. Curriculum &amp; Paths (26 Domains)</button>
       <button class="nav-tab" data-view="view-workbench" type="button">2. Interactive Lab Workbench</button>
-      <button class="nav-tab" data-view="view-incidents" type="button">3. Incident Simulator (8 Scenarios)</button>
+      <button class="nav-tab" data-view="view-incidents" type="button">3. Incident Simulator (12 Scenarios)</button>
       <button class="nav-tab" data-view="view-architect" type="button">4. UI Architecture Designer</button>
       <button class="nav-tab" data-view="view-certs" type="button">5. Exams &amp; Certifications</button>
       <button class="nav-tab" data-view="view-governance" type="button">6. 11-Agent Quality Gate</button>
@@ -30,19 +30,20 @@
 
     <div class="telemetry-bar" aria-label="Learner Telemetry">
       <span class="pill xp" id="header-xp">0 XP</span>
-      <span class="pill" id="header-labs-completed">0/32 Labs</span>
+      <span class="pill" id="header-labs-completed">0/52 Labs</span>
+      <button class="pill" id="theme-toggle" type="button" title="Toggle Theme (Dark / Light / High Contrast)" style="cursor:pointer; background:var(--bg-card); border:1px solid var(--border-subtle); color:var(--text-primary); font-size:0.75rem;">Theme: Dark</button>
       <span class="pill online" id="header-runtime-mode">Offline-Ready Engine</span>
     </div>
   </header>
 
   <main class="app-container" role="main">
-    <!-- VIEW 1: GUIDED LEARNING PATHS & 16-DOMAIN CURRICULUM -->
+    <!-- VIEW 1: GUIDED LEARNING PATHS & 26-DOMAIN CURRICULUM -->
     <section id="view-paths" class="view-panel active" aria-labelledby="paths-heading">
       <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:1rem; margin-bottom:1.25rem;">
         <div>
           <h1 id="paths-heading" style="font-size:1.45rem;">Guided Cloud-Native Role Learning Paths &amp; Modular Plugin Catalog</h1>
           <p style="color:var(--text-secondary); font-size:0.9rem;">
-            16 schema-validated technology plugins | 32 hands-on labs | 8 production outages | 8 enterprise reference architectures
+            26 schema-validated technology plugins | 52 hands-on labs | 12 production outages | 8 enterprise capstone projects | 8 reference architectures
           </p>
         </div>
         <div style="display:flex; gap:0.5rem;">
@@ -54,10 +55,10 @@
       <h2 style="font-size:1.05rem; margin-bottom:0.75rem; color:var(--accent-blue);">6 Role-Based Career Tracks</h2>
       <div id="tracks-container" class="grid-3" style="margin-bottom:1.75rem;"></div>
 
-      <h2 style="font-size:1.05rem; margin-bottom:0.75rem; color:var(--accent-green);">6 Multi-Milestone Production Capstone Projects</h2>
+      <h2 style="font-size:1.05rem; margin-bottom:0.75rem; color:var(--accent-green);">8 Multi-Milestone Production Capstone Projects</h2>
       <div id="projects-container" class="grid-3" style="margin-bottom:1.75rem;"></div>
 
-      <h2 style="font-size:1.05rem; margin-bottom:0.75rem; color:var(--accent-blue);">All 18 Technology Domain Plugins &amp; 36 Interactive Labs</h2>
+      <h2 style="font-size:1.05rem; margin-bottom:0.75rem; color:var(--accent-blue);">All 26 Technology Domain Plugins &amp; 52 Interactive Labs</h2>
       <div id="domains-container" class="grid-2"></div>
     </section>
 
@@ -136,6 +137,9 @@
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.4rem;">
               <h3 style="font-size:0.9rem; color:var(--accent-blue);">Live Virtual Cluster Topology</h3>
               <span class="badge" id="cluster-resource-count">0 Resources</span>
+            </div>
+            <div id="cluster-topology-svg-container" style="margin-bottom:0.6rem;">
+              <svg id="cluster-topology-svg" class="topology-svg" viewBox="0 0 540 170"></svg>
             </div>
             <div id="cluster-topology-view" class="resource-list"></div>
           </div>
@@ -293,6 +297,7 @@
     </section>
   </main>
 
+  <script src="/js/offlineEngine.js"></script>
   <script src="/js/app.js"></script>
 </body>
 </html>

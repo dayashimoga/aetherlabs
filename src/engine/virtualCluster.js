@@ -43,6 +43,9 @@ const KIND_ALIASES = {
   roles: 'Role',
   rolebinding: 'RoleBinding',
   rolebindings: 'RoleBinding',
+  quota: 'ResourceQuota',
+  resourcequota: 'ResourceQuota',
+  resourcequotas: 'ResourceQuota',
   no: 'Node',
   node: 'Node',
   nodes: 'Node',
@@ -73,10 +76,51 @@ const KIND_ALIASES = {
   nodepool: 'NodePool',
   nodepools: 'NodePool',
   webapp: 'WebApp',
-  webapps: 'WebApp'
+  webapps: 'WebApp',
+  pv: 'PersistentVolume',
+  persistentvolume: 'PersistentVolume',
+  persistentvolumes: 'PersistentVolume',
+  sc: 'StorageClass',
+  storageclass: 'StorageClass',
+  storageclasses: 'StorageClass',
+  clusterrole: 'ClusterRole',
+  clusterroles: 'ClusterRole',
+  clusterrolebinding: 'ClusterRoleBinding',
+  clusterrolebindings: 'ClusterRoleBinding',
+  validatingwebhookconfiguration: 'ValidatingWebhookConfiguration',
+  validatingwebhookconfigurations: 'ValidatingWebhookConfiguration',
+  mutatingwebhookconfiguration: 'MutatingWebhookConfiguration',
+  mutatingwebhookconfigurations: 'MutatingWebhookConfiguration',
+  runtimeclass: 'RuntimeClass',
+  runtimeclasses: 'RuntimeClass',
+  clusterpolicy: 'ClusterPolicy',
+  clusterpolicies: 'ClusterPolicy',
+  clustersecretstore: 'ClusterSecretStore',
+  clustersecretstores: 'ClusterSecretStore',
+  crd: 'CustomResourceDefinition',
+  crds: 'CustomResourceDefinition',
+  customresourcedefinition: 'CustomResourceDefinition',
+  pytorchjob: 'PyTorchJob',
+  pytorchjobs: 'PyTorchJob',
+  inferenceservice: 'InferenceService',
+  inferenceservices: 'InferenceService'
 };
 
-const CLUSTER_SCOPED_KINDS = new Set(['Node', 'Namespace', 'ClusterRole', 'ClusterRoleBinding', 'NodePool']);
+const CLUSTER_SCOPED_KINDS = new Set([
+  'Node',
+  'Namespace',
+  'ClusterRole',
+  'ClusterRoleBinding',
+  'NodePool',
+  'PersistentVolume',
+  'StorageClass',
+  'ValidatingWebhookConfiguration',
+  'MutatingWebhookConfiguration',
+  'RuntimeClass',
+  'ClusterPolicy',
+  'ClusterSecretStore',
+  'CustomResourceDefinition'
+]);
 
 function normalizeKind(input) {
   if (!input) return 'Pod';
@@ -125,6 +169,22 @@ function parseScalar(raw) {
   return trimmed;
 }
 
+function stripYamlComment(rawLine) {
+  let inSingle = false;
+  let inDouble = false;
+  for (let i = 0; i < rawLine.length; i++) {
+    const ch = rawLine[i];
+    if (ch === "'" && !inDouble) inSingle = !inSingle;
+    else if (ch === '"' && !inSingle) inDouble = !inDouble;
+    else if (ch === '#' && !inSingle && !inDouble) {
+      if (i === 0 || /\s/.test(rawLine[i - 1])) {
+        return rawLine.slice(0, i);
+      }
+    }
+  }
+  return rawLine;
+}
+
 function parseSimpleYamlDocument(docText) {
   const trimmed = docText.trim();
   if (!trimmed) return null;
@@ -135,7 +195,7 @@ function parseSimpleYamlDocument(docText) {
   const rawLines = docText.split(/\r?\n/);
   const lines = [];
   for (const rawLine of rawLines) {
-    const withoutComment = rawLine.replace(/\s+#.*$/, '');
+    const withoutComment = stripYamlComment(rawLine);
     if (!withoutComment.trim() || withoutComment.trim().startsWith('#')) continue;
     const indent = withoutComment.match(/^ */)[0].length;
     lines.push({ indent, text: withoutComment.trim() });
@@ -216,14 +276,15 @@ function parseSimpleYamlDocument(docText) {
       const key = line.text.slice(0, colonIdx).trim().replace(/^['"]|['"]$/g, '');
       const valPart = line.text.slice(colonIdx + 1).trim();
       i++;
-      if (valPart === '' || valPart === '|') {
-        if (valPart === '|') {
+      if (valPart === '' || valPart.startsWith('|') || valPart.startsWith('>')) {
+        if (valPart.startsWith('|') || valPart.startsWith('>')) {
+          const isFolded = valPart.startsWith('>');
           const strLines = [];
           while (i < lines.length && lines[i].indent > blockIndent) {
             strLines.push(lines[i].text);
             i++;
           }
-          obj[key] = strLines.join('\n');
+          obj[key] = isFolded ? strLines.join(' ') : strLines.join('\n');
         } else {
           const [nested, nextIdx] = parseBlock(i, blockIndent + 1);
           obj[key] = nested;
@@ -238,6 +299,46 @@ function parseSimpleYamlDocument(docText) {
 
   const [parsed] = parseBlock(0, 0);
   return parsed;
+}
+
+function evaluateJsonPath(obj, expr) {
+  if (!obj || !expr) return '';
+  let pathStr = String(expr).trim();
+  if (pathStr.startsWith('{') && pathStr.endsWith('}')) {
+    pathStr = pathStr.slice(1, -1).trim();
+  }
+  if (pathStr.startsWith('.')) pathStr = pathStr.slice(1);
+  if (!pathStr) return JSON.stringify(obj);
+
+  function resolveSegments(current, segments) {
+    if (segments.length === 0 || current === undefined || current === null) {
+      return [current];
+    }
+    const [seg, ...rest] = segments;
+    if (seg.includes('[*]')) {
+      const prop = seg.replace(/\[\*\]/g, '');
+      const arr = prop ? current[prop] : current;
+      if (!Array.isArray(arr)) return [];
+      const results = [];
+      for (const item of arr) {
+        results.push(...resolveSegments(item, rest));
+      }
+      return results;
+    }
+    const matchIndexed = seg.match(/^([^\[\]]+)\[(\d+)\]$/);
+    if (matchIndexed) {
+      const prop = matchIndexed[1];
+      const idx = Number(matchIndexed[2]);
+      const val = current[prop] ? current[prop][idx] : undefined;
+      return resolveSegments(val, rest);
+    }
+    return resolveSegments(current[seg], rest);
+  }
+
+  const segments = pathStr.split('.');
+  const results = resolveSegments(obj, segments).filter((v) => v !== undefined && v !== null);
+  if (results.length === 0) return '';
+  return results.map((r) => (typeof r === 'object' ? JSON.stringify(r) : String(r))).join(' ');
 }
 
 function parseManifests(manifestText) {
@@ -729,6 +830,49 @@ class VirtualCluster {
       };
     }
 
+    // Check CoreDNS upstream loop
+    if (pod.metadata && pod.metadata.name && pod.metadata.name.includes('coredns')) {
+      const cm = this.getResource('ConfigMap', 'coredns', 'kube-system');
+      if (cm && cm.data && cm.data.Corefile && cm.data.Corefile.includes('127.0.0.1')) {
+        return {
+          phase: 'Running',
+          reason: 'CrashLoopBackOff',
+          ready: '0/1',
+          restarts: 12,
+          message: 'plugin/loop: Loop (127.0.0.1:53 -> :53) detected in upstream nameserver'
+        };
+      }
+    }
+
+    // Check etcd member unhealthy
+    if (pod.metadata && pod.metadata.labels && pod.metadata.labels['component'] === 'etcd' && pod.metadata.labels['etcd-unhealthy'] === 'true') {
+      return {
+        phase: 'Running',
+        reason: 'CrashLoopBackOff',
+        ready: '0/1',
+        restarts: 8,
+        message: 'etcdserver: member 2 quorum loss / corrupt database snapshot'
+      };
+    }
+
+    // Check volume claim pending
+    if (spec.volumes && Array.isArray(spec.volumes)) {
+      for (const vol of spec.volumes) {
+        if (vol.persistentVolumeClaim && vol.persistentVolumeClaim.claimName) {
+          const pvc = this.getResource('PersistentVolumeClaim', vol.persistentVolumeClaim.claimName, ns);
+          if (!pvc || (pvc.status && pvc.status.phase === 'Pending')) {
+            return {
+              phase: 'Pending',
+              reason: 'ContainerCreating',
+              ready: '0/1',
+              restarts: 0,
+              message: `0/3 nodes are available: persistentvolumeclaim "${vol.persistentVolumeClaim.claimName}" is pending binding`
+            };
+          }
+        }
+      }
+    }
+
     return {
       phase: 'Running',
       reason: 'Running',
@@ -784,6 +928,81 @@ class VirtualCluster {
           metadata: { name: `${dbSvcName}-0`, namespace: ns, labels: { app: dbSvcName } },
           spec: { containers: [{ name: 'postgres', image: 'postgres:16-alpine' }] }
         });
+      }
+    }
+
+    // 2b. Reconcile DaemonSets -> Pods per eligible Node
+    const daemonSets = this.state.resources.filter((r) => r.kind === 'DaemonSet');
+    const schedulableNodes = this.state.resources.filter(
+      (r) => r.kind === 'Node' && (!r.spec || !r.spec.unschedulable)
+    );
+    for (const ds of daemonSets) {
+      const ns = (ds.metadata && ds.metadata.namespace) || 'default';
+      const name = ds.metadata.name;
+      const template = (ds.spec && ds.spec.template) || {
+        metadata: { labels: { app: name } },
+        spec: { containers: [{ name, image: 'busybox:1.36' }] }
+      };
+      for (const node of schedulableNodes) {
+        const podName = `${name}-${node.metadata.name}`;
+        const existingPod = this.getResource('Pod', podName, ns);
+        if (!existingPod) {
+          this.state.resources.push({
+            apiVersion: 'v1',
+            kind: 'Pod',
+            metadata: {
+              name: podName,
+              namespace: ns,
+              labels: { ...(template.metadata && template.metadata.labels ? template.metadata.labels : { app: name }) },
+              ownerDaemonSet: name
+            },
+            spec: JSON.parse(JSON.stringify(template.spec)),
+            status: {
+              phase: 'Running',
+              reason: 'Running',
+              podIP: this.nextPodIP(),
+              nodeName: node.metadata.name
+            }
+          });
+        }
+      }
+    }
+
+    // 2c. Reconcile PersistentVolumeClaims -> PersistentVolumes
+    const pvcs = this.state.resources.filter((r) => r.kind === 'PersistentVolumeClaim');
+    const storageClasses = this.state.resources.filter((r) => r.kind === 'StorageClass');
+    for (const pvc of pvcs) {
+      const requestedSc = pvc.spec && pvc.spec.storageClassName;
+      if (requestedSc && storageClasses.length > 0) {
+        const scExists = storageClasses.some((sc) => sc.metadata && sc.metadata.name === requestedSc);
+        if (!scExists) {
+          pvc.status = {
+            phase: 'Pending',
+            message: `waiting for a volume to be created, either by external provisioner or manually created for StorageClass "${requestedSc}"`
+          };
+          continue;
+        }
+      }
+      if (!pvc.status || pvc.status.phase !== 'Bound') {
+        const scName = requestedSc || 'standard';
+        const pvName = `pv-${pvc.metadata.name}`;
+        let pv = this.getResource('PersistentVolume', pvName);
+        if (!pv) {
+          pv = {
+            apiVersion: 'v1',
+            kind: 'PersistentVolume',
+            metadata: { name: pvName },
+            spec: {
+              storageClassName: scName,
+              capacity: (pvc.spec && pvc.spec.resources && pvc.spec.resources.requests) || { storage: '10Gi' },
+              accessModes: (pvc.spec && pvc.spec.accessModes) || ['ReadWriteOnce'],
+              claimRef: { name: pvc.metadata.name, namespace: pvc.metadata.namespace || 'default' }
+            },
+            status: { phase: 'Bound' }
+          };
+          this.state.resources.push(pv);
+        }
+        pvc.status = { phase: 'Bound', volumeName: pvName, capacity: pv.spec.capacity };
       }
     }
 
@@ -922,6 +1141,149 @@ class VirtualCluster {
     }
   }
 
+  evaluateRBAC({ user = 'kubernetes-admin', serviceAccount = null, verb = 'get', resource = 'pods', namespace = 'default' }) {
+    if (user === 'kubernetes-admin' || user === 'system:admin') {
+      return true;
+    }
+
+    const normResource = resource.toLowerCase();
+    const normVerb = verb.toLowerCase();
+
+    // 1. Check ClusterRoleBindings
+    const clusterRoleBindings = this.state.resources.filter((r) => r.kind === 'ClusterRoleBinding');
+    for (const crb of clusterRoleBindings) {
+      const subjects = crb.subjects || [];
+      const matchesSubject = subjects.some((sub) => {
+        if (serviceAccount && sub.kind === 'ServiceAccount') {
+          return sub.name === serviceAccount && (!sub.namespace || sub.namespace === namespace);
+        }
+        if (sub.kind === 'User' && sub.name === user) return true;
+        if (sub.kind === 'Group' && sub.name === 'system:masters') return true;
+        return false;
+      });
+
+      if (matchesSubject && crb.roleRef) {
+        const role = this.getResource('ClusterRole', crb.roleRef.name);
+        if (role && this.checkRoleRules(role.rules, normVerb, normResource)) {
+          return true;
+        }
+      }
+    }
+
+    // 2. Check RoleBindings in target namespace
+    const roleBindings = this.state.resources.filter(
+      (r) => r.kind === 'RoleBinding' && (r.metadata.namespace || 'default') === namespace
+    );
+    for (const rb of roleBindings) {
+      const subjects = rb.subjects || [];
+      const matchesSubject = subjects.some((sub) => {
+        if (serviceAccount && sub.kind === 'ServiceAccount') {
+          return sub.name === serviceAccount && (!sub.namespace || sub.namespace === namespace);
+        }
+        if (sub.kind === 'User' && sub.name === user) return true;
+        return false;
+      });
+
+      if (matchesSubject && rb.roleRef) {
+        const role =
+          rb.roleRef.kind === 'ClusterRole'
+            ? this.getResource('ClusterRole', rb.roleRef.name)
+            : this.getResource('Role', rb.roleRef.name, namespace);
+        if (role && this.checkRoleRules(role.rules, normVerb, normResource)) {
+          return true;
+        }
+      }
+    }
+
+    return false;
+  }
+
+  checkRoleRules(rules, verb, resource) {
+    if (!Array.isArray(rules)) return false;
+    return rules.some((rule) => {
+      const verbs = (rule.verbs || []).map((v) => v.toLowerCase());
+      const resList = (rule.resources || []).map((r) => r.toLowerCase());
+      const hasVerb = verbs.includes('*') || verbs.includes(verb);
+      const hasRes = resList.includes('*') || resList.includes(resource);
+      return hasVerb && hasRes;
+    });
+  }
+
+  cordonNode(nodeName) {
+    const node = this.getResource('Node', nodeName);
+    if (!node) throw new Error(`node "${nodeName}" not found`);
+    node.spec = node.spec || {};
+    node.spec.unschedulable = true;
+    this.reconcile();
+    return node;
+  }
+
+  uncordonNode(nodeName) {
+    const node = this.getResource('Node', nodeName);
+    if (!node) throw new Error(`node "${nodeName}" not found`);
+    if (node.spec) delete node.spec.unschedulable;
+    this.reconcile();
+    return node;
+  }
+
+  drainNode(nodeName) {
+    const node = this.cordonNode(nodeName);
+    this.state.resources = this.state.resources.filter((r) => {
+      if (r.kind !== 'Pod') return true;
+      if (r.status && r.status.nodeName === nodeName && !r.metadata.ownerDaemonSet) {
+        return false;
+      }
+      return true;
+    });
+    this.reconcile();
+    return node;
+  }
+
+  taintNode(nodeName, key, value, effect = 'NoSchedule') {
+    const node = this.getResource('Node', nodeName);
+    if (!node) throw new Error(`node "${nodeName}" not found`);
+    node.spec = node.spec || {};
+    node.spec.taints = node.spec.taints || [];
+    node.spec.taints = node.spec.taints.filter((t) => t.key !== key);
+    if (effect !== '-') {
+      node.spec.taints.push({ key, value, effect });
+    }
+    this.reconcile();
+    return node;
+  }
+
+  labelResource(kind, name, labels, namespace = 'default') {
+    const res = this.getResource(kind, name, namespace);
+    if (!res) throw new Error(`${normalizeKind(kind)} "${name}" not found`);
+    res.metadata = res.metadata || {};
+    res.metadata.labels = res.metadata.labels || {};
+    for (const [k, v] of Object.entries(labels)) {
+      if (v === null || v === '-') {
+        delete res.metadata.labels[k];
+      } else {
+        res.metadata.labels[k] = String(v);
+      }
+    }
+    this.reconcile();
+    return res;
+  }
+
+  annotateResource(kind, name, annotations, namespace = 'default') {
+    const res = this.getResource(kind, name, namespace);
+    if (!res) throw new Error(`${normalizeKind(kind)} "${name}" not found`);
+    res.metadata = res.metadata || {};
+    res.metadata.annotations = res.metadata.annotations || {};
+    for (const [k, v] of Object.entries(annotations)) {
+      if (v === null || v === '-') {
+        delete res.metadata.annotations[k];
+      } else {
+        res.metadata.annotations[k] = String(v);
+      }
+    }
+    this.reconcile();
+    return res;
+  }
+
   recordEvent(kind, name, namespace, type, reason, message) {
     this.state.events.push({
       timestamp: new Date().toISOString(),
@@ -942,6 +1304,7 @@ module.exports = {
   VirtualCluster,
   parseManifests,
   parseSimpleYamlDocument,
+  evaluateJsonPath,
   normalizeKind,
   getFieldByPath,
   CLUSTER_SCOPED_KINDS

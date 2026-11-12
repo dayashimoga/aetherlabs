@@ -1,0 +1,218 @@
+{
+  "id": "cloud-native-aiml-kserve",
+  "title": "26. Cloud-Native AI/ML & High-Performance Model Serving",
+  "category": "AI/ML & High-Performance Computing",
+  "trackId": "track-multicloud-aiops",
+  "version": "1.0.0",
+  "difficulty": "Advanced",
+  "estimatedHours": 10,
+  "summary": "Orchestrate distributed deep learning workloads with Kubeflow Training Operator (PyTorchJob) and deploy auto-scaling, low-latency LLM inference pipelines with KServe, Ray, and NVIDIA Triton.",
+  "prerequisites": [
+    "Kubernetes Custom Resource Definitions (CRDs)",
+    "Container resource requests, limits and GPU scheduling",
+    "Horizontal Pod Autoscaling (HPA) and Prometheus metrics"
+  ],
+  "learningObjectives": [
+    "Schedule and monitor distributed multi-worker training jobs using Kubeflow PyTorchJob CRD",
+    "Deploy serverless, high-throughput model inference using KServe InferenceService with vLLM runtimes",
+    "Configure GPU device plugins, node selectors, tolerations, and resource requests for accelerated compute pods",
+    "Scale inference workloads dynamically based on concurrency and queue depth metrics"
+  ],
+  "curriculumModules": [
+    {
+      "id": "mod-aiml-01",
+      "title": "Kubeflow Training Operator & Distributed PyTorchJob",
+      "conceptSummary": "Distributed training synchronizes gradients across multiple worker nodes using PyTorch DDP (Distributed Data Parallel) and NCCL. Kubeflow Training Operator coordinates master/worker lifecycle, environment variables, and master service discovery.",
+      "productionArchitecturePattern": "Multi-node distributed LLM fine-tuning using PyTorchJob with RDMA/InfiniBand networking and persistent checkpoint storage via Ceph/EFS.",
+      "keyCommands": [
+        "kubectl get pytorchjobs -A",
+        "kubectl describe pytorchjob <name>",
+        "kubectl logs -l training.kubeflow.org/job-name=<name>"
+      ]
+    },
+    {
+      "id": "mod-aiml-02",
+      "title": "KServe Serverless Model Serving & Hardware Acceleration",
+      "conceptSummary": "KServe provides serverless model serving with standardized v2 data plane protocols, scale-to-zero, canary rollouts, and multi-model serving. Integrated with vLLM, HuggingFace, and Triton Inference Server.",
+      "productionArchitecturePattern": "InferenceService deployed on GPU node pool with KServe vLLM predictor, PagedAttention cache, and Knative-based auto-scaling.",
+      "keyCommands": [
+        "kubectl get inferenceservices -A",
+        "kubectl describe inferenceservice <name>",
+        "kubectl get ksvc -A"
+      ]
+    }
+  ],
+  "labs": [
+    {
+      "id": "lab-aiml-01",
+      "title": "Distributed Model Training with Kubeflow PyTorchJob",
+      "difficulty": "Advanced",
+      "durationMinutes": 35,
+      "xpReward": 250,
+      "scenario": "A data science team requires a distributed training run for a BERT NLP model across 1 master node and 2 distributed worker nodes. Deploy a Kubeflow PyTorchJob custom resource in the kubeflow namespace.",
+      "productionContext": "Kubeflow PyTorchJob automatically provisions master and worker pods, injects MASTER_ADDR and MASTER_PORT environment variables, and manages distributed training checkpoints.",
+      "prerequisites": ["Kubeflow", "CRDs"],
+      "objectives": [
+        "Create the kubeflow namespace",
+        "Deploy a PyTorchJob named bert-pretrain in the kubeflow namespace",
+        "Configure Master replica count to 1 and Worker replica count to 2",
+        "Verify the PyTorchJob resource creation"
+      ],
+      "initialClusterState": {
+        "resources": [
+          {
+            "apiVersion": "v1",
+            "kind": "Namespace",
+            "metadata": { "name": "kubeflow" }
+          }
+        ]
+      },
+      "starterManifest": "apiVersion: kubeflow.org/v1\nkind: PyTorchJob\nmetadata:\n  name: bert-pretrain\n  namespace: kubeflow\nspec:\n  pytorchReplicaSpecs:\n    Master:\n      replicas: 1\n      restartPolicy: OnFailure\n      template:\n        spec:\n          containers:\n            - name: pytorch\n              image: kubeflow/pytorch-dist-mnist:v1.0\n              resources:\n                requests:\n                  cpu: \"1000m\"\n                  memory: \"2Gi\"\n    Worker:\n      replicas: 2\n      restartPolicy: OnFailure\n      template:\n        spec:\n          containers:\n            - name: pytorch\n              image: kubeflow/pytorch-dist-mnist:v1.0\n              resources:\n                requests:\n                  cpu: \"1000m\"\n                  memory: \"2Gi\"\n",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Examine PyTorchJob Specification",
+          "instruction": "Open the Manifest Editor to review the PyTorchJob manifest with 1 Master and 2 Worker replicas.",
+          "commandHint": "cat /etc/hosts"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Deploy PyTorchJob",
+          "instruction": "Apply the manifest to launch the distributed training run.",
+          "commandHint": "kubectl apply -f manifest.yaml"
+        },
+        {
+          "stepNumber": 3,
+          "title": "Inspect Training Job",
+          "instruction": "Verify that the PyTorchJob is recognized by the Kubernetes API.",
+          "commandHint": "kubectl get pytorchjob bert-pretrain -n kubeflow"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "val-aiml-01-job",
+          "description": "PyTorchJob bert-pretrain exists in namespace kubeflow",
+          "type": "resource_exists",
+          "kind": "PyTorchJob",
+          "name": "bert-pretrain",
+          "namespace": "kubeflow",
+          "remediation": "Deploy PyTorchJob bert-pretrain in namespace kubeflow."
+        },
+        {
+          "id": "val-aiml-01-workers",
+          "description": "PyTorchJob bert-pretrain has 2 worker replicas configured",
+          "type": "resource_field_equals",
+          "kind": "PyTorchJob",
+          "name": "bert-pretrain",
+          "namespace": "kubeflow",
+          "fieldPath": "spec.pytorchReplicaSpecs.Worker.replicas",
+          "expectedValue": 2,
+          "remediation": "Ensure spec.pytorchReplicaSpecs.Worker.replicas is set to 2."
+        }
+      ],
+      "solutionCommands": [
+        "kubectl apply -f manifest.yaml"
+      ],
+      "troubleshootingGuide": "Ensure namespace is kubeflow and worker replica count equals 2."
+    },
+    {
+      "id": "lab-aiml-02",
+      "title": "High-Throughput LLM Serving with KServe InferenceService",
+      "difficulty": "Advanced",
+      "durationMinutes": 40,
+      "xpReward": 300,
+      "scenario": "Deploy a high-concurrency LLM inference service using KServe InferenceService with vLLM runtime, minReplicas: 1, and maxReplicas: 5 in the kserve-test namespace.",
+      "productionContext": "KServe decouples model serving infrastructure from client APIs, supporting serverless auto-scaling and GPU hardware acceleration.",
+      "prerequisites": ["KServe", "InferenceService"],
+      "objectives": [
+        "Create the kserve-test namespace",
+        "Deploy InferenceService llama-summarizer in kserve-test",
+        "Configure minReplicas: 1 and maxReplicas: 5 under predictor",
+        "Verify InferenceService resource creation"
+      ],
+      "initialClusterState": {
+        "resources": [
+          {
+            "apiVersion": "v1",
+            "kind": "Namespace",
+            "metadata": { "name": "kserve-test" }
+          }
+        ]
+      },
+      "starterManifest": "apiVersion: serving.kserve.io/v1beta1\nkind: InferenceService\nmetadata:\n  name: llama-summarizer\n  namespace: kserve-test\nspec:\n  predictor:\n    minReplicas: 1\n    maxReplicas: 5\n    model:\n      modelFormat:\n        name: vLLM\n      storageUri: \"s3://kubelabs-models/llama-3-8b-instruct\"\n      resources:\n        requests:\n          cpu: \"2\"\n          memory: \"8Gi\"\n",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Review KServe InferenceService Spec",
+          "instruction": "Open the Manifest Editor to check the KServe InferenceService spec.",
+          "commandHint": "cat /etc/hosts"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Deploy InferenceService",
+          "instruction": "Apply the manifest to create the inference service.",
+          "commandHint": "kubectl apply -f manifest.yaml"
+        },
+        {
+          "stepNumber": 3,
+          "title": "Verify Inference Endpoint",
+          "instruction": "Inspect the created InferenceService resource.",
+          "commandHint": "kubectl get inferenceservice llama-summarizer -n kserve-test"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "val-aiml-02-isvc",
+          "description": "InferenceService llama-summarizer exists in namespace kserve-test",
+          "type": "resource_exists",
+          "kind": "InferenceService",
+          "name": "llama-summarizer",
+          "namespace": "kserve-test",
+          "remediation": "Deploy InferenceService llama-summarizer in namespace kserve-test."
+        },
+        {
+          "id": "val-aiml-02-minrep",
+          "description": "InferenceService has predictor minReplicas equal to 1",
+          "type": "resource_field_equals",
+          "kind": "InferenceService",
+          "name": "llama-summarizer",
+          "namespace": "kserve-test",
+          "fieldPath": "spec.predictor.minReplicas",
+          "expectedValue": 1,
+          "remediation": "Ensure spec.predictor.minReplicas is set to 1."
+        }
+      ],
+      "solutionCommands": [
+        "kubectl apply -f manifest.yaml"
+      ],
+      "troubleshootingGuide": "Verify kind is InferenceService and spec.predictor.minReplicas is set to 1."
+    }
+  ],
+  "assessmentQuestions": [
+    {
+      "id": "q-aiml-01",
+      "question": "How does the Kubeflow Training Operator coordinate distributed PyTorch workers?",
+      "options": [
+        "By automatically configuring MASTER_ADDR and MASTER_PORT environment variables and establishing cluster service discovery for the master pod",
+        "By restarting the cluster after each epoch",
+        "By forcing all workers to write directly to a shared USB drive",
+        "By executing single-threaded python scripts sequentially"
+      ],
+      "correctIndex": 0,
+      "explanation": "Kubeflow Training Operator provisions the Master headless service and injects the network coordinates (MASTER_ADDR/PORT) into all worker containers."
+    },
+    {
+      "id": "q-aiml-02",
+      "question": "What is the primary benefit of KServe InferenceService over standard Kubernetes Deployments for ML serving?",
+      "options": [
+        "Standardized v2 inference protocol, hardware acceleration integration, serverless scale-to-zero, and request-queue-based autoscaling",
+        "It eliminates the need for containers",
+        "It forces models to run only on CPU",
+        "It prevents all incoming HTTP traffic"
+      ],
+      "correctIndex": 0,
+      "explanation": "KServe abstracts model loading, GPU memory allocation, batching (e.g. vLLM PagedAttention), and auto-scaling based on real-time inference request queues."
+    }
+  ]
+}
+

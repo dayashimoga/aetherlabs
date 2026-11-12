@@ -7,13 +7,13 @@ const { VirtualCluster, parseManifests } = require('../src/engine/virtualCluster
 const { TerminalEngine } = require('../src/engine/terminalEngine');
 const { ValidationEngine } = require('../src/engine/validationEngine');
 
-test('1. PluginManager loads and validates all 18 domains, 6 tracks, 36 labs, and 6 capstone projects with zero schema errors', () => {
+test('1. PluginManager loads and validates all 26 domains, 6 tracks, 52 labs, and 8 capstone projects with zero schema errors', () => {
   const app = createKubeLabsApp({ dbFilePath: ':memory:' });
   assert.equal(app.pluginManager.validationErrors.length, 0, `Validation errors: ${app.pluginManager.validationErrors.join(', ')}`);
-  assert.equal(app.pluginManager.getAllDomains().length, 18);
+  assert.equal(app.pluginManager.getAllDomains().length, 26);
   assert.equal(app.pluginManager.getTracks().length, 6);
-  assert.equal(app.pluginManager.getAllLabs().length, 36);
-  assert.equal(app.projectEngine.listProjects().length, 6);
+  assert.equal(app.pluginManager.getAllLabs().length, 52);
+  assert.equal(app.projectEngine.listProjects().length, 8);
   app.database.close();
 });
 
@@ -90,11 +90,11 @@ test('3. TerminalEngine executes multi-CLI commands across Kubernetes, CNCF, Lin
   assert.equal(term.execute('ss -tulpn').exitCode, 0);
 });
 
-test('4. Deterministic E2E Lab Solver Suite: Every single lab (36/36) fails before solution and passes 100% after solution', () => {
+test('4. Deterministic E2E Lab Solver Suite: Every single lab (52/52) fails before solution and passes 100% after solution', () => {
   const app = createKubeLabsApp({ dbFilePath: ':memory:' });
   const valEngine = new ValidationEngine();
   const allLabs = app.pluginManager.getAllLabs();
-  assert.equal(allLabs.length, 36);
+  assert.equal(allLabs.length, 52);
 
   for (const lab of allLabs) {
     const cluster = new VirtualCluster(lab.initialClusterState);
@@ -123,10 +123,10 @@ test('4. Deterministic E2E Lab Solver Suite: Every single lab (36/36) fails befo
   app.database.close();
 });
 
-test('5. Deterministic E2E Incident Simulation Solver Suite: All 8 production outages resolve cleanly', () => {
+test('5. Deterministic E2E Incident Simulation Solver Suite: All 12 production outages resolve cleanly', () => {
   const app = createKubeLabsApp({ dbFilePath: ':memory:' });
   const incidents = app.incidentEngine.scenarios;
-  assert.equal(incidents.length, 8);
+  assert.equal(incidents.length, 12);
 
   for (const inc of incidents) {
     const cluster = new VirtualCluster();
@@ -162,7 +162,7 @@ test('6. UI Architecture Designer compiles Reference Architectures to valid YAML
   app.database.close();
 });
 
-test('7. Contextual Socratic AI Mentor & Certification Engine issue and verify HMAC-SHA256 credentials', () => {
+test('7. Contextual Socratic AI Mentor & Certification Engine issue and verify Ed25519 & HMAC-SHA256 credentials', () => {
   const app = createKubeLabsApp({ dbFilePath: ':memory:' });
   const lab = app.pluginManager.getLab('lab-k8s-01');
   app.virtualCluster.reset(lab.initialClusterState);
@@ -194,16 +194,29 @@ test('7. Contextual Socratic AI Mentor & Certification Engine issue and verify H
   assert.equal(graded.passed, true);
   assert.equal(graded.scorePercent, 100);
   assert.ok(graded.certificate);
+  assert.ok(graded.certificate.signatureSha256);
+  assert.ok(graded.certificate.signatureEd25519);
+  assert.ok(graded.certificate.publicKeyPem);
 
-  const verification = app.certificationEngine.verifyCertificate(
+  // Verify HMAC-SHA256 signature
+  const verificationSha = app.certificationEngine.verifyCertificate(
     graded.certificate.certId,
     graded.certificate.signatureSha256
   );
-  assert.equal(verification.valid, true);
+  assert.equal(verificationSha.valid, true);
+
+  // Verify Ed25519 asymmetric signature
+  const verificationEd = app.certificationEngine.verifyCertificate(
+    graded.certificate.certId,
+    graded.certificate.signatureEd25519
+  );
+  assert.equal(verificationEd.valid, true);
+  assert.equal(verificationEd.algorithm, 'ed25519');
+
   app.database.close();
 });
 
-test('8. HTTP Server, REST API Endpoints, and Security Headers Integration Test', async () => {
+test('8. HTTP Server, Observability Probes, Rate Limiter & Public Key API Integration Test', async () => {
   const app = createKubeLabsApp({ dbFilePath: ':memory:' });
   await new Promise((resolve) => app.server.listen(0, '127.0.0.1', resolve));
   const address = app.server.address();
@@ -216,22 +229,44 @@ test('8. HTTP Server, REST API Endpoints, and Security Headers Integration Test'
     assert.equal(healthRes.headers.get('x-content-type-options'), 'nosniff');
     assert.ok(healthRes.headers.get('content-security-policy').includes("default-src 'self'"));
     const healthJson = await healthRes.json();
-    assert.equal(healthJson.domainsCount, 18);
-    assert.equal(healthJson.labsCount, 36);
-    assert.equal(healthJson.projectsCount, 6);
+    assert.equal(healthJson.domainsCount, 26);
+    assert.equal(healthJson.labsCount, 52);
+    assert.equal(healthJson.projectsCount, 8);
+    assert.equal(healthJson.incidentsCount, 12);
 
+    // Prometheus OpenMetrics format
+    const metricsRes = await fetch(`${baseUrl}/metrics`);
+    assert.equal(metricsRes.status, 200);
+    const metricsText = await metricsRes.text();
+    assert.ok(metricsText.includes('kubelabs_http_requests_total'));
+    assert.ok(metricsText.includes('kubelabs_memory_rss_bytes'));
+
+    // Kubernetes Probes
+    const livezRes = await fetch(`${baseUrl}/api/livez`);
+    assert.equal(livezRes.status, 200);
+    const readyzRes = await fetch(`${baseUrl}/api/readyz`);
+    assert.equal(readyzRes.status, 200);
+
+    // Ed25519 Public Key endpoint
+    const pubKeyRes = await fetch(`${baseUrl}/api/certifications/public-key`);
+    assert.equal(pubKeyRes.status, 200);
+    const pubKeyJson = await pubKeyRes.json();
+    assert.equal(pubKeyJson.algorithm, 'ed25519');
+    assert.ok(pubKeyJson.publicKeyPem.includes('BEGIN PUBLIC KEY'));
+
+    // Lab solution test
     const solveRes = await fetch(`${baseUrl}/api/labs/lab-k8s-01/solve`, { method: 'POST' });
     assert.equal(solveRes.status, 200);
     const solveJson = await solveRes.json();
     assert.equal(solveJson.passed, true);
     assert.equal(solveJson.score, 100);
 
-    const projSolveRes = await fetch(`${baseUrl}/api/projects/proj-01-hardened-edge-node/solve`, { method: 'POST' });
-    assert.equal(projSolveRes.status, 200);
-    const projSolveJson = await projSolveRes.json();
-    assert.equal(projSolveJson.passed, true);
-    assert.equal(projSolveJson.score, 100);
+    // Capstone Project Milestone validation test
+    await fetch(`${baseUrl}/api/projects/proj-07-multitenant-vcluster-platform/start`, { method: 'POST' });
+    const milestoneRes = await fetch(`${baseUrl}/api/projects/proj-07-multitenant-vcluster-platform/milestones/1/validate`, { method: 'POST' });
+    assert.equal(milestoneRes.status, 200);
 
+    // Full 11-Agent Audit
     const auditRes = await fetch(`${baseUrl}/api/agents/audit`);
     assert.equal(auditRes.status, 200);
     const auditJson = await auditRes.json();

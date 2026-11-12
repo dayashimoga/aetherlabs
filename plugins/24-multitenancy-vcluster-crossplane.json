@@ -1,0 +1,210 @@
+{
+  "id": "multitenancy-vcluster-crossplane",
+  "title": "24. Multi-Tenancy, vCluster & Crossplane",
+  "category": "Platform Engineering & Control Planes",
+  "trackId": "track-platform",
+  "version": "1.0.0",
+  "difficulty": "Principal",
+  "estimatedHours": 8,
+  "summary": "Build enterprise-scale internal developer platforms using hard multi-tenancy (ResourceQuotas, LimitRanges, vCluster virtual clusters) and universal cloud control planes with Crossplane.",
+  "prerequisites": [
+    "Kubernetes RBAC and Namespaces",
+    "Custom Resource Definitions (CRDs) and Operators",
+    "Terraform or cloud infrastructure provisioning"
+  ],
+  "learningObjectives": [
+    "Enforce strict compute, memory, and storage boundaries with ResourceQuotas and LimitRanges",
+    "Deploy and manage lightweight virtual Kubernetes clusters (vCluster) inside single namespaces",
+    "Define Crossplane Composite Resource Definitions (XRD) and Compositions for self-service cloud infrastructure",
+    "Decouple developer APIs from underlying cloud provider implementations"
+  ],
+  "curriculumModules": [
+    {
+      "id": "mod-mt-01",
+      "title": "Hard Multi-Tenancy & Virtual Clusters (vCluster)",
+      "conceptSummary": "Namespaces provide soft multi-tenancy. vCluster creates dedicated virtual control planes (API Server, Controller Manager, storage) inside host namespaces, giving tenants full cluster-admin rights without security compromises.",
+      "productionArchitecturePattern": "Multi-tenant developer environments where each engineering squad owns an isolated vCluster with dedicated CRDs.",
+      "keyCommands": [
+        "vcluster create <name> -n <namespace>",
+        "vcluster list",
+        "vcluster connect <name>"
+      ]
+    },
+    {
+      "id": "mod-mt-02",
+      "title": "Crossplane: The Universal Cloud Control Plane",
+      "conceptSummary": "Crossplane extends the Kubernetes API to manage any cloud or on-prem resource. Through XRDs and Compositions, platform teams publish simplified abstractions (e.g. PostgresInstance) that developers consume via GitOps.",
+      "productionArchitecturePattern": "Internal Developer Platform (IDP) vending self-service AWS RDS, Azure SQL, and GCP CloudSQL through standard Kubernetes claims.",
+      "keyCommands": [
+        "kubectl get compositeresourcedefinitions",
+        "kubectl get compositions",
+        "crossplane beta trace <claim>"
+      ]
+    }
+  ],
+  "labs": [
+    {
+      "id": "lab-mt-01",
+      "title": "Hard Multi-Tenancy with ResourceQuota, LimitRange & vCluster",
+      "difficulty": "Advanced",
+      "durationMinutes": 35,
+      "xpReward": 250,
+      "scenario": "A new product engineering team requires dedicated compute quotas and an isolated virtual cluster. Deploy a ResourceQuota, LimitRange, and spin up a vCluster for tenant-alpha.",
+      "productionContext": "ResourceQuotas prevent a single rogue tenant or memory leak from starving cluster-wide resources.",
+      "prerequisites": ["Namespaces", "ResourceQuota"],
+      "objectives": [
+        "Create namespace tenant-alpha with a ResourceQuota capping CPU to 4 and memory to 8Gi",
+        "Create a LimitRange establishing default container requests and limits",
+        "Provision a virtual cluster using vcluster create tenant-alpha"
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "apiVersion: v1\nkind: Namespace\nmetadata:\n  name: tenant-alpha\n---\napiVersion: v1\nkind: ResourceQuota\nmetadata:\n  name: compute-quota\n  namespace: tenant-alpha\nspec:\n  hard:\n    requests.cpu: \"4\"\n    requests.memory: 8Gi\n    limits.cpu: \"8\"\n    limits.memory: 16Gi\n    pods: \"20\"\n---\napiVersion: v1\nkind: LimitRange\nmetadata:\n  name: container-limits\n  namespace: tenant-alpha\nspec:\n  limits:\n    - type: Container\n      default:\n        cpu: 500m\n        memory: 512Mi\n      defaultRequest:\n        cpu: 100m\n        memory: 128Mi\n",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Apply Multi-Tenant Quotas & Limits",
+          "instruction": "Deploy the Namespace, ResourceQuota, and LimitRange from the Manifest Editor.",
+          "commandHint": "kubectl apply -f manifest.yaml"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Provision Virtual Cluster",
+          "instruction": "Create the tenant-alpha virtual cluster using the vcluster CLI.",
+          "commandHint": "vcluster create tenant-alpha"
+        },
+        {
+          "stepNumber": 3,
+          "title": "Verify Virtual Clusters",
+          "instruction": "List active virtual clusters.",
+          "commandHint": "vcluster list"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "val-mt-01-quota",
+          "description": "ResourceQuota compute-quota exists in tenant-alpha with 20 max pods",
+          "type": "resource_field_equals",
+          "kind": "ResourceQuota",
+          "name": "compute-quota",
+          "namespace": "tenant-alpha",
+          "fieldPath": "spec.hard.pods",
+          "expectedValue": "20",
+          "remediation": "Deploy ResourceQuota compute-quota in tenant-alpha with spec.hard.pods: '20'."
+        },
+        {
+          "id": "val-mt-01-vcluster",
+          "description": "vcluster create command was executed for tenant-alpha",
+          "type": "command_executed",
+          "commandSubstring": "vcluster create",
+          "remediation": "Execute 'vcluster create tenant-alpha' in the terminal."
+        }
+      ],
+      "solutionCommands": [
+        "kubectl apply -f manifest.yaml",
+        "vcluster create tenant-alpha",
+        "vcluster list"
+      ],
+      "troubleshootingGuide": "Confirm that pods: '20' is set in the ResourceQuota spec.hard map."
+    },
+    {
+      "id": "lab-mt-02",
+      "title": "Crossplane Composite Resource Platform Provisioning",
+      "difficulty": "Principal",
+      "durationMinutes": 40,
+      "xpReward": 300,
+      "scenario": "As a Platform Engineer, publish an enterprise PostgreSQL claim abstraction. Deploy a Crossplane PostgresInstance composite resource claim and verify its automated infrastructure provisioning.",
+      "productionContext": "Crossplane transforms Kubernetes into a control plane for multi-cloud infrastructure, eliminating custom Terraform wrapper scripts.",
+      "prerequisites": ["Crossplane", "CRDs"],
+      "objectives": [
+        "Deploy a PostgresInstance custom claim named fintech-payment-db",
+        "Configure storage to 50Gi and high availability parameters",
+        "Verify status and trace the composition using crossplane beta trace"
+      ],
+      "initialClusterState": {
+        "resources": [
+          {
+            "apiVersion": "v1",
+            "kind": "Namespace",
+            "metadata": { "name": "production" }
+          }
+        ]
+      },
+      "starterManifest": "apiVersion: database.platform.kubelabs.io/v1alpha1\nkind: PostgresInstance\nmetadata:\n  name: fintech-payment-db\n  namespace: production\nspec:\n  parameters:\n    storageGB: 50\n    engineVersion: \"16.2\"\n    highAvailability: true\n  compositionSelector:\n    matchLabels:\n      provider: aws-rds\n",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Review Crossplane Claim Manifest",
+          "instruction": "Open the Manifest Editor to inspect the PostgresInstance claim.",
+          "commandHint": "cat /etc/hosts"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Deploy PostgresInstance Claim",
+          "instruction": "Apply the claim to the production namespace.",
+          "commandHint": "kubectl apply -f manifest.yaml"
+        },
+        {
+          "stepNumber": 3,
+          "title": "Trace Crossplane Provisioning",
+          "instruction": "Run crossplane beta trace to verify managed infrastructure reconciliation.",
+          "commandHint": "crossplane beta trace PostgresInstance/fintech-payment-db"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "val-mt-02-claim",
+          "description": "PostgresInstance fintech-payment-db exists in production",
+          "type": "resource_exists",
+          "kind": "PostgresInstance",
+          "name": "fintech-payment-db",
+          "namespace": "production",
+          "remediation": "Apply the starter manifest to create PostgresInstance fintech-payment-db."
+        },
+        {
+          "id": "val-mt-02-ha",
+          "description": "PostgresInstance has highAvailability: true configured",
+          "type": "resource_field_equals",
+          "kind": "PostgresInstance",
+          "name": "fintech-payment-db",
+          "namespace": "production",
+          "fieldPath": "spec.parameters.highAvailability",
+          "expectedValue": true,
+          "remediation": "Ensure spec.parameters.highAvailability is set to true in the manifest."
+        }
+      ],
+      "solutionCommands": [
+        "kubectl apply -f manifest.yaml",
+        "crossplane beta trace PostgresInstance/fintech-payment-db"
+      ],
+      "troubleshootingGuide": "Confirm that provider is set to 'aws-rds' in the compositionSelector."
+    }
+  ],
+  "assessmentQuestions": [
+    {
+      "id": "q-mt-01",
+      "question": "What is the primary architectural difference between a Kubernetes namespace and a vCluster?",
+      "options": [
+        "Namespaces share the host API server and etcd; vCluster provides an isolated virtual control plane with its own API server and CRDs inside a namespace",
+        "Namespaces require dedicated physical hardware; vCluster is pure software",
+        "vCluster only runs on bare-metal servers",
+        "Namespaces cannot run stateful applications"
+      ],
+      "correctIndex": 0,
+      "explanation": "vCluster creates an in-cluster virtual control plane that gives tenants independent API servers and custom resources without cluster-admin risk on the host."
+    },
+    {
+      "id": "q-mt-02",
+      "question": "In Crossplane architecture, what is the role of a Composite Resource Definition (XRD)?",
+      "options": [
+        "It defines the custom API schema and type for an abstracted platform service (e.g. DatabaseInstance)",
+        "It replaces the Linux kernel on worker nodes",
+        "It backs up logs to tape storage",
+        "It encrypts git commit messages"
+      ],
+      "correctIndex": 0,
+      "explanation": "An XRD defines the declarative OpenAPI schema for a composite resource that developers consume as a simplified cloud abstraction."
+    }
+  ]
+}

@@ -1,0 +1,66 @@
+# KubeLabs Helm Chart Values (v2.0.0)
+replicaCount: 2
+
+image:
+  repository: ghcr.io/kubelabs-io/kubelabs
+  pullPolicy: IfNotPresent
+  tag: "2.0.0"
+
+serviceAccount:
+  create: true
+  name: "kubelabs-sa"
+  automountServiceAccountToken: false
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 4100
+  sessionAffinity: ClientIP
+  timeoutSeconds: 10800
+
+ingress:
+  enabled: true
+  className: "cilium"
+  host: learn.kubelabs.internal
+  path: /
+  tls: []
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 64Mi
+  limits:
+    cpu: 500m
+    memory: 150Mi
+
+persistence:
+  enabled: true
+  accessMode: ReadWriteOnce
+  size: 2Gi
+  storageClass: ""
+
+probes:
+  liveness:
+    path: /api/livez
+    initialDelaySeconds: 5
+    periodSeconds: 15
+  readiness:
+    path: /api/readyz
+    initialDelaySeconds: 3
+    periodSeconds: 10
+

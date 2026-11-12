@@ -450,6 +450,99 @@ body {
   font-size: 0.82rem;
 }
 
+/* Light Theme */
+[data-theme="light"] {
+  --bg-primary: #f8fafc;
+  --bg-secondary: #ffffff;
+  --bg-card: #f1f5f9;
+  --bg-elevated: #e2e8f0;
+  --bg-terminal: #0f172a;
+  --border-subtle: #cbd5e1;
+  --border-focus: #0284c7;
+  --text-primary: #0f172a;
+  --text-secondary: #334155;
+  --text-muted: #64748b;
+}
+
+/* High Contrast Theme */
+[data-theme="high-contrast"] {
+  --bg-primary: #000000;
+  --bg-secondary: #000000;
+  --bg-card: #0a0a0a;
+  --bg-elevated: #141414;
+  --bg-terminal: #000000;
+  --border-subtle: #ffffff;
+  --border-focus: #ffff00;
+  --text-primary: #ffffff;
+  --text-secondary: #ffffff;
+  --text-muted: #e5e5e5;
+  --accent-blue: #00ffff;
+  --accent-green: #00ff00;
+  --accent-amber: #ffff00;
+  --accent-red: #ff3333;
+  --accent-purple: #ff00ff;
+}
+
+/* SVG Topology Graph */
+.topology-svg {
+  width: 100%;
+  height: 170px;
+  background: var(--bg-terminal);
+  border-radius: 6px;
+  border: 1px solid var(--border-subtle);
+  display: block;
+}
+
+.topology-node {
+  cursor: pointer;
+  transition: transform 0.15s ease;
+}
+
+.topology-node:hover {
+  filter: brightness(1.2);
+}
+
+.topology-link {
+  stroke: var(--accent-blue);
+  stroke-width: 1.5;
+  stroke-dasharray: 4;
+  animation: topologyFlow 20s linear infinite;
+}
+
+@keyframes topologyFlow {
+  from { stroke-dashoffset: 100; }
+  to { stroke-dashoffset: 0; }
+}
+
+/* Milestone Progress Tracker */
+.milestone-stepper {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 0.75rem 0;
+}
+
+.milestone-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  padding: 0.65rem 0.85rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.milestone-card.completed {
+  border-color: var(--accent-green);
+  background: rgba(16, 185, 129, 0.08);
+}
+
+.milestone-card.active {
+  border-color: var(--accent-blue);
+  box-shadow: 0 0 0 1px var(--accent-blue);
+}
+
 /* Responsive Breakpoints */
 @media (max-width: 1200px) {
   .workbench-layout {

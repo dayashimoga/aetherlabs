@@ -515,6 +515,262 @@ const INCIDENT_SCENARIOS = [
       'kubectl create networkpolicy ledger-db-isolation -n production',
       'kubectl patch networkpolicy ledger-db-isolation -n production -p \'{"spec":{"podSelector":{"matchLabels":{"app":"ledger-db"}},"policyTypes":["Ingress"]}}\''
     ]
+  },
+  {
+    id: 'inc-09-etcd-quorum-loss',
+    title: 'SEV-1: etcd Quorum Loss & Control Plane Degradation',
+    severity: 'SEV-1 (P0)',
+    domainId: 'k8s-control-plane-lifecycle',
+    estimatedMttrMinutes: 12,
+    xpReward: 350,
+    alertSummary: 'Prometheus Alert: etcdMemberUnhealthy: member etcd-2 quorum loss / corrupt snapshot database.',
+    customerImpact: 'Kube-apiserver mutating webhooks and updates timing out; cluster in read-only degraded state.',
+    symptoms: [
+      '`kubectl get pods -n kube-system` shows `etcd-2` in CrashLoopBackOff with corrupt database snapshot.',
+      '`etcdctl endpoint health` reports split-brain risk with only 2/3 voting members.'
+    ],
+    diagnosticHints: [
+      'Restore the verified uncorrupted backup using `etcdctl snapshot restore /backup/etcd-snapshot.db`.'
+    ],
+    initialClusterState: {
+      resources: [
+        {
+          apiVersion: 'v1',
+          kind: 'Pod',
+          metadata: { name: 'etcd-0', namespace: 'kube-system', labels: { component: 'etcd', tier: 'control-plane' } },
+          spec: { containers: [{ name: 'etcd', image: 'registry.k8s.io/etcd:3.5.15-0' }] }
+        },
+        {
+          apiVersion: 'v1',
+          kind: 'Pod',
+          metadata: { name: 'etcd-1', namespace: 'kube-system', labels: { component: 'etcd', tier: 'control-plane' } },
+          spec: { containers: [{ name: 'etcd', image: 'registry.k8s.io/etcd:3.5.15-0' }] }
+        },
+        {
+          apiVersion: 'v1',
+          kind: 'Pod',
+          metadata: {
+            name: 'etcd-2',
+            namespace: 'kube-system',
+            labels: { component: 'etcd', tier: 'control-plane', 'etcd-unhealthy': 'true' }
+          },
+          spec: { containers: [{ name: 'etcd', image: 'registry.k8s.io/etcd:3.5.15-0' }] }
+        }
+      ]
+    },
+    validationRules: [
+      {
+        id: 'inc-09-r1',
+        description: 'etcd-2 member restored and healthy in namespace kube-system',
+        type: 'pod_status_running',
+        kind: 'Pod',
+        name: 'etcd-2',
+        namespace: 'kube-system',
+        remediation: 'Execute etcdctl snapshot restore /backup/etcd-snapshot.db to restore corrupted member.'
+      },
+      {
+        id: 'inc-09-r2',
+        description: 'Command etcdctl snapshot restore executed',
+        type: 'command_executed',
+        pattern: 'etcdctl snapshot restore',
+        remediation: 'Run etcdctl snapshot restore /backup/etcd-snapshot.db.'
+      }
+    ],
+    solutionCommands: [
+      'etcdctl snapshot restore /backup/etcd-snapshot.db'
+    ]
+  },
+  {
+    id: 'inc-10-kyverno-admission-block',
+    title: 'SEV-1: Kyverno Webhook Blocking All Production Deployments',
+    severity: 'SEV-1 (P0)',
+    domainId: 'policy-as-code-kyverno',
+    estimatedMttrMinutes: 10,
+    xpReward: 300,
+    alertSummary: 'PagerDuty Alert: Internal error occurred: admission webhook "validate.kyverno.svc" failed to call webhook.',
+    customerImpact: 'All engineering teams blocked from deploying emergency hotfixes or rollouts.',
+    symptoms: [
+      'Admission webhooks configured with failurePolicy: Fail while webhook service is degraded.',
+      'Any kubectl apply returns error contacting Kyverno admission controller.'
+    ],
+    diagnosticHints: [
+      'Inspect ValidatingWebhookConfiguration named kyverno-resource-validating-webhook-cfg.',
+      'Patch failurePolicy from Fail to Ignore to unblock critical production rollouts during webhook outage.'
+    ],
+    initialClusterState: {
+      resources: [
+        {
+          apiVersion: 'admissionregistration.k8s.io/v1',
+          kind: 'ValidatingWebhookConfiguration',
+          metadata: { name: 'kyverno-resource-validating-webhook-cfg' },
+          webhooks: [
+            {
+              name: 'validate.kyverno.svc',
+              failurePolicy: 'Fail',
+              rules: [{ operations: ['CREATE', 'UPDATE'], apiGroups: ['*'], apiVersions: ['*'], resources: ['*'] }]
+            }
+          ]
+        }
+      ]
+    },
+    validationRules: [
+      {
+        id: 'inc-10-r1',
+        description: 'ValidatingWebhookConfiguration kyverno-resource-validating-webhook-cfg exists',
+        type: 'resource_exists',
+        kind: 'ValidatingWebhookConfiguration',
+        name: 'kyverno-resource-validating-webhook-cfg',
+        remediation: 'Ensure ValidatingWebhookConfiguration exists.'
+      },
+      {
+        id: 'inc-10-r2',
+        description: 'Webhook failurePolicy patched to Ignore to prevent deployment blackhole',
+        type: 'resource_field_equals',
+        kind: 'ValidatingWebhookConfiguration',
+        name: 'kyverno-resource-validating-webhook-cfg',
+        fieldPath: 'webhooks.0.failurePolicy',
+        expectedValue: 'Ignore',
+        remediation: 'Patch webhooks.0.failurePolicy to "Ignore".'
+      }
+    ],
+    solutionCommands: [
+      'kubectl patch validatingwebhookconfiguration kyverno-resource-validating-webhook-cfg -p \'{"webhooks":[{"name":"validate.kyverno.svc","failurePolicy":"Ignore"}]}\''
+    ]
+  },
+  {
+    id: 'inc-11-coredns-loop-crash',
+    title: 'SEV-1: Cluster-Wide DNS Blackhole (CoreDNS Loop Detected)',
+    severity: 'SEV-1 (P0)',
+    domainId: 'cloud-networking',
+    estimatedMttrMinutes: 10,
+    xpReward: 300,
+    alertSummary: 'Prometheus Alert: KubeDNSCrashLoopBackOff: plugin/loop: Loop (127.0.0.1:53 -> :53) detected.',
+    customerImpact: 'Microservices unable to resolve database hostnames or internal services; 100% downstream traffic failing.',
+    symptoms: [
+      'CoreDNS pods crash immediately upon startup with loop detection logs.',
+      'ConfigMap coredns in kube-system forwards traffic to 127.0.0.1.'
+    ],
+    diagnosticHints: [
+      'Inspect Corefile in ConfigMap/coredns in kube-system.',
+      'Change forward . 127.0.0.1 to a valid upstream resolver such as 1.1.1.1.'
+    ],
+    initialClusterState: {
+      resources: [
+        {
+          apiVersion: 'v1',
+          kind: 'ConfigMap',
+          metadata: { name: 'coredns', namespace: 'kube-system' },
+          data: {
+            Corefile: '.:53 {\n    errors\n    health\n    ready\n    kubernetes cluster.local in-addr.arpa ip6.arpa\n    forward . 127.0.0.1\n    cache 30\n    reload\n}'
+          }
+        },
+        {
+          apiVersion: 'v1',
+          kind: 'Pod',
+          metadata: { name: 'coredns-primary', namespace: 'kube-system', labels: { app: 'coredns', 'k8s-app': 'kube-dns' } },
+          spec: { containers: [{ name: 'coredns', image: 'registry.k8s.io/coredns/coredns:v1.11.3' }] }
+        }
+      ]
+    },
+    validationRules: [
+      {
+        id: 'inc-11-r1',
+        description: 'CoreDNS Corefile ConfigMap points forwarder to valid upstream DNS 1.1.1.1',
+        type: 'resource_field_contains',
+        kind: 'ConfigMap',
+        name: 'coredns',
+        namespace: 'kube-system',
+        fieldPath: 'data.Corefile',
+        expectedValue: 'forward . 1.1.1.1',
+        remediation: 'Patch ConfigMap coredns in kube-system with valid forward upstream: forward . 1.1.1.1.'
+      },
+      {
+        id: 'inc-11-r2',
+        description: 'CoreDNS pod recovers to Running phase',
+        type: 'pod_status_running',
+        kind: 'Pod',
+        name: 'coredns-primary',
+        namespace: 'kube-system',
+        remediation: 'Ensure coredns-primary transitions to Running once loop is removed.'
+      }
+    ],
+    solutionCommands: [
+      'kubectl patch configmap coredns -n kube-system -p \'{"data":{"Corefile":".:53 {\\n    errors\\n    health\\n    ready\\n    kubernetes cluster.local in-addr.arpa ip6.arpa\\n    forward . 1.1.1.1\\n    cache 30\\n    reload\\n}"}}\''
+    ]
+  },
+  {
+    id: 'inc-12-pvc-storageclass-pending',
+    title: 'SEV-2: Database Pod Stuck in Pending (Non-Existent StorageClass)',
+    severity: 'SEV-2 (P1)',
+    domainId: 'storage-csi-velero-dr',
+    estimatedMttrMinutes: 8,
+    xpReward: 250,
+    alertSummary: 'Prometheus Alert: PersistentVolumeClaimPending: claim production/analytics-db-data has been pending > 15m.',
+    customerImpact: 'Nightly analytics ingestion stalled; analytics reporting dashboard displays stale data.',
+    symptoms: [
+      'Pod analytics-db-0 stuck in Pending (ContainerCreating).',
+      'PVC analytics-db-data references storageClassName: fast-nvme-ssd which is not provisioned in the cluster.'
+    ],
+    diagnosticHints: [
+      'kubectl get sc shows available StorageClass is standard-csi.',
+      'Update PVC analytics-db-data or re-apply with storageClassName: standard-csi.'
+    ],
+    initialClusterState: {
+      resources: [
+        {
+          apiVersion: 'storage.k8s.io/v1',
+          kind: 'StorageClass',
+          metadata: { name: 'standard-csi' },
+          provisioner: 'csi.kubelabs.io/driver',
+          reclaimPolicy: 'Delete',
+          volumeBindingMode: 'Immediate'
+        },
+        {
+          apiVersion: 'v1',
+          kind: 'PersistentVolumeClaim',
+          metadata: { name: 'analytics-db-data', namespace: 'production' },
+          spec: {
+            storageClassName: 'fast-nvme-ssd',
+            accessModes: ['ReadWriteOnce'],
+            resources: { requests: { storage: '20Gi' } }
+          }
+        },
+        {
+          apiVersion: 'v1',
+          kind: 'Pod',
+          metadata: { name: 'analytics-db-0', namespace: 'production', labels: { app: 'analytics-db' } },
+          spec: {
+            containers: [{ name: 'postgres', image: 'postgres:16-alpine' }],
+            volumes: [{ name: 'data', persistentVolumeClaim: { claimName: 'analytics-db-data' } }]
+          }
+        }
+      ]
+    },
+    validationRules: [
+      {
+        id: 'inc-12-r1',
+        description: 'PersistentVolumeClaim analytics-db-data uses available storageClassName standard-csi',
+        type: 'resource_field_equals',
+        kind: 'PersistentVolumeClaim',
+        name: 'analytics-db-data',
+        namespace: 'production',
+        fieldPath: 'spec.storageClassName',
+        expectedValue: 'standard-csi',
+        remediation: 'Patch PVC analytics-db-data storageClassName to standard-csi.'
+      },
+      {
+        id: 'inc-12-r2',
+        description: 'Pod analytics-db-0 transitions to Running after PVC volume binding',
+        type: 'pod_status_running',
+        kind: 'Pod',
+        name: 'analytics-db-0',
+        namespace: 'production',
+        remediation: 'Ensure analytics-db-0 pod is Running.'
+      }
+    ],
+    solutionCommands: [
+      'kubectl patch pvc analytics-db-data -n production -p \'{"spec":{"storageClassName":"standard-csi"}}\''
+    ]
   }
 ];
 
