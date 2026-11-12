@@ -71,3 +71,4 @@
 #### Phase 5.2: Observability, DevSecOps CI/CD & 11-Agent Self-Audit Verification
 - **Subphase 5.2.1**: Harden `src/api/router.js` and `src/server.js` (CSP, HSTS, rate limiting, /metrics, /api/livez, /api/readyz, graceful drain) and create `.github/workflows/ci-release.yml`.
 - **Subphase 5.2.2**: Update `scripts/self-audit.js` and `scripts/verify-subphases.js` to enforce 100% deterministic lab/incident pass rates, memory RSS < 150MB, zero external dependencies, and complete documentation in `docs/08-OPERATIONS-AND-RUNBOOKS.md`.
+

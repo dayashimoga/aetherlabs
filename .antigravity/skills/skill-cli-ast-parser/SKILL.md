@@ -38,3 +38,4 @@ Implements production-grade POSIX shell tokenization, Abstract Syntax Tree (AST)
 ## Invariants
 - 100% sandboxed execution: No calls to `child_process.exec`, `spawn`, or host shell. Everything mutates and inspects the virtual cluster and POSIX virtual filesystem state.
 - Zero regex-based pass/fail grading: Command output is produced deterministically from cluster state.
+

@@ -27,3 +27,4 @@ Designs, implements, and certifies hands-on labs, real-world incident drills, ca
 ## Invariants
 - Zero placeholders: No `TODO`, `FIXME`, mock returns, or unfinished labs.
 - Labs must be solvable via both imperative CLI and declarative YAML manifest application.
+

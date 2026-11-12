@@ -30,3 +30,4 @@ Responsible for cross-platform distribution, responsive client-side UI/UX ergono
 
 ## Invariants
 - 100% feature parity across all platforms: No feature may be disabled or mocked on mobile or offline browser mode.
+

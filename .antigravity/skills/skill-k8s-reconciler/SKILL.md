@@ -36,3 +36,4 @@ Responsible for designing, implementing, and validating deterministic Kubernetes
 ## Invariants
 - Code must be isomorphic (ES2024 modules, zero Node-only globals) so it executes identically in Node.js 22+, WebWorkers, and Desktop WebViews.
 - Never mock status: always calculate `status.phase`, `status.conditions`, `status.readyReplicas`, and `events` from actual object state.
+

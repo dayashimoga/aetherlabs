@@ -6,3 +6,4 @@
 4. DETERMINISTIC SOLVABILITY: Every lab/incident must fail validation at initial state (0%), pass 100% when its `canonicalSolution` commands are executed in a clean session, and clean up cleanly on reset.
 5. CROSS-PLATFORM UX: Touch targets >= 44x44px, WCAG 2.1 AA contrast, responsive layout from 360px (iOS/Android) to 3840px (4K Desktop), and mobile quick-action terminal bar.
 6. SECURITY PERIMETER: Strict CSP, parameterized SQLite queries, zero `child_process` execution in sandbox mode, and Ed25519 cryptographic signing for credentials.
+
