@@ -1,15 +1,5 @@
 'use strict';
-
 /**
- * Legacy Adapter for ArchitectureEngine
- * 
- * Bridges to the isomorphic ES2024 architecture designer core at
- * `src/core/architectureEngine.js` while maintaining 100% backward compatibility.
+ * Compatibility Bridge: src/core/architectureEngine.js is the Single Source of Truth
  */
-
-const core = require('../core/architectureEngine');
-
-module.exports = {
-  ArchitectureEngine: core.ArchitectureEngine,
-  ENTERPRISE_REFERENCE_ARCHITECTURES: core.ENTERPRISE_REFERENCE_ARCHITECTURES
-};
+module.exports = require('../core/architectureEngine');

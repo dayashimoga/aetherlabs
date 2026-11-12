@@ -1,14 +1,5 @@
 'use strict';
-
 /**
- * Legacy Adapter for AiMentor
- * 
- * Bridges to the isomorphic ES2024 contextual AI mentor core at
- * `src/core/aiMentor.js` while maintaining 100% backward compatibility.
+ * Compatibility Bridge: src/core/aiMentor.js is the Single Source of Truth
  */
-
-const core = require('../core/aiMentor');
-
-module.exports = {
-  AiMentor: core.AiMentor
-};
+module.exports = require('../core/aiMentor');

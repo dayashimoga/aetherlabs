@@ -1,13 +1,5 @@
 'use strict';
-
 /**
- * KubeLabs v3.0 - Validation Engine Bridge
- * Delegates to the unified isomorphic core ValidationEngine in src/core/validationEngine.js.
+ * Compatibility Bridge: src/core/validationEngine.js is the Single Source of Truth
  */
-const { ValidationEngine, getFieldByPath, compareValues } = require('../core/validationEngine');
-
-module.exports = {
-  ValidationEngine,
-  getFieldByPath,
-  compareValues
-};
+module.exports = require('../core/validationEngine');

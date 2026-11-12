@@ -15,7 +15,8 @@
     "test:stage4": "node --test tests/stage4-core.test.js",
     "test:stage5": "node --test tests/stage5-core.test.js",
     "audit:self": "node scripts/self-audit.js",
-    "verify:subphases": "node scripts/verify-subphases.js"
+    "verify:subphases": "node scripts/verify-subphases.js",
+    "bundle:offline": "node scripts/bundle-isomorphic.js"
   },
   "engines": {
     "node": ">=22.5.0"

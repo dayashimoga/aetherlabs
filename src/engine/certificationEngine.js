@@ -1,14 +1,5 @@
 'use strict';
-
 /**
- * Legacy Adapter for CertificationEngine
- * 
- * Bridges to the isomorphic ES2024 asymmetric certification core at
- * `src/core/certificationEngine.js` while maintaining 100% backward compatibility.
+ * Compatibility Bridge: src/core/certificationEngine.js is the Single Source of Truth
  */
-
-const core = require('../core/certificationEngine');
-
-module.exports = {
-  CertificationEngine: core.CertificationEngine
-};
+module.exports = require('../core/certificationEngine');
