@@ -185,3 +185,4 @@ test('Subphase 4.2.1: Outage resolution proof across all 8 incident categories',
     assert.ok(after.xpReward > 0);
   }
 });
+

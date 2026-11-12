@@ -5,4 +5,5 @@
  */
 require('./stage4-curriculum.test');
 require('./stage4-incidents.test');
+require('./stage4-engines.test');
 
