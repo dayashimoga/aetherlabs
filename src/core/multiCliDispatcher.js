@@ -2026,7 +2026,26 @@ class MultiCliDispatcher {
       return { stdout: 'b07e1c841a029f12, started, control-plane-node, https://192.168.1.10:2380, https://192.168.1.10:2379, false\n', stderr: '', code: 0 };
     }
     if (sub === 'snapshot') {
-      return { stdout: 'Snapshot saved at /var/lib/etcd/snapshot.db\n', stderr: '', code: 0 };
+      const action = argv[2];
+      const target = argv[3] || '/var/lib/etcd/backup.db';
+      if (action === 'restore') {
+        if (this.graph) {
+          const etcdPods = this.graph.findByKind('Pod').filter(
+            (p) => p.metadata && p.metadata.namespace === 'kube-system' && p.metadata.labels && p.metadata.labels.component === 'etcd'
+          );
+          for (const p of etcdPods) {
+            if (p.metadata && p.metadata.labels) {
+              delete p.metadata.labels['etcd-unhealthy'];
+            }
+          }
+        }
+        return {
+          stdout: `2026-11-12 06:00:00.000000 I | etcdmain: restored snapshot ${target} to /var/lib/etcd/default.etcd\nQuorum restored across all etcd members.\n`,
+          stderr: '',
+          code: 0
+        };
+      }
+      return { stdout: `Snapshot saved at ${target}\n`, stderr: '', code: 0 };
     }
     return { stdout: 'etcdctl version: 3.5.15\n', stderr: '', code: 0 };
   }
