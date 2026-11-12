@@ -483,3 +483,4 @@ test('Subphase 3.2.2: Linkerd ServiceProfile & Consul ServiceSplitter/Intentions
   assert.equal(mesh.consul.checkIntention('backend', 'db-service', 'default').allowed, true);
   assert.equal(mesh.consul.checkIntention('untrusted-guest', 'db-service', 'default').allowed, false);
 });
+
