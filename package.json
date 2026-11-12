@@ -12,6 +12,7 @@
     "test:stage1": "node --test tests/stage1-core.test.js",
     "test:stage2": "node --test tests/stage2-core.test.js",
     "test:stage3": "node --test tests/stage3-core.test.js",
+    "test:stage4": "node --test tests/stage4-core.test.js",
     "audit:self": "node scripts/self-audit.js",
     "verify:subphases": "node scripts/verify-subphases.js"
   },
