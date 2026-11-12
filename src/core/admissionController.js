@@ -510,3 +510,4 @@ if (typeof globalThis !== 'undefined') {
   globalThis.evaluateCEL = evaluateCEL;
   globalThis.validatePodSecurityStandards = validatePodSecurityStandards;
 }
+
