@@ -2127,3 +2127,4 @@ if (typeof globalThis !== 'undefined') {
   globalThis.stripAnsi = stripAnsi;
   globalThis.posixTools = posixTools;
 }
+

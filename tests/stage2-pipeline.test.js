@@ -204,3 +204,4 @@ test('Subphase 2.1.2: VirtualPTY VT100 escape sequence handling, screen buffer a
   assert.equal(pty.cols, 60);
   assert.equal(pty.rows, 15);
 });
+

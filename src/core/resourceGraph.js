@@ -488,12 +488,51 @@ class ResourceGraph {
     this.emit('Deleted', resource);
   }
 
+  patch(kind, namespace, name, patchObj) {
+    const resource = this.get(kind, namespace, name);
+    if (!resource) return null;
+
+    function deepMerge(target, source) {
+      for (const key of Object.keys(source)) {
+        if (source[key] && typeof source[key] === 'object' && !Array.isArray(source[key])) {
+          if (!target[key] || typeof target[key] !== 'object' || Array.isArray(target[key])) {
+            target[key] = {};
+          }
+          deepMerge(target[key], source[key]);
+        } else {
+          target[key] = source[key];
+        }
+      }
+      return target;
+    }
+
+    deepMerge(resource, patchObj);
+    return this.set(resource).resource;
+  }
+
+  create(rawResource, options = {}) {
+    return this.set(rawResource, options).resource;
+  }
+
+  update(rawResource, options = {}) {
+    return this.set(rawResource, options).resource;
+  }
+
   /**
    * Queries resources by kind, namespace, labelSelector, and fieldSelector
-   * @param {object} query { kind, namespace, labelSelector, fieldSelector }
+   * Supports either list({ kind, namespace, labelSelector }) or list(kind, namespace, selector)
+   * @param {object|string} queryOrKind
+   * @param {string|null} namespace
+   * @param {string|null} selector
    * @returns {Array<object>}
    */
-  list(query = {}) {
+  list(queryOrKind = {}, namespace = null, selector = null) {
+    let query = queryOrKind;
+    if (typeof queryOrKind === 'string') {
+      query = { kind: queryOrKind };
+      if (namespace) query.namespace = namespace;
+      if (selector) query.labelSelector = selector;
+    }
     let candidateUids = null;
 
     // 1. Filter by Kind
