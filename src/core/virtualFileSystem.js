@@ -391,6 +391,10 @@ class VirtualFileSystem {
     return Array.from(res.node.children.keys()).sort();
   }
 
+  readdir(rawPath = '/') {
+    return this.listDir(rawPath);
+  }
+
   rm(rawPath, options = {}) {
     const recursive = options.recursive !== false;
     const cleanPath = this.normalizePath(rawPath);
@@ -412,6 +416,14 @@ class VirtualFileSystem {
     res.parent.children.delete(res.name);
     this._notifyWatchers('delete', cleanPath, null);
     return true;
+  }
+
+  unlink(rawPath) {
+    return this.rm(rawPath, { recursive: false });
+  }
+
+  rmdir(rawPath, options = {}) {
+    return this.rm(rawPath, options);
   }
 
   copyFile(srcPath, destPath) {

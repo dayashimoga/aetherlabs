@@ -560,3 +560,4 @@ test('Subphase 2.2.3: SecurityPolicyEngine OPA Gatekeeper constraints and Kyvern
   assert.equal(kyvernoFail.violations.length, 1);
   assert.match(kyvernoFail.violations[0].message, /runAsNonRoot: true/);
 });
+

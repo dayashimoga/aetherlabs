@@ -1,0 +1,6 @@
+'use strict';
+
+/**
+ * Stage 3: Sandboxed Multi-CLI AST Terminal, Observability, Autoscaling & Mesh Engine - Test Aggregator
+ */
+require('./stage3-terminal.test');

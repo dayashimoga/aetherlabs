@@ -2017,8 +2017,13 @@ class PipelineDriver {
           vfs,
           cwd,
           pty: this.pty,
-          driver: this
+          driver: this,
+          context
         });
+        if (result && result.cwd) {
+          this.cwd = result.cwd;
+          context.cwd = result.cwd;
+        }
       } catch (err) {
         result = { stdout: '', stderr: `${binName}: ${err.message}\n`, code: 1 };
       }
