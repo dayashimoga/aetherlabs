@@ -8,7 +8,7 @@
 
 const { app, BrowserWindow } = require('electron');
 const path = require('node:path');
-const { createKubeLabsApp } = require('../src/server');
+const { createKubeLabsApp } = require('../../src/server');
 
 let mainWindow = null;
 let serverInstance = null;
@@ -36,7 +36,7 @@ function createWindow(port) {
 
 app.whenReady().then(() => {
   const kubeApp = createKubeLabsApp({
-    rootDir: path.join(__dirname, '..'),
+    rootDir: path.join(__dirname, '..', '..'),
     dbFilePath: path.join(app.getPath('userData'), 'kubelabs.sqlite')
   });
 
@@ -52,4 +52,3 @@ app.on('window-all-closed', () => {
     app.quit();
   }
 });
-

@@ -8,14 +8,16 @@
   },
   "package": {
     "productName": "KubeLabs",
-    "version": "2.0.0"
+    "version": "3.0.0"
   },
   "tauri": {
     "bundle": {
       "active": true,
       "category": "DeveloperTool",
       "copyright": "2026 KubeLabs Core Contributors",
-      "deb": { "depends": [] },
+      "deb": {
+        "depends": []
+      },
       "externalBin": [],
       "icon": [
         "icons/icon.ico",
@@ -24,7 +26,13 @@
       "identifier": "io.kubelabs.app",
       "longDescription": "Standalone, Low-Resource, Cross-Platform Learn-by-Doing Kubernetes & Cloud-Native Lab Platform",
       "shortDescription": "Kubernetes & Cloud-Native Lab Platform",
-      "targets": ["msi", "nsis", "deb", "appimage", "dmg"]
+      "targets": [
+        "msi",
+        "nsis",
+        "deb",
+        "appimage",
+        "dmg"
+      ]
     },
     "security": {
       "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' http://127.0.0.1:*"
@@ -40,4 +48,3 @@
     ]
   }
 }
-

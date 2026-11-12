@@ -1,5 +1,5 @@
 {
-  "appId": "io.kubelabs.mobile",
+  "appId": "io.kubelabs.app",
   "appName": "KubeLabs",
   "webDir": "../../public",
   "bundledWebRuntime": false,
@@ -14,4 +14,3 @@
     }
   }
 }
-
