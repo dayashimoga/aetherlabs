@@ -332,3 +332,4 @@ test('Subphase 3.2.1: SloBurnRateCalculator multi-window burn rate and alert tie
   assert.equal(calc.burnRate, 2.0);
   assert.equal(calc.alertSeverity, 'TICKET');
 });
+
