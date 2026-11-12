@@ -275,3 +275,4 @@ test('Subphase 3.1.2: Extended Cloud-Native CLIs (flux, velero, vcluster, and aw
   assert.equal(res.code, 0);
   assert.match(res.stdout, /m6i\.xlarge/);
 });
+
