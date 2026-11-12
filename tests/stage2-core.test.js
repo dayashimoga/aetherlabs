@@ -7,4 +7,5 @@ require('./stage2-shell.test');
 require('./stage2-pipeline.test');
 require('./stage2-multicli.test');
 require('./stage2-scheduler.test');
+require('./stage2-networking.test');
 
