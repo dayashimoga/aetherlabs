@@ -11,7 +11,7 @@
 
 > **Standalone, Low-Resource, Cross-Platform (Web, Desktop, Mobile), Learn-by-Doing Kubernetes & Cloud-Native Lab Platform**
 > 
-> *Zero External Dependencies (`"dependencies": {}`) • Native Node.js 22+ & SQLite • 100% Offline-Capable PWA & Isomorphic Engine • Deterministic Verification • 26 Domains • 52 Labs • 12 Production Incidents • 8 Capstones • 6 Certifications (Ed25519 Signed)*
+> *Zero External Dependencies (`"dependencies": {}`) • Native Node.js 22+ & SQLite • 100% Offline-Capable PWA & Isomorphic Engine • Deterministic Verification • 26 Domains • 52 Labs • 15 Production Incidents • 8 Capstones • 6 Certifications (Ed25519 Signed) • 40 Verified Subphases*
 
 ---
 
@@ -96,7 +96,7 @@ KubeLabs solves these problems through an uncompromising architectural standard:
 │              │                         │                             │                  │
 │  ┌───────────▼───────────┐ ┌───────────▼───────────┐ ┌───────────────▼───────────────┐  │
 │  │    ValidationEngine   │ │     IncidentEngine    │ │     CertificationEngine       │  │
-│  │ (10 Assertion Types,  │ │ (12 SEV-1/2 Outages,  │ │ (Ed25519 Digital Signatures,  │  │
+│  │ (10 Assertion Types,  │ │ (15 SEV-1/2 Outages,  │ │ (Ed25519 Digital Signatures,  │  │
 │  │  Deterministic E2E)   │ │  MTTR Stopwatch)      │ │  Offline Verification)        │  │
 │  └───────────┬───────────┘ └───────────┬───────────┘ └───────────────┬───────────────┘  │
 │              │                         │                             │                  │
@@ -343,6 +343,17 @@ Resolving **Incident 09: etcd Quorum Loss** (`inc-09-etcd-quorum-loss`):
    ```
 5. **Verify Resolution**: Click **Verify Resolution**. Outage recovered in `1m 14s` • **SEV-1 Resolved • +350 XP**.
 
+### 6.2.1 Walkthrough 2.1: Resolving a SEV-1 Outage (AWS EKS IAM IRSA Access Denied)
+Resolving **Incident 14: AWS EKS S3 Ingestion Outage** (`inc-14-iam-irsa-access-denied`):
+1. **Launch Incident**: Click **Launch Incident 14**. Alert reports: `CloudWatch Alert: S3AccessDeniedException: pod s3-sync-worker failed AssumeRoleWithWebIdentity.`
+2. **Diagnose**: Run `kubectl describe pod s3-sync-worker -n production`. Output highlights that the pod's service account lacks the required AWS IAM role annotation.
+3. **Execute Remediation**:
+   ```bash
+   kubectl annotate serviceaccount s3-worker-sa eks.amazonaws.com/role-arn=arn:aws:iam::123456789012:role/eks-s3-access -n production
+   ```
+4. **Reconcile**: Pod automatically transitions from `CrashLoopBackOff` to `Running` once STS WebIdentity credentials mount successfully.
+5. **Verify Resolution**: Click **Verify Resolution** • **100% Passing • +300 XP Awarded**.
+
 ### 6.3 Walkthrough 3: Multi-Milestone Capstone (Multi-Tenant vCluster Platform)
 Solving **Capstone 7** (`proj-07-multitenant-vcluster-platform`):
 - **Milestone 1**: Create namespace `tenant-alpha` and `ResourceQuota` limiting `hard.pods: "10"`.
@@ -377,7 +388,7 @@ KubeLabs is designed, implemented, and guarded by 11 specialized autonomous agen
 6. `agent-curriculum`: Authors pedagogical modules, hands-on labs, and assessment questions.
 7. `agent-devops`: Manages GitHub Actions workflows, Helm charts, and release automation.
 8. `agent-security`: Enforces sandboxed command execution, zero-CVE posture, and CSP security.
-9. `agent-qa`: Validates deterministic solvers across all 52 labs, 12 incidents, and 8 capstones.
+9. `agent-qa`: Validates deterministic solvers across all 52 labs, 15 incidents, and 8 capstones.
 10. `agent-documentation`: Maintains comprehensive architectural documentation and runbooks.
 11. `agent-platform`: Enforces memory budgets (< 150MB RSS) and zero-placeholder invariants.
 
@@ -391,13 +402,13 @@ KubeLabs provides 3 automated verification commands runnable from any environmen
 ```bash
 npm test
 ```
-Executes 8 test suites verifying PluginManager schemas, VirtualCluster reconciliation, TerminalEngine execution, deterministic lab solvers (52/52), deterministic incident solvers (12/12), architecture compilation, Ed25519 signatures, and HTTP API integration in **~290ms**.
+Executes 8 test suites verifying PluginManager schemas, VirtualCluster reconciliation, TerminalEngine execution, deterministic lab solvers (52/52), deterministic incident solvers (15/15), architecture compilation, Ed25519 signatures, and HTTP API integration in **~350ms**.
 
 ### 2. Subphase Verification Ledger (`npm run verify:subphases`)
 ```bash
 npm run verify:subphases
 ```
-Verifies all 36 sequential project subphases across all 5 implementation stages in **~17ms**.
+Verifies all 40 sequential project subphases across all 10 implementation stages in **~25ms**.
 
 ### 3. 11-Agent Self-Audit (`npm run audit:self`)
 ```bash
@@ -438,7 +449,7 @@ h:\kubelabs/
 │   ├── 04-ADRS.md                            # 10 Architectural Decision Records
 │   ├── 05-GITHUB-AND-CICD.md                 # Git branching & GitHub Actions standards
 │   ├── 06-IMPLEMENTATION-PLAN.md             # Complete implementation roadmap
-│   ├── 07-CURRICULUM-CATALOG.md              # 26 domains, 52 labs, 12 incidents, 8 capstones
+│   ├── 07-CURRICULUM-CATALOG.md              # 26 domains, 52 labs, 15 incidents, 8 capstones
 │   ├── 08-OPERATIONS-AND-RUNBOOKS.md         # Production runbooks & DR procedures
 │   ├── 11-COMPREHENSIVE-PROJECT-WALKTHROUGH.md # Complete project walkthrough
 │   └── 12-ENTERPRISE-GAP-ANALYSIS-AND-EXECUTION-PLAN.md # Gap analysis & v2.0 roadmap
@@ -454,7 +465,7 @@ h:\kubelabs/
 │   └── plugin.schema.json                    # Strict JSON schema for domain plugins
 ├── scripts/
 │   ├── self-audit.js                         # 11-agent 50-check quality gate auditor
-│   └── verify-subphases.js                   # 36-subphase validation runner
+│   └── verify-subphases.js                   # 40-subphase validation runner
 ├── src/
 │   ├── server.js                             # HTTP server & graceful shutdown handler
 │   ├── agents/orchestrator.js                # 11-agent governance orchestrator
@@ -464,7 +475,7 @@ h:\kubelabs/
 │   │   ├── aiMentor.js                       # Socratic mentor & CIS auditor
 │   │   ├── architectureEngine.js             # Visual designer & IaC compiler
 │   │   ├── certificationEngine.js            # Ed25519 credential signing authority
-│   │   ├── incidentEngine.js                 # 12 production incident simulations
+│   │   ├── incidentEngine.js                 # 15 production incident simulations
 │   │   ├── projectEngine.js                  # 8 multi-milestone capstone projects
 │   │   ├── sessionManager.js                 # Multi-tenant state isolation manager
 │   │   ├── terminalEngine.js                 # Multi-CLI sandboxed terminal parser
