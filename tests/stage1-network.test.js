@@ -194,3 +194,4 @@ test('Subphase 1.3.1: NetworkPolicy permits matching podSelector, namespaceSelec
   });
   assert.equal(trace3.allowed, false);
 });
+

@@ -10,6 +10,7 @@
     "start": "node src/server.js",
     "test": "node --test tests/kubelabs.test.js",
     "test:stage1": "node --test tests/stage1-core.test.js",
+    "test:stage2": "node --test tests/stage2-core.test.js",
     "audit:self": "node scripts/self-audit.js",
     "verify:subphases": "node scripts/verify-subphases.js"
   },

@@ -164,3 +164,4 @@ test('Subphase 1.3.2: MultiCloudRegistry catalog across AWS, Azure, and GCP', ()
   assert.equal(registry.list('gcp').length, 1);
   assert.equal(registry.list().length, 3);
 });
+

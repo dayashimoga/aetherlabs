@@ -568,3 +568,4 @@ if (typeof globalThis !== 'undefined') {
   globalThis.OpenTofuStateGraph = OpenTofuStateGraph;
   globalThis.MultiCloudRegistry = MultiCloudRegistry;
 }
+
