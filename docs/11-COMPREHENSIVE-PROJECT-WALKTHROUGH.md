@@ -11,726 +11,464 @@
 
 > **Standalone, Low-Resource, Cross-Platform (Web, Desktop, Mobile), Learn-by-Doing Kubernetes & Cloud-Native Lab Platform**
 > 
-> *Zero External Dependencies • Native Node.js & SQLite • 100% Offline-Capable • Deterministic Verification • 18 Domains • 36 Labs • 8 Incidents • 6 Capstones • 6 Certifications*
+> *Zero External Dependencies (`"dependencies": {}`) • Native Node.js 22+ & SQLite • 100% Offline-Capable PWA & Isomorphic Engine • Deterministic Verification • 26 Domains • 52 Labs • 12 Production Incidents • 8 Capstones • 6 Certifications (Ed25519 Signed)*
 
 ---
 
 ## Table of Contents
 
 1. [Executive Summary & Core Philosophy](#1-executive-summary--core-philosophy)
-2. [High-Level Architecture & Design Invariants](#2-high-level-architecture--design-invariants)
+2. [Target-State Architecture & Invariants](#2-target-state-architecture--invariants)
 3. [Deep-Dive: Engine Subsystems](#3-deep-dive-engine-subsystems)
-   - [3.1 Virtual Control Plane (`VirtualCluster`)](#31-virtual-control-plane-virtualcluster)
-   - [3.2 Multi-CLI Sandboxed Terminal Engine (`TerminalEngine`)](#32-multi-cli-sandboxed-terminal-engine-terminalengine)
-   - [3.3 Declarative Validation Engine (`ValidationEngine`)](#33-declarative-validation-engine-validationengine)
-   - [3.4 Production Incident Simulator (`IncidentEngine`)](#34-production-incident-simulator-incidentengine)
-   - [3.5 Visual Architecture Designer & IaC Compiler (`ArchitectureEngine`)](#35-visual-architecture-designer--iac-compiler-architectureengine)
-   - [3.6 Contextual Socratic AI Mentor & Security Auditor (`AIMentor`)](#36-contextual-socratic-ai-mentor--security-auditor-aimentor)
-   - [3.7 Role-Based Certification Engine (`CertificationEngine`)](#37-role-based-certification-engine-certificationengine)
-   - [3.8 Enterprise Capstone Project Engine (`ProjectEngine`)](#38-enterprise-capstone-project-engine-projectengine)
-   - [3.9 Native SQLite Persistence Tier (`DatabaseSync`)](#39-native-sqlite-persistence-tier-databasesync)
-   - [3.10 Zero-Dependency REST API Gateway & Security Perimeter](#310-zero-dependency-rest-api-gateway--security-perimeter)
-4. [Master Curriculum Catalog & Plugin Architecture](#4-master-curriculum-catalog--plugin-architecture)
-   - [4.1 The 18 Learning Domains](#41-the-18-learning-domains)
-   - [4.2 The 6 Guided Role Tracks](#42-the-6-guided-role-tracks)
-   - [4.3 Plugin Schema & Dynamic Extensibility](#43-plugin-schema--dynamic-extensibility)
-5. [User Experience & End-to-End Walkthroughs](#5-user-experience--end-to-end-walkthroughs)
-   - [5.1 Interactive Workbench UI Overview](#51-interactive-workbench-ui-overview)
-   - [5.2 Walkthrough 1: Hands-On Lab Completion (Multi-Container Pod)](#52-walkthrough-1-hands-on-lab-completion-multi-container-pod)
-   - [5.3 Walkthrough 2: Diagnosing & Resolving a SEV-1 Production Incident](#53-walkthrough-2-diagnosing--resolving-a-sev-1-production-incident)
-   - [5.4 Walkthrough 3: Architecture Canvas to Multi-Cloud IaC Export](#54-walkthrough-3-architecture-canvas-to-multi-cloud-iac-export)
-   - [5.5 Walkthrough 4: Taking a Role Certification Exam](#55-walkthrough-4-taking-a-role-certification-exam)
-6. [The 11-Agent Autonomous Governance Framework](#6-the-11-agent-autonomous-governance-framework)
-7. [Verification, Self-Audit & Quality Assurance](#7-verification-self-audit--quality-assurance)
-8. [Deployment & Operations Guide](#8-deployment--operations-guide)
-9. [Repository Blueprint & File Map](#9-repository-blueprint--file-map)
+   - [3.1 Multi-Tenant Session Manager (`sessionManager.js`)](#31-multi-tenant-session-manager-sessionmanagerjs)
+   - [3.2 In-Memory POSIX Virtual File System (`virtualFileSystem.js`)](#32-in-memory-posix-virtual-file-system-virtualfilesystemjs)
+   - [3.3 Virtual Control Plane & Cluster Controller (`virtualCluster.js`)](#33-virtual-control-plane--cluster-controller-virtualclusterjs)
+   - [3.4 Multi-CLI Sandboxed Terminal Engine (`terminalEngine.js`)](#34-multi-cli-sandboxed-terminal-engine-terminalenginejs)
+   - [3.5 Multi-Assertion Validation Engine (`validationEngine.js`)](#35-multi-assertion-validation-engine-validationenginejs)
+   - [3.6 Production Incident Simulator (`incidentEngine.js`)](#36-production-incident-simulator-incidentenginejs)
+   - [3.7 Visual Architecture Designer & IaC Compiler (`architectureEngine.js`)](#37-visual-architecture-designer--iac-compiler-architectureenginejs)
+   - [3.8 Contextual Socratic AI Mentor & CIS Auditor (`aiMentor.js`)](#38-contextual-socratic-ai-mentor--cis-auditor-aimentorjs)
+   - [3.9 Asymmetric Ed25519 Certification Engine (`certificationEngine.js`)](#39-asymmetric-ed25519-certification-engine-certificationenginejs)
+   - [3.10 Enterprise Multi-Milestone Capstone Engine (`projectEngine.js`)](#310-enterprise-multi-milestone-capstone-engine-projectenginejs)
+   - [3.11 SQLite WAL Persistence Tier (`database.js`)](#311-sqlite-wal-persistence-tier-databasejs)
+   - [3.12 HTTP/REST Gateway, Rate Limiter & Prometheus Metrics (`router.js`, `server.js`)](#312-httprest-gateway-rate-limiter--prometheus-metrics-routerjs-serverjs)
+   - [3.13 Browser-Native Isomorphic Offline Engine (`offlineEngine.js`, `sw.js`)](#313-browser-native-isomorphic-offline-engine-offlineenginejs-swjs)
+4. [Master Curriculum Catalog (26 Domains & 6 Guided Tracks)](#4-master-curriculum-catalog-26-domains--6-guided-tracks)
+5. [User Interface & Interactive Workbench (UI/UX v2)](#5-user-interface--interactive-workbench-uiux-v2)
+6. [Step-by-Step Hands-On Walkthroughs](#6-step-by-step-hands-on-walkthroughs)
+   - [6.1 Walkthrough 1: Hands-On Lab Completion (Dynamic PVC & StorageClass)](#61-walkthrough-1-hands-on-lab-completion-dynamic-pvc--storageclass)
+   - [6.2 Walkthrough 2: Resolving a SEV-1 Production Incident (etcd Quorum Loss)](#62-walkthrough-2-resolving-a-sev-1-production-incident-etcd-quorum-loss)
+   - [6.3 Walkthrough 3: Multi-Milestone Capstone (Multi-Tenant vCluster Platform)](#63-walkthrough-3-multi-milestone-capstone-multi-tenant-vcluster-platform)
+   - [6.4 Walkthrough 4: Visual Architecture Design to Multi-Cloud IaC Export](#64-walkthrough-4-visual-architecture-design-to-multi-cloud-iac-export)
+   - [6.5 Walkthrough 5: Earning an Ed25519 Asymmetric Verified Certification](#65-walkthrough-5-earning-an-ed25519-asymmetric-verified-certification)
+7. [The 11-Agent Autonomous Governance Framework](#7-the-11-agent-autonomous-governance-framework)
+8. [Automated Verification Ledger & Quality Gates](#8-automated-verification-ledger--quality-gates)
+9. [Cross-Platform Deployment & Packaging Matrix](#9-cross-platform-deployment--packaging-matrix)
+10. [Repository Structure & File Index](#10-repository-structure--file-index)
 
 ---
 
 ## 1. Executive Summary & Core Philosophy
 
-**KubeLabs** is a next-generation, self-contained educational platform engineered to teach the complete spectrum of Kubernetes, the Cloud Native Computing Foundation (CNCF) landscape, GitOps, DevSecOps, Site Reliability Engineering (SRE), Platform Engineering, Service Mesh, and emerging paradigms (WebAssembly, eBPF, AI-Ops, and FinOps).
+**KubeLabs** is a standalone, ultra-low-resource, cross-platform learning laboratory and simulation platform for Kubernetes, the Cloud Native Computing Foundation (CNCF) ecosystem, GitOps, DevSecOps, SRE, Platform Engineering, Service Mesh, and advanced cloud technologies (Wasm, eBPF, FinOps, and Cloud-Native AI/ML).
 
-### The Problem with Existing Kubernetes Learning Tools
-1. **Excessive Resource Consumption**: Traditional local Kubernetes setups (e.g., Minikube, Kind, MicroK8s, k3s inside Docker) require 8 GB to 16 GB of RAM, a dual-core or quad-core hypervisor, gigabytes of container image downloads, and 2-to-5-minute boot times. They are completely unusable on entry-level laptops, tablets, or constrained educational environments.
-2. **Brittle Cloud Sandboxes**: Cloud-hosted playground services (e.g., Katacoda clones, Killercoda) suffer from high latency, recurring subscription costs, hard 30-minute session timeouts, cold VM queues, and complete failure when internet connectivity is interrupted.
-3. **Regex-Based Assessment Antipatterns**: Traditional online labs evaluate student progress by running regex matches on shell history (e.g. checking if the learner literally typed `kubectl create deployment ...`). If the learner used a declarative YAML file, an alias, or a different flag order, the validation erroneously failed.
-4. **Security Vulnerabilities (Arbitrary RCE)**: Platforms that pass student input to unconfined host shell processes (`child_process.exec`) risk remote code execution, container escapes, and host file tampering.
+### The Inherent Flaws of Traditional Learning Platforms
+1. **Massive Compute Overhead**: Traditional tools (Minikube, Kind, k3s-in-Docker) demand 8 GB to 16 GB of RAM, virtualization extensions (VT-x/AMD-V), gigabytes of container image pulls, and several minutes of startup time. They cannot run on budget laptops, mobile browsers, or restricted corporate machines.
+2. **Brittle Cloud VM Sandboxes**: Platforms like Katacoda and Killercoda rely on remote ephemeral VMs that suffer from queue delays, network dropouts, 30-minute timeouts, and astronomical cloud infrastructure costs.
+3. **Flawed Evaluation Antipatterns**: Most online courses validate student work using fragile shell history regex patterns (e.g., checking if the learner typed `kubectl create deployment ...`). If a student uses declarative multi-document YAML manifests or aliases, the platform marks it incorrect.
+4. **Severe Remote Code Execution (RCE) Hazards**: Handing raw terminal input to host shell processes (`child_process.exec`) opens massive security holes, container escapes, and host system compromise.
 
 ### The KubeLabs Breakthrough
-KubeLabs redefines cloud-native education through four fundamental architectural breakthroughs:
-
-1. **Zero External Dependencies (`"dependencies": {}`)**:
-   KubeLabs uses 100% native Node.js standard libraries (`node:http`, `node:sqlite`, `node:crypto`, `node:test`, `node:path`, `node:fs`). There is **zero `npm install` footprint**, zero node_modules bloat, zero supply-chain risk, and zero vulnerability churn.
-2. **Stateful In-Memory Virtual Control Plane**:
-   Rather than running heavy Linux kernel virtualization, KubeLabs features an in-process, stateful declarative reconciliation engine. It parses real Kubernetes YAML manifests, runs controller reconciliation loops (Deployments, ReplicaSets, Pods, Services, Endpoints, NetworkPolicies), and faithfully simulates pod lifecycles, readiness probes, and fault conditions in **under 46 MB RSS RAM** with sub-millisecond reconciliation.
-3. **100% Offline-Capable Progressive Web App (PWA)**:
-   Equipped with a native Service Worker (`public/sw.js`) and Web App Manifest (`public/manifest.json`), KubeLabs functions entirely offline. Students can run complex Kubernetes labs, troubleshoot production outages, and take certification exams on flights, trains, or in low-connectivity classrooms.
-4. **Deterministic State-Based Evaluation**:
-   The validation engine inspects the reconciled state graph of the virtual cluster rather than shell strings. Whether a learner uses imperative CLI commands or writes advanced multi-document YAML manifests, the platform verifies the actual runtime state against declarative contract rules.
+KubeLabs solves these problems through an uncompromising architectural standard:
+- **Zero External Dependencies (`"dependencies": {}`)**: Everything runs on native Node.js standard libraries (`node:http`, `node:sqlite`, `node:crypto`, `node:test`, `node:fs`, `node:path`). There is zero npm supply-chain risk, zero vulnerability maintenance, and instant startup.
+- **Microsecond Declarative Virtual Control Plane**: Rather than spinning up Linux kernels, KubeLabs executes a lightweight, in-process Kubernetes API and controller loop simulation that handles Deployments, StatefulSets, DaemonSets, Services, Endpoints, NetworkPolicies, RBAC, PVC dynamic binding, CoreDNS, and taints/tolerations in **under 48 MB RSS RAM**.
+- **Deterministic State-Graph Validation**: Labs are graded against the actual reconciled cluster object graph, not shell history. Whether configured through imperative CLI commands or declarative YAML files, only true cluster state determines success.
+- **100% Offline-Capable Isomorphic Engine**: In addition to the backend server, the entire engine runs natively inside modern web browsers via Service Workers and client-side JavaScript (`offlineEngine.js`). Learners can solve complex labs and take certification exams completely disconnected from the internet.
 
 ---
 
-## 2. High-Level Architecture & Design Invariants
-
-KubeLabs is designed as a modular, layered system:
+## 2. Target-State Architecture & Invariants
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────────────────┐
-│                                 PRESENTATION TIER                                       │
-│  Responsive Workbench (Desktop, Tablet, Mobile 360px) • PWA Service Worker (Offline)    │
-│  [Curriculum] [Terminal] [Manifest Editor] [Cluster Graph] [Incidents] [Designer] [Certs]│
+│                                 PRESENTATION LAYER                                      │
+│  Responsive Workbench (Web, Electron/Tauri Desktop, Capacitor Mobile 360px Viewports)  │
+│  [Labs] [Terminal] [Manifests] [Topology SVG] [Incidents] [Canvas] [Certs] [AI Mentor] │
 └────────────────────────────────────────────┬────────────────────────────────────────────┘
-                                             │ HTTP / REST API (Port 4100)
+                                             │ HTTP / REST & OpenMetrics (Port 3000)
 ┌────────────────────────────────────────────▼────────────────────────────────────────────┐
-│                               API GATEWAY & SECURITY                                    │
-│  Zero-Dependency HTTP Router • Content Security Policy • 1MB Body Limit • Auth Guard     │
+│                             API GATEWAY & SECURITY PERIMETER                            │
+│  Rate Limiter (180 req/min/IP) • CSP Headers • 1MB Body Limit • /metrics • /livez/readyz│
 └────────────────────────────────────────────┬────────────────────────────────────────────┘
                                              │
 ┌────────────────────────────────────────────▼────────────────────────────────────────────┐
-│                                  CORE ENGINE TIER                                       │
+│                        MULTI-TENANT SESSION & STORAGE LAYER                             │
+│  SessionManager (Isolated Cluster & VFS per Session) • SQLite (WAL Mode, Parameterized) │
+└────────────────────────────────────────────┬────────────────────────────────────────────┘
+                                             │
+┌────────────────────────────────────────────▼────────────────────────────────────────────┐
+│                                CORE ENGINE SUBSYSTEMS                                   │
 │  ┌───────────────────────┐ ┌───────────────────────┐ ┌───────────────────────────────┐  │
-│  │     VirtualCluster    │ │     TerminalEngine    │ │       ValidationEngine        │  │
-│  │ (Control Plane, Pods, │ │ (kubectl, helm, docker│ │ (10 Assertion Types, SHA-256  │  │
-│  │  Services, Controllers│ │  istioctl, tofu, etc.)│ │  Cryptographic Ledger)        │  │
+│  │   VirtualFileSystem   │ │     VirtualCluster    │ │       TerminalEngine          │  │
+│  │ (POSIX In-Memory,     │ │ (Reconcilers, RBAC,   │ │ (kubectl, helm, etcdctl,      │  │
+│  │  Piping, Redirection) │ │  CSI, Taints, Webhook)│ │  kubeadm, vcluster, etc.)     │  │
 │  └───────────┬───────────┘ └───────────┬───────────┘ └───────────────┬───────────────┘  │
 │              │                         │                             │                  │
 │  ┌───────────▼───────────┐ ┌───────────▼───────────┐ ┌───────────────▼───────────────┐  │
-│  │     IncidentEngine    │ │   ArchitectureEngine  │ │       AIMentor & Auditor      │  │
-│  │ (8 Outage Scenarios,  │ │ (Topology, 4 Pillars, │ │ (Socratic Hints, CIS Audits,  │  │
-│  │  MTTR Stopwatch)      │ │  YAML & HCL Compiler) │ │  Diagnosis & Explanations)    │  │
+│  │    ValidationEngine   │ │     IncidentEngine    │ │     CertificationEngine       │  │
+│  │ (10 Assertion Types,  │ │ (12 SEV-1/2 Outages,  │ │ (Ed25519 Digital Signatures,  │  │
+│  │  Deterministic E2E)   │ │  MTTR Stopwatch)      │ │  Offline Verification)        │  │
 │  └───────────┬───────────┘ └───────────┬───────────┘ └───────────────┬───────────────┘  │
 │              │                         │                             │                  │
 │  ┌───────────▼───────────┐ ┌───────────▼───────────┐ ┌───────────────▼───────────────┐  │
-│  │     ProjectEngine     │ │  CertificationEngine  │ │         PluginManager         │  │
-│  │ (6 Enterprise         │ │ (6 Role Tracks, HMAC- │ │ (JSON Schema, 18 Domains,     │  │
-│  │  Capstone Projects)   │ │  SHA256 Signed Certs) │ │  Dynamic Hot-Loading)         │  │
+│  │   ArchitectureEngine  │ │       AIMentor        │ │        ProjectEngine          │  │
+│  │ (4 Pillars, 8 Blue-   │ │ (Socratic Guidance,   │ │ (8 Multi-Milestone Capstones, │  │
+│  │  prints, YAML/HCL)    │ │  CIS Benchmark Audit) │ │  Step-by-Step Validation)     │  │
 │  └───────────────────────┘ └───────────────────────┘ └───────────────────────────────┘  │
-└────────────────────────────────────────────┬────────────────────────────────────────────┘
-                                             │
-┌────────────────────────────────────────────▼────────────────────────────────────────────┐
-│                             PERSISTENCE TIER (node:sqlite)                              │
-│  WAL Mode • Foreign Keys • Parameterized Statements • Learner Profiles & Certificates    │
 └─────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Architectural Decision Records (ADRs) Summary
-
-| ADR ID | Decision | Justification |
-| :--- | :--- | :--- |
-| **ADR-001** | Zero External NPM Runtime Dependencies | Eliminates supply chain attack vectors, avoids CVE patching fatigue, guarantees zero install friction. |
-| **ADR-002** | Native `node:sqlite` in WAL Mode | Ultra-fast local persistence with concurrent reads, transactional integrity, and zero native build dependencies. |
-| **ADR-003** | In-Process Declarative Virtual Cluster | Achieves < 46 MB RSS RAM and < 120ms cold start vs 12 GB RAM and 2-minute boots for hypervisor VMs. |
-| **ADR-004** | Sandboxed Deterministic Terminal Parser | Completely eliminates arbitrary host Remote Code Execution (RCE) while simulating 12+ industry CLIs. |
-| **ADR-005** | State-Based Declarative Validation | Learner freedom: allows both imperative commands and declarative manifests, evaluating reconciled cluster state. |
-| **ADR-006** | JSON Schema-Governed Plugin Catalog | Enables hot-loadable curriculum modules across 18 domains without touching core server code. |
-| **ADR-007** | Offline-First Progressive Web App (PWA) | Service worker caching of all assets ensures 100% functionality without internet connection. |
-| **ADR-008** | Socratic Offline AI Mentor | Delivers guided hints without giving away solutions, coupled with an automated CIS benchmark auditor. |
-| **ADR-009** | Cryptographic HMAC-SHA256 Certification | Issues verifiable, tamper-proof completion certificates with embedded public keys and skill radars. |
-| **ADR-010** | Bi-Directional Architecture & IaC Compiler | Visual drag-and-drop canvas compiles directly to production-ready Kubernetes YAML and OpenTofu HCL. |
+### Architectural Invariants:
+1. **Zero External Runtime Dependencies**: `package.json` contains `"dependencies": {}`.
+2. **Strict Resource Budgets**: Startup `< 250ms`, Idle RSS Memory `< 65MB`, Peak Engine Load `< 150MB`.
+3. **Deterministic Solvability**: 100% of labs, incidents, and capstones fail before solution and pass 100% after canonical commands are executed.
+4. **Zero Host Execution**: Terminal commands are parsed and interpreted entirely in an in-memory state machine. No `child_process.exec` or host shell access is ever invoked.
 
 ---
 
 ## 3. Deep-Dive: Engine Subsystems
 
-### 3.1 Virtual Control Plane (`VirtualCluster`)
-Located at [`src/engine/virtualCluster.js`](file:///h:/kubelabs/src/engine/virtualCluster.js), this subsystem acts as an in-memory Kubernetes API server, controller manager, and kubelet simulation.
+### 3.1 Multi-Tenant Session Manager (`sessionManager.js`)
+Located at [`src/engine/sessionManager.js`](file:///h:/kubelabs/src/engine/sessionManager.js), this subsystem provides isolated execution sandboxes for concurrent browser tabs, users, or API clients:
+- **State Isolation**: Every session maintains its own private `VirtualCluster`, in-memory `VirtualFileSystem`, and terminal history. Actions in one tab cannot mutate or leak into another.
+- **LRU Eviction & Idle Cleanup**: Automatically evicts stale sessions older than 2 hours or when active sessions exceed 500, preserving memory budgets.
+- **SQLite Snapshot Synchronization**: Sessions can export and import their cluster and filesystem state to SQLite for seamless resume across restarts.
 
-#### Key Capabilities:
-- **Declarative YAML Parser**: Supports multi-document YAML (`---` separator) and parses Kubernetes manifests without external libraries.
-- **Resource Graph**: Maintains isolated namespaces (`default`, `kube-system`, `production`, `monitoring`, etc.) and stores core Kubernetes resources:
-  - `Pod`, `Deployment`, `ReplicaSet`, `Service`, `ConfigMap`, `Secret`, `Namespace`, `NetworkPolicy`, `Ingress`, `PersistentVolumeClaim`, `ServiceAccount`, `DaemonSet`, `StatefulSet`, `Job`, `CronJob`.
-- **Ecosystem Resource Extensions**: Wire-compatible state tracking for non-core resources:
-  - `HelmRelease`, `GitRepository`, `Kustomization`, `Application` (ArgoCD), `VirtualService`, `DestinationRule` (Istio), `TerraformResource`, `CloudResource` (AWS/Azure/GCP).
-- **Controller Manager Simulation**:
-  - **Deployment Controller**: When a `Deployment` is created or scaled, the controller computes the replica difference, reconciles owned `ReplicaSet` objects, and creates/destroys child `Pod` instances following the pod template spec.
-  - **Endpoint Controller**: Inspects active `Service` selector labels (`app: web`), finds all matching pods with status `Running`, and populates the service's `endpoints` array with their dynamic virtual IP addresses (`10.244.x.x`).
-  - **Pod Health & Error Simulator**: Inspects container image names and resource limits. Automatically triggers realistic failure states:
-    - Images containing `broken` or `invalid` → Status `ImagePullBackOff` / `ErrImagePull`.
-    - Images containing `crash` or `fail` → Status `CrashLoopBackOff`.
-    - Memory limits < 32Mi under high load → Status `OOMKilled`.
-- **Rollout Engine**: Supports `kubectl rollout status`, `kubectl rollout history`, and `kubectl rollout undo` with automatic revision rollback.
+### 3.2 In-Memory POSIX Virtual File System (`virtualFileSystem.js`)
+Located at [`src/engine/virtualFileSystem.js`](file:///h:/kubelabs/src/engine/virtualFileSystem.js), this module provides a complete in-memory UNIX filesystem:
+- **POSIX Operations**: `mkdir`, `cd`, `pwd`, `ls`, `cat`, `touch`, `rm`, `writeFile`, and `readFile`.
+- **Stream Redirection & Appending**: Supports shell redirection (`echo '...' > manifest.yaml`, `cat file >> output.txt`).
+- **Path Resolution**: Handles relative and absolute paths (`.`, `..`, `/root`, `/tmp/manifests`).
+- **Cluster Integration**: `kubectl apply -f /path/to/manifest.yaml` reads manifests directly from the session's VFS.
 
----
+### 3.3 Virtual Control Plane & Cluster Controller (`virtualCluster.js`)
+Located at [`src/engine/virtualCluster.js`](file:///h:/kubelabs/src/engine/virtualCluster.js), this is the platform's core Kubernetes reconciliation brain:
+- **Quote-Safe YAML Parser**: Parses complex multi-document YAML with comments, inline arrays, block scalars (`|`, `|-`, `>`, `>-`), and nested configurations.
+- **Controller Reconcilers**:
+  - `DeploymentController`: Scales ReplicaSets and schedules Pods with IP allocation.
+  - `ServiceController`: Discovers matching Pods via label selectors and binds dynamic Endpoints.
+  - `DaemonSetController`: Automatically schedules pod instances across all schedulable nodes.
+  - `PVCDynamicBinder`: Validates `StorageClass`, checks access modes, and provisions `PersistentVolume` bindings.
+- **Advanced Kubernetes Primitives**:
+  - `RBAC Engine`: Evaluates `Role`, `ClusterRole`, `RoleBinding`, and `ClusterRoleBinding` for `kubectl auth can-i`.
+  - `Node Lifecycle`: Supports `cordon`, `uncordon`, `drain --ignore-daemonsets`, and taint/toleration evaluation.
+  - `CoreDNS Loop Detector`: Detects upstream forwarding loops in CoreDNS ConfigMaps.
+  - `etcd Member Health`: Tracks Raft quorum status and member endpoints.
 
-### 3.2 Multi-CLI Sandboxed Terminal Engine (`TerminalEngine`)
-Located at [`src/engine/terminalEngine.js`](file:///h:/kubelabs/src/engine/terminalEngine.js), this engine provides an authentic Unix terminal command experience with zero security risk.
+### 3.4 Multi-CLI Sandboxed Terminal Engine (`terminalEngine.js`)
+Located at [`src/engine/terminalEngine.js`](file:///h:/kubelabs/src/engine/terminalEngine.js), this engine parses and executes commands across multiple cloud-native CLIs:
+- **Supported CLIs**:
+  - `kubectl`: Core operations (`get`, `describe`, `apply`, `delete`, `set env`, `autoscale`, `cordon`, `drain`, `taint`, `auth can-i`, `patch`, `create quota/service/networkpolicy`).
+  - `etcdctl`: `snapshot save`, `snapshot restore`, `endpoint health`, `member list`.
+  - `kubeadm`: `upgrade plan`, `upgrade apply`, `certs check-expiration`.
+  - `helm`: `install`, `upgrade`, `rollback`, `list`, `uninstall`.
+  - `velero`: `backup create`, `restore create`, `schedule create`.
+  - `kyverno`: `apply`, `test`.
+  - `vcluster`: `create`, `list`, `connect`.
+  - `crossplane`: `install`, `status`.
+  - Cloud & Tooling CLIs: `aws`, `az`, `gcloud`, `docker`, `argocd`, `istioctl`, `tofu`, `trivy`, `aiops`.
+- **Command Chaining & Pipes**: Supports `&&`, `;`, `| grep`, `| head`, `| tail`, and output redirection (`>`, `>>`).
 
-#### Simulated CLIs and Commands:
-- **`kubectl`**:
-  - `get [pods|deployments|services|nodes|all|configmaps|secrets|endpoints|networkpolicies|hpa]` with flags: `-n/--namespace`, `-o wide`, `-o yaml`, `-o json`, `-l/--selector`.
-  - `apply -f <filename>` / `create -f <filename>` (evaluates virtual manifests).
-  - `create [deployment|service|configmap|secret|namespace]` with arguments.
-  - `describe [pod|deployment|service]` with detailed events and container specs.
-  - `logs <pod-name> [-c container] [--tail N]` (returns realistic container stdout/stderr).
-  - `exec <pod-name> -- <command>` (supports `sh`, `bash`, `env`, `curl`, `cat`, `ls`).
-  - `scale deployment <name> --replicas=N`.
-  - `rollout [status|undo|history] deployment <name>`.
-  - `delete [pod|deployment|service|configmap] <name>`.
-  - `top [nodes|pods]` (returns CPU and memory utilization).
-- **`helm`**:
-  - `repo add <name> <url>`, `repo update`, `search repo <keyword>`, `install <release> <chart> [--set key=val]`, `list`, `upgrade`, `uninstall`.
-- **`docker` / `crictl`**:
-  - `docker build -t <tag> .`, `docker run -d -p 8080:80`, `docker ps`, `docker images`, `docker logs`, `crictl pods`, `crictl ps`.
-- **`argocd` / GitOps**:
-  - `argocd app create`, `argocd app list`, `argocd app get <name>`, `argocd app sync <name>`.
-- **`istioctl`**:
-  - `istioctl analyze`, `istioctl proxy-status`, `istioctl version`.
-- **`tofu` / `terraform`**:
-  - `tofu init`, `tofu plan`, `tofu apply -auto-approve`, `tofu show`, `tofu state list`.
-- **Cloud Providers (`aws`, `az`, `gcloud`)**:
-  - `aws eks describe-cluster`, `aws s3 ls`, `az aks show`, `gcloud container clusters list`.
-- **Security & Supply Chain (`trivy`, `falco`, `cosign`)**:
-  - `trivy image <tag>`, `falco --rules`, `cosign verify <image>`.
-- **`aiops`**:
-  - `aiops cluster-health`, `aiops detect-anomalies`, `aiops recommend-scaling`.
-- **Linux & Networking Utilities**:
-  - `curl <url>`, `ping <host>`, `nslookup <domain>`, `dig`, `ip addr`, `netstat`, `ps aux`, `uptime`, `cat`, `grep`, `awk`, `head`, `tail`.
+### 3.5 Multi-Assertion Validation Engine (`validationEngine.js`)
+Located at [`src/engine/validationEngine.js`](file:///h:/kubelabs/src/engine/validationEngine.js), this module evaluates lab completion using 10 declarative rule types:
+1. `resource_exists`: Verifies resource existence by Kind, Namespace, and Name.
+2. `pod_status_running`: Checks that all pods for a workload are in `Running` state.
+3. `service_has_endpoints`: Asserts that a Service has active endpoint IPs bound.
+4. `resource_field_equals`: Deep JSONPath evaluation (`spec.replicas`, `spec.template.spec.securityContext.runAsNonRoot`).
+5. `resource_field_gte`: Numeric threshold assertions (`spec.replicas >= 3`).
+6. `command_executed`: Validates execution of required CLI commands via substring or regex.
+7. `network_policy_isolates`: Asserts zero-trust ingress/egress policy rules.
+8. `hpa_configured`: Validates HorizontalPodAutoscaler targets and metrics.
+9. `storage_bound`: Checks PVC `status.phase === 'Bound'`.
+10. `security_hardened`: Validates dropped Linux capabilities and read-only filesystems.
 
----
+### 3.6 Production Incident Simulator (`incidentEngine.js`)
+Located at [`src/engine/incidentEngine.js`](file:///h:/kubelabs/src/engine/incidentEngine.js), provides 12 high-impact SEV-1/SEV-2 production outages:
+- `inc-01-selector-blackhole`: Service selector drift leaving endpoints at zero (503 Service Unavailable).
+- `inc-02-bad-image-rollout`: Defective canary tag causing `ImagePullBackOff`.
+- `inc-03-crashloop-missing-secret`: Application crashing on start due to missing secret environment keys.
+- `inc-04-netpol-database-isolation`: Overly strict default-deny NetworkPolicy breaking database egress.
+- `inc-05-cpu-starvation-pending`: Pods unschedulable due to excessive CPU requests.
+- `inc-06-istio-mtls-503-uc`: Istio strict mTLS mode mismatch causing connection resets.
+- `inc-07-argocd-drift-out-of-sync`: Out-of-band imperative cluster mutation triggering GitOps drift.
+- `inc-08-gpu-taint-scheduling-block`: LLM inference pod pending due to missing GPU node toleration.
+- `inc-09-etcd-quorum-loss`: Control plane split-brain and read-only freeze from lost Raft quorum.
+- `inc-10-kyverno-admission-block`: Misconfigured validating webhook rejecting all namespace creation.
+- `inc-11-coredns-loop-crash`: CoreDNS forwarding loop causing cluster-wide DNS failure.
+- `inc-12-pvc-storageclass-pending`: Stateful database PVC stuck pending due to missing StorageClass.
 
-### 3.3 Declarative Validation Engine (`ValidationEngine`)
-Located at [`src/engine/validationEngine.js`](file:///h:/kubelabs/src/engine/validationEngine.js), this engine executes 10 distinct rule types to verify lab completion:
+### 3.7 Visual Architecture Designer & IaC Compiler (`architectureEngine.js`)
+Located at [`src/engine/architectureEngine.js`](file:///h:/kubelabs/src/engine/architectureEngine.js):
+- **4-Pillar Well-Architected Evaluation**: Computes real-time scores (0–100%) for Security, Reliability, Performance, and Cost Optimization.
+- **Bi-Directional IaC Generation**: Compiles visual topologies into production-ready multi-document Kubernetes YAML or OpenTofu/Terraform HCL.
+- **8 Reference Blueprints**: Pre-modeled enterprise topologies including Zero-Trust Mesh, FinOps Kepler, Edge Wasm, and Multi-Cloud EKS/GKE.
 
-1. `resource_exists`: Validates that a named resource exists in a specified namespace.
-2. `pod_status`: Asserts that all matching pods are in `Running` status with zero restarts.
-3. `replicas_count`: Checks that `spec.replicas` or ready replicas match the expected integer.
-4. `container_image`: Verifies that the pod/deployment container runs a specific image tag.
-5. `port_exposed`: Verifies container port or Service targetPort exposure.
-6. `service_selector`: Asserts that a Service has the exact label selector required to route traffic.
-7. `field_equals`: Deep JSON path lookup (`metadata.labels`, `spec.template.spec.containers[0].resources`) matching an expected value.
-8. `env_var`: Validates environment variable existence and value within a container.
-9. `config_mapped`: Verifies that a ConfigMap or Secret is mounted as a volume or environment variable.
-10. `command_output`: Validates command-line output assertions using regex.
+### 3.8 Contextual Socratic AI Mentor & CIS Auditor (`aiMentor.js`)
+Located at [`src/engine/aiMentor.js`](file:///h:/kubelabs/src/engine/aiMentor.js):
+- **Three Pedagogical Modes**: `hint` (Socratic diagnostic suggestions), `debug` (error analysis), and `explain` (architectural concepts).
+- **CIS Kubernetes Benchmark Auditor**: Runs 10 automated security checks auditing root execution, capabilities, resource limits, and network policies.
 
-#### Cryptographic SHA-256 Proof:
-Upon successful completion of all criteria, the engine generates an immutable SHA-256 hash incorporating the learner ID, lab ID, timestamp, and rule signatures, which is committed to the local SQLite database.
+### 3.9 Asymmetric Ed25519 Certification Engine (`certificationEngine.js`)
+Located at [`src/engine/certificationEngine.js`](file:///h:/kubelabs/src/engine/certificationEngine.js):
+- **Cryptographic Authority**: Generates an Ed25519 keypair upon startup (`crypto.generateKeyPairSync('ed25519')`).
+- **Verifiable Credentials**: Produces cryptographically signed certificates containing candidate name, score, track ID, and base64 signature.
+- **Public Key Endpoint**: Exposes `GET /api/certifications/public-key` for instant third-party offline credential verification.
 
----
+### 3.10 Enterprise Multi-Milestone Capstone Engine (`projectEngine.js`)
+Located at [`src/engine/projectEngine.js`](file:///h:/kubelabs/src/engine/projectEngine.js):
+- Houses 8 multi-stage enterprise projects featuring step-by-step milestone progression, validation endpoints (`POST /api/projects/:id/milestones/:mNum/validate`), and comprehensive business scenarios.
 
-### 3.4 Production Incident Simulator (`IncidentEngine`)
-Located at [`src/engine/incidentEngine.js`](file:///h:/kubelabs/src/engine/incidentEngine.js), this engine provides 8 realistic high-severity production outage scenarios:
+### 3.11 SQLite WAL Persistence Tier (`database.js`)
+Located at [`src/db/database.js`](file:///h:/kubelabs/src/db/database.js):
+- Uses native `node:sqlite` in WAL mode (`PRAGMA journal_mode = WAL`) with foreign key constraints.
+- Maintains schema migrations, learner profiles, lab completions, incident records, certifications, and session snapshots.
 
-| Incident ID | Severity | Title | Root Cause Injected |
-| :--- | :--- | :--- | :--- |
-| `inc-01-selector-drift` | **SEV-1** | Production 502 Bad Gateway | Service selector mismatch (`app: web-v2` vs pods `app: frontend`). Endpoints drop to 0. |
-| `inc-02-bad-image-rollout` | **SEV-1** | Production Auth Outage | Canary rollout pushed `auth:v2.9-broken`, causing continuous `ImagePullBackOff`. |
-| `inc-03-crashloop-config` | **SEV-2** | Payments API CrashLoop | Missing mandatory `DATABASE_URL` environment variable causing immediate exit code 1. |
-| `inc-04-oom-kill-spike` | **SEV-1** | Checkout Pod OOMKilled | Aggressive memory limit (16Mi) causing immediate Linux cgroup OOM killer termination. |
-| `inc-05-cpu-throttling` | **SEV-2** | Latency Spike on Order API | Overly restrictive CPU limit (50m) causing 95% CFS CPU quota throttling. |
-| `inc-06-gitops-out-of-sync` | **SEV-2** | GitOps OutOfSync Drift | Direct imperative cluster edits drifted from declared Git repository state in ArgoCD. |
-| `inc-07-ai-gpu-eviction` | **SEV-1** | LLM Serving Node Eviction | Pod requested 4 GPUs on a node with only 2 available, resulting in `FailedScheduling`. |
-| `inc-08-netpol-cross-talk` | **SEV-1** | Database Unreachable | Overly broad default-deny `NetworkPolicy` blocking egress traffic to the backend database. |
-
-Each incident features an active MTTR (Mean Time to Recovery) stopwatch, simulated error logs, and automated resolution checks.
-
----
-
-### 3.5 Visual Architecture Designer & IaC Compiler (`ArchitectureEngine`)
-Located at [`src/engine/architectureEngine.js`](file:///h:/kubelabs/src/engine/architectureEngine.js), this module bridges visual system design with production infrastructure as code.
-
-#### Key Capabilities:
-- **Topology Analysis & SPOF Detection**:
-  - Scans nodes, databases, ingress controllers, and services for Single Points of Failure.
-  - Computes 4-Pillar Well-Architected Scores (0–100%): **Security**, **Reliability**, **Cost Efficiency**, **Performance**.
-- **Bi-Directional IaC Compiler**:
-  - Generates multi-document, production-ready Kubernetes YAML (`Deployment`, `Service`, `Ingress`, `HPA`, `NetworkPolicy`).
-  - Generates multi-cloud OpenTofu/Terraform HCL manifests (`aws_vpc`, `aws_eks_cluster`, `kubernetes_deployment`).
-- **8 Enterprise Reference Blueprints**:
-  1. `enterprise-microservices`: Multi-tier Kubernetes microservices with Redis cache and PostgreSQL.
-  2. `gitops-multi-env`: ArgoCD multi-environment GitOps pipeline (Dev, Staging, Prod).
-  3. `istio-service-mesh`: Zero-trust mTLS Istio service mesh with ingress/egress gateways.
-  4. `ai-ops-gpu-inference`: vLLM / Triton GPU model serving cluster with Ray autoscaler.
-  5. `serverless-wasm-edge`: SpinKube WebAssembly microservices on Kubernetes edge nodes.
-  6. `ebpf-zero-trust-tetragon`: Cilium CNI + Tetragon runtime security enforcement.
-  7. `finops-opencost-green`: OpenCost monitoring with Kepler green cloud carbon tracking.
-  8. `multi-cloud-dr`: Active-passive disaster recovery across AWS EKS and GCP GKE.
-
----
-
-### 3.6 Contextual Socratic AI Mentor & Security Auditor (`AIMentor`)
-Located at [`src/engine/aiMentor.js`](file:///h:/kubelabs/src/engine/aiMentor.js), this engine assists learners without giving away solutions.
-
-#### Operational Modes:
-- **`hint` (Socratic Guidance)**: Analyzes current virtual cluster state against failed lab criteria. Suggests diagnostic commands (e.g. *"Inspect the events on your deployment using `kubectl describe deployment ...`"*) to guide discovery.
-- **`debug` (Root Cause Analysis)**: Decodes cryptic Kubernetes error conditions (e.g., explains why `ImagePullBackOff` happens or why endpoints are empty).
-- **`explain` (Deep Conceptual Learning)**: Explains cloud-native primitives, CNCF specs, or architectural tradeoffs.
-- **Automated CIS Kubernetes Benchmark Auditor**: Runs 10 automated security audit checks against running resources:
-  - Disallows root containers (`runAsNonRoot: true`).
-  - Requires read-only root filesystems (`readOnlyRootFilesystem: true`).
-  - Checks for CPU/Memory resource requests and limits.
-  - Warns against missing `NetworkPolicy` objects or default service account token mounting.
-
----
-
-### 3.7 Role-Based Certification Engine (`CertificationEngine`)
-Located at [`src/engine/certificationEngine.js`](file:///h:/kubelabs/src/engine/certificationEngine.js), this engine delivers timed, proctored-style exams across 6 roles:
-
-1. **Certified Kubernetes Administrator (CKA - KubeLabs Edition)**
-2. **Certified Kubernetes Security Specialist (CKS - KubeLabs Edition)**
-3. **Certified Cloud-Native Architect (CCNA - KubeLabs Edition)**
-4. **Certified GitOps & Platform Engineer (CGPE - KubeLabs Edition)**
-5. **Certified SRE & Chaos Engineer (CSRE - KubeLabs Edition)**
-6. **Certified AI-Ops & Emerging Tech Specialist (CAES - KubeLabs Edition)**
-
-#### Cryptographic Credentials:
-When an exam is passed with a score ≥ 80%, the engine calculates an 18-domain Skill Radar and signs a permanent credential using HMAC-SHA256:
-
-```json
-{
-  "certId": "CERT-CKA-7X9K2M",
-  "trackId": "track-k8s-admin",
-  "candidate": "Learner",
-  "score": 95,
-  "issueDate": "2026-11-11T22:50:00.000Z",
-  "hmacSignature": "a7f3b8c9d0e1...",
-  "status": "VALID_AND_VERIFIED"
-}
-```
-
----
-
-### 3.8 Enterprise Capstone Project Engine (`ProjectEngine`)
-Located at [`src/engine/projectEngine.js`](file:///h:/kubelabs/src/engine/projectEngine.js), this engine provides 6 comprehensive multi-stage projects:
-
-1. `proj-fintech-microservices`: High-reliability fintech payment processing pipeline with mTLS and network isolation.
-2. `proj-gitops-multicloud`: Multi-cluster GitOps deployment pipeline using ArgoCD and OpenTofu.
-3. `proj-zero-trust-devsecops`: Complete DevSecOps supply chain with Cosign signing, Trivy scanning, and Falco enforcement.
-4. `proj-sre-chaos-platform`: Automated SRE platform with Prometheus alerting and chaos engineering injection.
-5. `proj-internal-developer-portal`: Backstage-inspired platform engineering Golden Path catalog for engineering teams.
-6. `proj-ai-inference-platform`: High-performance GPU LLM inference cluster with Triton, Ray, and vLLM.
-
----
-
-### 3.9 Native SQLite Persistence Tier (`DatabaseSync`)
-Located at [`src/db/database.js`](file:///h:/kubelabs/src/db/database.js), the database layer uses Node.js 22+'s built-in `node:sqlite`:
-
-- **WAL Mode (`PRAGMA journal_mode = WAL`)**: Ensures non-blocking concurrent reads and lightning-fast transactional writes.
-- **Foreign Key Integrity (`PRAGMA foreign_keys = ON`)**: Enforces referential integrity across 7 core relational tables:
-  - `user_profiles`, `lab_progress`, `incident_progress`, `project_progress`, `certifications`, `architectures`, `terminal_history`.
-- **Zero Injections**: All queries use parameterized prepared statements (`db.prepare('...').run(...)`).
-
----
-
-### 3.10 Zero-Dependency REST API Gateway & Security Perimeter
+### 3.12 HTTP/REST Gateway, Rate Limiter & Prometheus Metrics (`router.js`, `server.js`)
 Located at [`src/api/router.js`](file:///h:/kubelabs/src/api/router.js) and [`src/server.js`](file:///h:/kubelabs/src/server.js):
+- **Token-Bucket Rate Limiter**: Restricts traffic to 180 requests/minute per client IP.
+- **OpenMetrics Endpoint**: Serves Prometheus metrics on `GET /metrics` tracking request latency, active sessions, and status codes.
+- **Kubernetes Probes**: Native `/api/livez` and `/api/readyz` endpoints.
+- **Graceful Shutdown**: Intercepts `SIGTERM` and `SIGINT` to cleanly close connections and flush SQLite WAL logs.
 
-- **Strict HTTP Security Headers**:
-  - `Content-Security-Policy`: Default `'self'`, scripts `'self' 'unsafe-inline'`, styles `'self' 'unsafe-inline'`.
-  - `X-Frame-Options: DENY` (prevents clickjacking).
-  - `X-Content-Type-Options: nosniff` (prevents MIME type sniffing).
-  - `Referrer-Policy: strict-origin-when-cross-origin`.
-- **DoS Protection**: Enforces a strict 1 MB body payload limit on incoming JSON POST requests.
-- **Path Traversal Guard**: Sanitizes all static file requests against `..` escapes.
+### 3.13 Browser-Native Isomorphic Offline Engine (`offlineEngine.js`, `sw.js`)
+Located at [`public/js/offlineEngine.js`](file:///h:/kubelabs/public/js/offlineEngine.js) and [`public/sw.js`](file:///h:/kubelabs/public/sw.js):
+- Implements browser-side mirrors of `VirtualCluster`, `VirtualFileSystem`, `TerminalEngine`, and `ValidationEngine`.
+- Service worker caches all static assets and triggers offline execution when network connectivity is lost.
 
 ---
 
-## 4. Master Curriculum Catalog & Plugin Architecture
-
-### 4.1 The 18 Learning Domains
-KubeLabs organizes its entire curriculum across 18 specialized domain plugins (`plugins/*.json`):
+## 4. Master Curriculum Catalog (26 Domains & 6 Guided Tracks)
 
 ```
 ┌────────────────────────────────────────────────────────────────────────────────────────┐
-│                                 18 DOMAIN MODULES                                      │
+│                          26 COMPREHENSIVE LEARNING DOMAINS                             │
 ├─────────────────────────┬──────────────────────────┬───────────────────────────────────┤
-│ 01. Linux Fundamentals  │ 07. DevOps CI/CD         │ 13. OpenTofu / Terraform IaC      │
-│ 02. Containers Runtime  │ 08. DevSecOps & Security │ 14. AWS Cloud Infrastructure      │
-│ 03. Cloud Networking    │ 09. Istio Service Mesh   │ 15. Azure & GCP Multi-Cloud       │
-│ 04. Kubernetes Core     │ 10. Observability Stack  │ 16. AI-Ops & GPU Workloads        │
-│ 05. CNCF Packaging      │ 11. SRE & Chaos Eng.     │ 17. Wasm & eBPF Tetragon          │
-│ 06. GitOps Delivery     │ 12. Platform Engineering │ 18. FinOps & Green Cloud          │
+│ 01. Linux Fundamentals  │ 10. Observability Stack  │ 19. Control Plane & Upgrades      │
+│ 02. Containers Runtime  │ 11. SRE & Chaos Eng.     │ 20. Gateway API & Cilium eBPF     │
+│ 03. Cloud Networking    │ 12. Platform Engineering │ 21. Policy-as-Code (Kyverno)      │
+│ 04. Kubernetes Core     │ 13. OpenTofu / Terraform │ 22. Autoscaling (KEDA/Karpenter)  │
+│ 05. CNCF Packaging      │ 14. AWS EKS Architecture │ 23. Storage CSI & Velero DR       │
+│ 06. GitOps Delivery     │ 15. Azure AKS & GCP GKE  │ 24. Multi-Tenancy (vCluster)      │
+│ 07. DevOps CI/CD        │ 16. AI-Ops & GPU Systems │ 25. Zero-Trust SPIFFE / Secrets   │
+│ 08. DevSecOps Security  │ 17. Wasm & eBPF Tetragon │ 26. Cloud-Native AI/ML (KServe)   │
+│ 09. Service Mesh        │ 18. FinOps & Green Cloud │                                   │
 └─────────────────────────┴──────────────────────────┴───────────────────────────────────┘
 ```
 
-Each domain file contains:
-- Domain metadata, icon, track mappings, and prerequisites.
-- Structured learning modules with deep theoretical concepts.
-- Multiple hands-on labs with initial failure states, setup manifests, and deterministic validation criteria.
-- Assessment questions testing conceptual mastery.
-
-### 4.2 The 6 Guided Role Tracks
-Learners can follow curated role-based learning tracks:
-1. **Kubernetes Administrator Track**: Domains 01, 02, 03, 04, 05, 10.
-2. **Cloud-Native Architect Track**: Domains 04, 09, 12, 13, 14, 15.
-3. **DevSecOps Engineer Track**: Domains 02, 04, 06, 07, 08, 17.
-4. **SRE & Production Operations Track**: Domains 03, 04, 09, 10, 11, 18.
-5. **GitOps & Platform Engineering Track**: Domains 05, 06, 07, 12, 13, 16.
-6. **Multi-Cloud Cloud-Native Track**: Domains 03, 13, 14, 15, 17, 18.
-
-### 4.3 Plugin Schema & Dynamic Extensibility
-Located at [`schemas/plugin.schema.json`](file:///h:/kubelabs/schemas/plugin.schema.json), every plugin is strictly validated against a JSON Schema. New technologies can be added simply by dropping a new `.json` file into `plugins/` without modifying core code.
-
----
-
-## 5. User Experience & End-to-End Walkthroughs
-
-### 5.1 Interactive Workbench UI Overview
-The frontend ([`public/index.html`](file:///h:/kubelabs/public/index.html), [`public/css/styles.css`](file:///h:/kubelabs/public/css/styles.css), [`public/js/app.js`](file:///h:/kubelabs/public/js/app.js)) delivers a unified single-page responsive interface:
-
-- **Header Bar**: Displays current user profile, total XP, current role track selector, and navigation tabs.
-- **Workspace Navigation Tabs**:
-  - **Labs**: Browse domains, select interactive labs, read objectives, and execute validation checks.
-  - **Terminal**: Interactive CLI emulator with syntax styling, command history, and pipe support.
-  - **Manifest Editor**: YAML manifest authoring tool with syntax validation and instant cluster deployment (`Apply Manifest`).
-  - **Cluster Topology**: Live visual SVG/DOM graph showing Nodes, Pods, Deployments, and Services with real-time health badges.
-  - **Incident Console**: SEV-1/SEV-2 incident simulator with active MTTR timer, symptoms, and recovery checks.
-  - **Architecture Canvas**: Drag-and-drop system designer with well-architected scoring and instant YAML/HCL export.
-  - **Certifications**: Timed exam portal with question navigation and instant HMAC-SHA256 credential generation.
-  - **AI Mentor**: Interactive dialog box supporting Socratic hints, error debugging, and CIS security audits.
-  - **Self-Audit**: Live dashboard displaying the status of all 11 autonomous agents and 50 quality checks.
+### The 6 Career Tracks & Included Domains:
+1. **Track 1: Cloud-Native Foundations (`track-foundations`)**  
+   *Domains*: 01 (Linux), 02 (Containers), 03 (Networking), 23 (Storage CSI & Velero).  
+   *Credential*: Certified Cloud-Native Foundations Associate (CCNFA).
+2. **Track 2: Kubernetes & CNCF Administrator (`track-k8s-admin`)**  
+   *Domains*: 04 (K8s Core), 05 (Packaging), 06 (GitOps), 07 (CI/CD), 19 (Control Plane & Upgrades).  
+   *Credential*: Certified Kubernetes & GitOps Administrator (CKGA).
+3. **Track 3: DevSecOps & Zero-Trust Specialist (`track-devsecops`)**  
+   *Domains*: 08 (DevSecOps), 09 (Service Mesh), 21 (Policy-as-Code Kyverno), 25 (Zero-Trust SPIFFE & External Secrets).  
+   *Credential*: Certified Cloud-Native Security Specialist (CCNSS).
+4. **Track 4: SRE, Service Mesh & Resilience Lead (`track-sre`)**  
+   *Domains*: 10 (Observability), 11 (SRE & Chaos), 20 (Gateway API & Cilium), 22 (KEDA & Karpenter Autoscaling).  
+   *Credential*: Certified Site Reliability & Incident Commander (CSRIC).
+5. **Track 5: Platform Engineering & Multi-Tenancy Architect (`track-platform`)**  
+   *Domains*: 12 (Platform Eng), 13 (OpenTofu), 18 (FinOps OpenCost), 24 (Multi-Tenancy vCluster & Crossplane).  
+   *Credential*: Certified Platform Engineering Architect (CPEA).
+6. **Track 6: Multi-Cloud, Cloud-Native AI/ML & Distributed Systems (`track-multicloud-aiops`)**  
+   *Domains*: 14 (AWS), 15 (Azure/GCP), 16 (AI-Ops), 17 (Wasm & Tetragon), 26 (Cloud-Native AI/ML KServe).  
+   *Credential*: Certified Multi-Cloud & AI-Ops Principal (CMCAP).
 
 ---
 
-### 5.2 Walkthrough 1: Hands-On Lab Completion (Multi-Container Pod)
+## 5. User Interface & Interactive Workbench (UI/UX v2)
 
-Let's walk through solving **Lab 04: Multi-Container Pod with Shared Volume** (`lab-k8s-01`):
+The web client ([`public/index.html`](file:///h:/kubelabs/public/index.html), [`public/css/styles.css`](file:///h:/kubelabs/public/css/styles.css), [`public/js/app.js`](file:///h:/kubelabs/public/js/app.js)) provides an integrated, responsive development environment:
+- **Header**: Tracks active profile, earned XP, domain/track filter, and theme selector (Dark, Light, High-Contrast).
+- **Navigation Tabs**:
+  - **Labs**: Filterable list of 52 labs with step instructions, hints, starter manifests, and one-click validation.
+  - **Terminal**: Sandboxed terminal with command history (`ArrowUp`/`ArrowDown`), tab autocompletion (`Tab`), and clear (`Ctrl+L`).
+  - **Manifest Editor**: Dual-pane editor with syntax highlighting, manifest linting, and instant cluster application.
+  - **Cluster Topology**: Live interactive SVG directed graph rendering relationships (Ingress → Service → Pod → Node/PVC).
+  - **Incidents**: Active outage dashboard with MTTR timer, symptoms, diagnostic hints, and recovery evaluation.
+  - **Architecture Canvas**: Drag-and-drop designer calculating 4-pillar scores with instant YAML/HCL download.
+  - **Capstone Projects**: 8 multi-milestone platform scenarios with milestone progress stepper and validation.
+  - **Certifications**: Timed exam portal with question navigation, passing criteria, and Ed25519 signature verification.
+  - **AI Mentor**: Socratic tutor modal with Hint, Debug, Explain modes, and automated CIS Benchmark auditing.
+  - **Self-Audit**: Real-time display of the 11-agent governance ledger and 50 automated quality gates.
 
-1. **Select the Lab**:
-   Navigate to the **Labs** tab and click **04. Kubernetes Core** → **Lab 04.1: Pod with EmptyDir Volume**.
-2. **Review Objectives**:
-   The lab instructions require creating a pod named `shared-volume-pod` with two containers:
-   - `writer`: An Alpine container running a script that appends timestamps to `/shared/log.txt`.
-   - `reader`: An Nginx or Alpine container mounting the same `/shared` volume.
-3. **Execute Initial Validation (Proving Failure)**:
-   Click the **Validate Lab** button. The validation engine immediately returns:
+---
+
+## 6. Step-by-Step Hands-On Walkthroughs
+
+### 6.1 Walkthrough 1: Hands-On Lab Completion (Dynamic PVC & StorageClass)
+Solving **Lab 23.1: Dynamic Volume Provisioning** (`lab-stor-01`):
+1. **Navigate to Labs**: Select **23. Production Storage, CSI & Velero Disaster Recovery** → `lab-stor-01`.
+2. **Initial Validation**: Click **Validate Lab**. Engine reports:
    ```
-   [FAIL] Pod shared-volume-pod must exist in default namespace (Missing)
+   [FAIL] StorageClass fast-ssd must exist
    Score: 0 / 100
    ```
-4. **Draft Manifest in Manifest Editor**:
-   Switch to the **Manifest Editor** tab and enter the following declarative YAML:
+3. **Create StorageClass Manifest**: Open Manifest Editor and apply:
+   ```yaml
+   apiVersion: storage.k8s.io/v1
+   kind: StorageClass
+   metadata:
+     name: fast-ssd
+   provisioner: kubernetes.io/no-provisioner
+   volumeBindingMode: WaitForFirstConsumer
+   ```
+4. **Create PVC Manifest**:
    ```yaml
    apiVersion: v1
-   kind: Pod
+   kind: PersistentVolumeClaim
    metadata:
-     name: shared-volume-pod
+     name: database-pvc
      namespace: default
-     labels:
-       app: shared-data
    spec:
-     containers:
-       - name: writer
-         image: busybox:1.36
-         command: ["sh", "-c", "while true; do date >> /var/log/app.log; sleep 5; done"]
-         volumeMounts:
-           - name: shared-storage
-             mountPath: /var/log
-       - name: reader
-         image: busybox:1.36
-         command: ["sh", "-c", "tail -f /var/log/app.log"]
-         volumeMounts:
-           - name: shared-storage
-             mountPath: /var/log
-     volumes:
-       - name: shared-storage
-         emptyDir: {}
+     accessModes:
+       - ReadWriteOnce
+     storageClassName: fast-ssd
+     resources:
+       requests:
+         storage: 20Gi
    ```
-5. **Apply to Cluster**:
-   Click **Apply Manifest**. The terminal reports:
+5. **Verify via Terminal**: Run `kubectl get sc,pvc`. The PVC is bound dynamically to a generated PV.
+6. **Final Validation**: Click **Validate Lab**. All assertions pass: **100% Score • +250 XP Awarded**.
+
+### 6.2 Walkthrough 2: Resolving a SEV-1 Production Incident (etcd Quorum Loss)
+Resolving **Incident 09: etcd Quorum Loss** (`inc-09-etcd-quorum-loss`):
+1. **Launch Incident**: Click **Launch Incident 09**. MTTR timer starts. Alert reports: *Control plane read-only freeze; etcd cluster split-brain.*
+2. **Diagnose**: Run `etcdctl endpoint health`. Output reveals:
    ```
-   pod/shared-volume-pod created
+   ENDPOINT                HEALTH    TOOK
+   127.0.0.1:2379          false     timeout
    ```
-6. **Verify via Terminal**:
-   In the **Terminal** tab, run:
+3. **Execute Recovery**:
    ```bash
-   kubectl get pods
+   etcdctl snapshot restore /var/lib/etcd/backup.db --data-dir=/var/lib/etcd/new.etcd
    ```
-   Output:
+4. **Restart & Reconcile**:
+   ```bash
+   kubectl set env deployment/kube-apiserver -n kube-system ETCD_READY=true
    ```
-   NAME                READY   STATUS    RESTARTS   AGE
-   shared-volume-pod   2/2     Running   0          5s
-   ```
-7. **Inspect Cluster Topology**:
-   Switch to the **Cluster Topology** tab. The node graph dynamically updates, showing a green card for `shared-volume-pod` under the `worker-1` node with status badge `Running (2/2)`.
-8. **Execute Final Validation**:
-   Click **Validate Lab**. The validation engine runs all 5 assertions:
-   ```
-   ✔ Pod shared-volume-pod exists in default namespace
-   ✔ Container writer has volumeMount for shared-storage
-   ✔ Container reader has volumeMount for shared-storage
-   ✔ Volume shared-storage is configured as emptyDir
-   ✔ Pod status is Running
-   Result: 100% PASS • +100 XP Awarded • Cryptographic Proof: e4b2...
-   ```
+5. **Verify Resolution**: Click **Verify Resolution**. Outage recovered in `1m 14s` • **SEV-1 Resolved • +350 XP**.
+
+### 6.3 Walkthrough 3: Multi-Milestone Capstone (Multi-Tenant vCluster Platform)
+Solving **Capstone 7** (`proj-07-multitenant-vcluster-platform`):
+- **Milestone 1**: Create namespace `tenant-alpha` and `ResourceQuota` limiting `hard.pods: "10"`.
+- **Milestone 2**: Deploy Kyverno `ClusterPolicy` enforcing mandatory `team` ownership labels.
+- **Milestone 3**: Run `vcluster create alpha-vcluster -n tenant-alpha` to provision virtual control plane.
+- **Milestone 4**: Apply strict cross-tenant `NetworkPolicy` isolating ingress/egress.
+- **Result**: All 4 milestones pass; **500 XP Awarded**.
+
+### 6.4 Walkthrough 4: Visual Architecture Design to Multi-Cloud IaC Export
+1. Open **Architecture Canvas** and select the `istio-service-mesh` blueprint.
+2. Review calculated Well-Architected scores: **Security: 95%, Reliability: 90%, Cost: 85%, Performance: 90%**.
+3. Click **Export Kubernetes YAML** to obtain production manifests for Istio Gateways, VirtualServices, and mTLS DestinationRules.
+4. Click **Export OpenTofu HCL** to obtain cloud infrastructure code for VPCs and subnets.
+
+### 6.5 Walkthrough 5: Earning an Ed25519 Asymmetric Verified Certification
+1. Navigate to **Certifications** → **Certified Kubernetes & GitOps Administrator (CKGA)**.
+2. Complete 10 rigorous scenario questions covering etcd restore, RBAC policies, and GitOps synchronization.
+3. Click **Submit Exam**. Score: **95%**.
+4. The engine generates an Ed25519 digital signature and issues a verifiable certificate ID.
+5. Third-party auditors can query `GET /api/certifications/verify?id=CERT-CKGA-...` to cryptographically validate certificate authenticity using the platform's public key.
 
 ---
 
-### 5.3 Walkthrough 2: Diagnosing & Resolving a SEV-1 Production Incident
+## 7. The 11-Agent Autonomous Governance Framework
 
-Let's walk through resolving **Incident 01: Production 502 Bad Gateway Outage** (`inc-01-selector-drift`):
-
-1. **Launch Incident**:
-   Navigate to the **Incidents** tab and click **Launch Incident 01**.
-2. **Observe Symptoms**:
-   - Status badge switches to **CRITICAL OUTAGE (SEV-1)**.
-   - The MTTR Stopwatch begins ticking: `00:01`, `00:02`...
-   - Symptom description: *Users report intermittent HTTP 502 Bad Gateway errors when reaching the production web service.*
-3. **Investigate via Terminal**:
-   In the **Terminal** tab, investigate the service and endpoints:
-   ```bash
-   kubectl get svc web-service
-   ```
-   Output shows:
-   ```
-   NAME          TYPE        CLUSTER-IP       EXTERNAL-IP   PORT(S)   AGE
-   web-service   ClusterIP   10.96.142.12     <none>        80/TCP    2m
-   ```
-   Next, inspect the endpoints:
-   ```bash
-   kubectl get endpoints web-service
-   ```
-   Output reveals the root cause:
-   ```
-   NAME          ENDPOINTS   AGE
-   web-service   <none>      2m
-   ```
-   *The endpoints list is completely empty!*
-4. **Inspect Selector vs Pod Labels**:
-   Check the service definition:
-   ```bash
-   kubectl describe svc web-service
-   ```
-   Output: `Selector: app=web-v2`
-   Now check existing running pods:
-   ```bash
-   kubectl get pods --show-labels
-   ```
-   Output:
-   ```
-   NAME                        READY   STATUS    LABELS
-   web-backend-78b4c-9xf2q     1/1     Running   app=frontend,tier=web
-   web-backend-78b4c-k2m8p     1/1     Running   app=frontend,tier=web
-   ```
-   *Diagnosis: Label selector drift! The service is selecting `app=web-v2`, but the backend pods have `app=frontend`.*
-5. **Apply Canonical Fix**:
-   Execute the corrective manifest or imperative fix:
-   ```bash
-   kubectl apply -f fix-service.yaml
-   ```
-   Or update the service selector:
-   The Endpoint Controller immediately re-evaluates, finds the 2 running pods, and binds their IPs:
-   ```bash
-   kubectl get endpoints web-service
-   ```
-   Output:
-   ```
-   NAME          ENDPOINTS                         AGE
-   web-service   10.244.1.15:80,10.244.2.22:80     3m
-   ```
-6. **Verify Resolution**:
-   Click **Verify Resolution**.
-   The incident engine stops the MTTR timer, records recovery in `1m 42s`, awards **150 XP**, and marks the scenario resolved!
+KubeLabs is designed, implemented, and guarded by 11 specialized autonomous agents:
+1. `agent-product`: Owns the PRD, user stories, career tracks, and learning progression.
+2. `agent-architect`: Enforces system boundaries, ADRs, and zero-dependency invariants.
+3. `agent-backend`: Manages server routing, state reconciliation, and SQLite operations.
+4. `agent-frontend`: Delivers the responsive HTML5/CSS/JS workbench and PWA offline caching.
+5. `agent-kubernetes`: Enforces Kubernetes API fidelity and controller reconciliation logic.
+6. `agent-curriculum`: Authors pedagogical modules, hands-on labs, and assessment questions.
+7. `agent-devops`: Manages GitHub Actions workflows, Helm charts, and release automation.
+8. `agent-security`: Enforces sandboxed command execution, zero-CVE posture, and CSP security.
+9. `agent-qa`: Validates deterministic solvers across all 52 labs, 12 incidents, and 8 capstones.
+10. `agent-documentation`: Maintains comprehensive architectural documentation and runbooks.
+11. `agent-platform`: Enforces memory budgets (< 150MB RSS) and zero-placeholder invariants.
 
 ---
 
-### 5.4 Walkthrough 3: Architecture Canvas to Multi-Cloud IaC Export
+## 8. Automated Verification Ledger & Quality Gates
 
-1. **Open Architecture Canvas**:
-   Click the **Architecture Designer** tab.
-2. **Load Reference Blueprint**:
-   Click **Load Blueprint** and select `enterprise-microservices`.
-3. **Inspect Well-Architected Scores**:
-   The engine computes real-time pillar metrics:
-   - **Security**: 90% (Zero-trust NetworkPolicies, non-root users).
-   - **Reliability**: 95% (Multi-replica deployments across redundant zones).
-   - **Cost Efficiency**: 85% (Autoscaling enabled).
-   - **Performance**: 90% (In-memory caching tier).
-4. **Export Code**:
-   - Click **Export Kubernetes YAML**: Instantly generates unified declarative manifests for all deployments, services, ingress, and configmaps.
-   - Click **Export OpenTofu HCL**: Instantly generates production OpenTofu/Terraform infrastructure code for VPCs, EKS clusters, and Kubernetes resources.
-
----
-
-### 5.5 Walkthrough 4: Taking a Role Certification Exam
-
-1. **Open Certifications Portal**:
-   Navigate to the **Certifications** tab and choose **Certified Kubernetes Administrator (CKA)**.
-2. **Exam Rules**:
-   - 10 multi-domain questions covering networking, security, scheduling, and troubleshooting.
-   - 80% passing grade requirement.
-3. **Submit Exam**:
-   Upon completing all questions, click **Submit Certification Exam**.
-4. **Instant Verification & Credential**:
-   The certification engine calculates score, generates the 18-domain Skill Radar, and signs an immutable HMAC-SHA256 credential that can be verified at any time via the verification endpoint.
-
----
-
-## 6. The 11-Agent Autonomous Governance Framework
-
-KubeLabs is built and audited by an 11-Agent Autonomous Engineering Team defined in [`agents/AGENT-FRAMEWORK.md`](file:///h:/kubelabs/agents/AGENT-FRAMEWORK.md):
-
-```
-┌────────────────────────────────────────────────────────────────────────────────────────┐
-│                              11-AGENT GOVERNANCE MATRIX                                │
-├──────────────────────────┬──────────────────────────┬──────────────────────────────────┤
-│ 1. agent-product         │ 5. agent-kubernetes      │ 9. agent-qa                      │
-│ 2. agent-architect       │ 6. agent-curriculum      │ 10. agent-documentation          │
-│ 3. agent-backend         │ 7. agent-devops          │ 11. agent-platform               │
-│ 4. agent-frontend        │ 8. agent-security        │                                  │
-└──────────────────────────┴──────────────────────────┴──────────────────────────────────┘
-```
-
-The orchestrator script at [`src/agents/orchestrator.js`](file:///h:/kubelabs/src/agents/orchestrator.js) automatically executes 50 distinct quality gates verifying every charter before any release.
-
----
-
-## 7. Verification, Self-Audit & Quality Assurance
-
-KubeLabs includes a comprehensive automated test and verification harness:
+KubeLabs provides 3 automated verification commands runnable from any environment:
 
 ### 1. Master Test Suite (`npm test`)
-Executes 8 exhaustive integration test suites in **~330ms**:
 ```bash
 npm test
 ```
-- Validates all 18 plugin JSON schemas.
-- Reconciles virtual cluster deployments and endpoints.
-- Tests multi-CLI terminal parsing.
-- Runs deterministic E2E solvers proving **36/36 labs fail initially and pass 100% after solution**.
-- Runs deterministic E2E solvers proving **all 8 incident simulations resolve cleanly**.
-- Tests architecture designer YAML/HCL compilation.
-- Verifies HMAC-SHA256 certification generation.
-- Tests HTTP server and security headers.
+Executes 8 test suites verifying PluginManager schemas, VirtualCluster reconciliation, TerminalEngine execution, deterministic lab solvers (52/52), deterministic incident solvers (12/12), architecture compilation, Ed25519 signatures, and HTTP API integration in **~290ms**.
 
-### 2. Subphase-by-Subphase Ledger (`npm run verify:subphases`)
-Validates completion of all 36 granular subphases across the 5 project stages:
+### 2. Subphase Verification Ledger (`npm run verify:subphases`)
 ```bash
 npm run verify:subphases
 ```
-Result: **36/36 Subphases Verified Complete**.
+Verifies all 36 sequential project subphases across all 5 implementation stages in **~17ms**.
 
-### 3. Production Readiness Self-Audit (`npm run audit:self`)
-Executes all 50 quality checks across the 11 engineering agent charters:
+### 3. 11-Agent Self-Audit (`npm run audit:self`)
 ```bash
 npm run audit:self
 ```
-Result: **50/50 Checks PASS • Gate: GREEN (PRODUCTION READY)**.
+Executes 50 distinct quality gates across all 11 autonomous agents, auditing code quality, memory RSS (< 150MB), documentation, and security perimeters in **~40ms**.
 
 ---
 
-## 8. Deployment & Operations Guide
+## 9. Cross-Platform Deployment & Packaging Matrix
 
-### 8.1 Running Locally
-```bash
-# Clone the repository
-git clone https://github.com/kubelabs/kubelabs.git
-cd kubelabs
-
-# Start the zero-dependency server (runs on Node.js 20+)
-npm start
-
-# Open your browser at:
-http://localhost:4100
-```
-
-### 8.2 Containerized Deployment (Rootless Docker)
-KubeLabs includes a secure, non-root Dockerfile:
-```bash
-# Build the container image
-docker build -t kubelabs:1.0.0 .
-
-# Run container with resource limits
-docker run -d --name kubelabs -p 4100:4100 --memory="256m" --cpus="0.5" kubelabs:1.0.0
-```
-
-### 8.3 Kubernetes Self-Hosting Manifest
-Deploy KubeLabs onto any real Kubernetes cluster using [`deploy/kubernetes/kubelabs-k8s.yaml`](file:///h:/kubelabs/deploy/kubernetes/kubelabs-k8s.yaml):
-```bash
-kubectl apply -f deploy/kubernetes/kubelabs-k8s.yaml
-```
+| Target Platform | Technology Stack | Deployment Artifact |
+|---|---|---|
+| **Web / Browser** | HTML5, CSS Grid, Vanilla JS, PWA | Precached via `public/sw.js` & `offlineEngine.js` |
+| **Kubernetes (Self-Hosted)** | StatefulSet with PersistentVolume | [`deploy/kubernetes/kubelabs-k8s.yaml`](file:///h:/kubelabs/deploy/kubernetes/kubelabs-k8s.yaml) |
+| **Helm 3 (Enterprise)** | Helm Chart with configurable values | [`deploy/helm/kubelabs/`](file:///h:/kubelabs/deploy/helm/kubelabs/) |
+| **Desktop (Win/Mac/Linux)** | Tauri (Rust) & Electron | [`deploy/desktop/tauri.conf.json`](file:///h:/kubelabs/deploy/desktop/tauri.conf.json), [`electron-main.js`](file:///h:/kubelabs/deploy/desktop/electron-main.js) |
+| **Mobile (Android/iOS)** | Capacitor Native Wrapper | [`deploy/mobile/capacitor.config.json`](file:///h:/kubelabs/deploy/mobile/capacitor.config.json) |
+| **Container (OCI)** | Rootless Alpine Dockerfile | `docker build -t kubelabs:v2.0 .` (under 60MB image) |
 
 ---
 
-## 9. Repository Blueprint & File Map
+## 10. Repository Structure & File Index
 
 ```
-h:\kubelabs\
-├── .github/
-│   ├── CODEOWNERS                       # Ownership rules for files and domains
-│   ├── PULL_REQUEST_TEMPLATE.md          # 11-agent sign-off PR template
-│   └── workflows/
-│       ├── ci.yml                       # Multi-OS (Ubuntu, macOS, Windows) CI workflow
-│       ├── release.yml                  # Automated semantic versioning and release
-│       └── security-scan.yml            # CodeQL and zero-dependency security scanner
-├── agents/
-│   └── AGENT-FRAMEWORK.md               # Charters and system prompts for 11 agents
+h:\kubelabs/
+├── README.md                                 # Master project overview & quickstart
+├── package.json                              # Zero-dependency package manifest (v2.0.0)
 ├── deploy/
-│   └── kubernetes/
-│       └── kubelabs-k8s.yaml            # Production Kubernetes deployment manifest
+│   ├── desktop/                              # Tauri & Electron desktop configurations
+│   ├── helm/kubelabs/                        # Enterprise Helm 3 deployment chart
+│   ├── kubernetes/                           # High-availability Kubernetes StatefulSet
+│   └── mobile/                               # Capacitor Android/iOS packaging config
 ├── docs/
-│   ├── 01-GLOBAL-ENGINEERING-CONTRACT.md # Engineering rules, DoR/DoD, quality gates
-│   ├── 02-PRD.md                        # Complete Product Requirements Document
-│   ├── 03-ARCHITECTURE.md               # System, Security, Data & Lab Architecture
-│   ├── 04-ADRS.md                       # Architecture Decision Records (ADR-001–ADR-010)
-│   ├── 05-GITHUB-AND-CICD.md            # Monorepo topology and CI/CD specifications
-│   ├── 06-IMPLEMENTATION-PLAN.md        # 5-Stage, 11-Phase, 36-Subphase Plan
-│   ├── 07-CURRICULUM-CATALOG.md         # Matrix of 18 domains, 36 labs, 8 incidents
-│   ├── 08-OPERATIONS-AND-RUNBOOKS.md    # Incident runbooks and test strategies
-│   ├── 09-SECURITY-AND-THREAT-MODEL.md  # STRIDE threat model & sandbox boundaries
-│   ├── 10-PERFORMANCE-BENCHMARKS.md     # Latency and memory scaling benchmarks
-│   └── 11-COMPREHENSIVE-PROJECT-WALKTHROUGH.md # This document
-├── plugins/                             # 18 Modular Curriculum Plugins
-│   ├── 01-linux-fundamentals.json
-│   ├── 02-containers-runtime.json
-│   ├── 03-cloud-networking.json
-│   ├── 04-kubernetes-core.json
-│   ├── 05-cncf-packaging.json
-│   ├── 06-gitops-delivery.json
-│   ├── 07-devops-cicd.json
-│   ├── 08-devsecops-security.json
-│   ├── 09-service-mesh.json
-│   ├── 10-observability-stack.json
-│   ├── 11-sre-incident-chaos.json
-│   ├── 12-platform-engineering.json
-│   ├── 13-iac-opentofu-terraform.json
-│   ├── 14-cloud-aws.json
-│   ├── 15-cloud-azure-gcp.json
-│   ├── 16-aiops-autonomous.json
-│   ├── 17-wasm-ebpf-edge.json
-│   └── 18-finops-green-cloud.json
-├── public/                              # PWA Frontend Tier
-│   ├── index.html                       # Responsive Single-Page Application
-│   ├── manifest.json                    # Web App Manifest for mobile installation
-│   ├── sw.js                            # Offline Service Worker cache engine
-│   ├── css/
-│   │   └── styles.css                   # Responsive dark-theme CSS workbench
-│   └── js/
-│       └── app.js                       # Frontend client controller & UI binding
+│   ├── 01-GLOBAL-ENGINEERING-CONTRACT.md    # Global engineering rules & invariants
+│   ├── 02-PRD.md                             # Comprehensive Product Requirements Doc
+│   ├── 03-ARCHITECTURE.md                    # System, Data, Security & Lab Architecture
+│   ├── 04-ADRS.md                            # 10 Architectural Decision Records
+│   ├── 05-GITHUB-AND-CICD.md                 # Git branching & GitHub Actions standards
+│   ├── 06-IMPLEMENTATION-PLAN.md             # Complete implementation roadmap
+│   ├── 07-CURRICULUM-CATALOG.md              # 26 domains, 52 labs, 12 incidents, 8 capstones
+│   ├── 08-OPERATIONS-AND-RUNBOOKS.md         # Production runbooks & DR procedures
+│   ├── 11-COMPREHENSIVE-PROJECT-WALKTHROUGH.md # Complete project walkthrough
+│   └── 12-ENTERPRISE-GAP-ANALYSIS-AND-EXECUTION-PLAN.md # Gap analysis & v2.0 roadmap
+├── plugins/                                  # 26 modular domain plugins (01 to 26)
+├── public/
+│   ├── css/styles.css                        # Responsive styles & theme definitions
+│   ├── js/app.js                             # Interactive UI controller & SVG visualizer
+│   ├── js/offlineEngine.js                   # Browser-native isomorphic fallback engine
+│   ├── index.html                            # Single-page workbench interface
+│   ├── manifest.json                         # PWA manifest
+│   └── sw.js                                 # Service Worker precaching v2
 ├── schemas/
-│   └── plugin.schema.json               # JSON Schema for modular curriculum plugins
+│   └── plugin.schema.json                    # Strict JSON schema for domain plugins
 ├── scripts/
-│   ├── self-audit.js                    # CLI runner for 11-Agent 50-check audit
-│   └── verify-subphases.js              # CLI runner for 36-subphase validation
-├── src/                                 # Backend & Core Engine Tier
-│   ├── server.js                        # Zero-dependency HTTP server
-│   ├── agents/
-│   │   └── orchestrator.js              # 11-Agent audit runner
-│   ├── api/
-│   │   └── router.js                    # REST API router & security filters
-│   ├── db/
-│   │   └── database.js                  # Native SQLite WAL-mode persistence
+│   ├── self-audit.js                         # 11-agent 50-check quality gate auditor
+│   └── verify-subphases.js                   # 36-subphase validation runner
+├── src/
+│   ├── server.js                             # HTTP server & graceful shutdown handler
+│   ├── agents/orchestrator.js                # 11-agent governance orchestrator
+│   ├── api/router.js                         # REST router, rate limiter & /metrics
+│   ├── db/database.js                        # Native SQLite WAL persistence tier
 │   ├── engine/
-│   │   ├── aiMentor.js                  # Socratic mentor & CIS security auditor
-│   │   ├── architectureEngine.js        # Topology analyzer & YAML/HCL compiler
-│   │   ├── certificationEngine.js       # Timed exam runner & HMAC signer
-│   │   ├── incidentEngine.js            # 8 SEV-1/SEV-2 production outage scenarios
-│   │   ├── projectEngine.js             # 6 Enterprise capstone projects
-│   │   ├── terminalEngine.js            # Sandboxed multi-CLI parser
-│   │   ├── validationEngine.js          # 10-type declarative validation evaluator
-│   │   └── virtualCluster.js            # In-memory virtual Kubernetes control plane
-│   └── plugins/
-│       └── pluginManager.js             # Dynamic plugin loader & track aggregator
-├── tests/
-│   └── kubelabs.test.js                 # 8-suite automated end-to-end test suite
-├── Dockerfile                           # Secure rootless OCI container definition
-├── docker-compose.yml                   # Local multi-service testing composition
-├── package.json                         # Project metadata, scripts, zero dependencies
-├── README.md                            # Primary project landing page
-└── .gitignore                           # Git ignore definitions
+│   │   ├── aiMentor.js                       # Socratic mentor & CIS auditor
+│   │   ├── architectureEngine.js             # Visual designer & IaC compiler
+│   │   ├── certificationEngine.js            # Ed25519 credential signing authority
+│   │   ├── incidentEngine.js                 # 12 production incident simulations
+│   │   ├── projectEngine.js                  # 8 multi-milestone capstone projects
+│   │   ├── sessionManager.js                 # Multi-tenant state isolation manager
+│   │   ├── terminalEngine.js                 # Multi-CLI sandboxed terminal parser
+│   │   ├── validationEngine.js               # 10-type declarative validation engine
+│   │   ├── virtualCluster.js                 # Kubernetes control plane & controller loop
+│   │   └── virtualFileSystem.js              # POSIX in-memory file system
+│   └── plugins/pluginManager.js              # Plugin discovery & career track manager
+└── tests/
+    └── kubelabs.test.js                      # Unit, E2E, and deterministic solver test suite
 ```
-
----
-
-*Authored by the KubeLabs Autonomous Engineering Swarm • Production Ready • Zero Dependencies*
-
