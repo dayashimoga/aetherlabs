@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { URL } = require('node:url');
-const { SessionManager } = require('../engine/sessionManager');
+const { SessionManager } = require('../core/sessionManager');
 
 const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -411,7 +411,9 @@ class ApiRouter {
         learner: profileData,
         clusterState: session.cluster.exportSnapshot(),
         activeLabId: session.activeLabId,
-        activeIncidentId: session.activeIncidentId
+        activeIncidentId: session.activeIncidentId,
+        activeProjectId: session.activeProjectId,
+        activeContextType: session.activeContextType || 'lab'
       });
     }
 
@@ -451,18 +453,17 @@ class ApiRouter {
       if (!lab) {
         return sendJson(res, 404, { error: { code: 'LAB_NOT_FOUND', message: `Lab ${labStartMatch[1]} not found` } });
       }
-      session.activeLabId = lab.id;
-      session.activeIncidentId = null;
-      session.terminal.commandHistory = [];
-      session.cluster.reset(lab.initialClusterState);
+      const bound = this.sessionManager.bindLab(session.sessionId, lab);
       this.db.updateProfileFields({
         activeLabId: lab.id,
         activeIncidentId: null,
-        clusterSnapshotJson: JSON.stringify(session.cluster.exportSnapshot())
+        clusterSnapshotJson: JSON.stringify(bound.clusterState)
       });
       return sendJson(res, 200, {
         lab,
-        clusterState: session.cluster.exportSnapshot(),
+        activeLabId: lab.id,
+        contextType: 'lab',
+        clusterState: bound.clusterState,
         message: `Initialized virtual cluster for lab "${lab.title}"`
       });
     }
@@ -473,7 +474,12 @@ class ApiRouter {
       if (!lab) {
         return sendJson(res, 404, { error: { code: 'LAB_NOT_FOUND', message: `Lab ${labValidateMatch[1]} not found` } });
       }
-      const report = this.validator.evaluate(lab.validationRules, session.cluster, session.terminal.commandHistory);
+      // Ensure session is bound to the target lab
+      if (session.activeLabId !== lab.id) {
+        this.sessionManager.bindLab(session.sessionId, lab);
+      }
+      const report = this.validator.evaluate(lab.validationRules, session.cluster, session.terminal.commandHistory, { labId: lab.id, contextType: 'lab' });
+      this.sessionManager.setValidationReport(session.sessionId, report);
       const progressRecord = this.db.recordLabAttempt({
         labId: lab.id,
         domainId: lab.domainId,
@@ -483,10 +489,12 @@ class ApiRouter {
       });
       return sendJson(res, 200, {
         labId: lab.id,
+        activeLabId: lab.id,
+        contextType: 'lab',
         ...report,
         progressRecord,
         learner: this.db.getProfile(),
-        skillRadar: this.certifications.computeDomainSkillRadar(),
+        skillRadar: this.certifications ? this.certifications.computeDomainSkillRadar() : {},
         clusterState: session.cluster.exportSnapshot()
       });
     }
@@ -497,16 +505,15 @@ class ApiRouter {
       if (!lab) {
         return sendJson(res, 404, { error: { code: 'LAB_NOT_FOUND', message: `Lab ${labSolveMatch[1]} not found` } });
       }
-      session.activeLabId = lab.id;
-      session.terminal.commandHistory = [];
-      session.cluster.reset(lab.initialClusterState);
+      this.sessionManager.bindLab(session.sessionId, lab);
       const commandOutputs = [];
       for (const cmd of lab.solutionCommands) {
         const resCmd = session.terminal.execute(cmd, { manifestText: lab.starterManifest });
         commandOutputs.push(resCmd);
         this.db.recordTerminalCommand(lab.id, cmd, resCmd.exitCode, resCmd.output);
       }
-      const report = this.validator.evaluate(lab.validationRules, session.cluster, session.terminal.commandHistory);
+      const report = this.validator.evaluate(lab.validationRules, session.cluster, session.terminal.commandHistory, { labId: lab.id, contextType: 'lab' });
+      this.sessionManager.setValidationReport(session.sessionId, report);
       const progressRecord = this.db.recordLabAttempt({
         labId: lab.id,
         domainId: lab.domainId,
@@ -516,11 +523,13 @@ class ApiRouter {
       });
       return sendJson(res, 200, {
         labId: lab.id,
+        activeLabId: lab.id,
+        contextType: 'lab',
         commandOutputs,
         ...report,
         progressRecord,
         learner: this.db.getProfile(),
-        skillRadar: this.certifications.computeDomainSkillRadar(),
+        skillRadar: this.certifications ? this.certifications.computeDomainSkillRadar() : {},
         clusterState: session.cluster.exportSnapshot()
       });
     }
@@ -586,14 +595,14 @@ class ApiRouter {
       if (!inc) {
         return sendJson(res, 404, { error: { code: 'INCIDENT_NOT_FOUND', message: `Incident ${incStartMatch[1]} not found` } });
       }
-      session.activeIncidentId = inc.id;
-      session.terminal.commandHistory = [];
-      this.incidents.injectIncident(inc.id, session.cluster);
+      const bound = this.sessionManager.bindIncident(session.sessionId, inc, this.incidents);
       const runRecord = this.db.startIncidentRun(inc.id);
       return sendJson(res, 200, {
         incident: inc,
+        activeIncidentId: inc.id,
+        contextType: 'incident',
         runRecord,
-        clusterState: session.cluster.exportSnapshot()
+        clusterState: bound.clusterState
       });
     }
 
@@ -609,6 +618,9 @@ class ApiRouter {
         runRecord = this.db.resolveIncidentRun(inc.id, inc.xpReward);
       }
       return sendJson(res, 200, {
+        incidentId: inc.id,
+        activeIncidentId: inc.id,
+        contextType: 'incident',
         ...report,
         runRecord,
         learner: this.db.getProfile(),
@@ -622,9 +634,7 @@ class ApiRouter {
       if (!inc) {
         return sendJson(res, 404, { error: { code: 'INCIDENT_NOT_FOUND', message: `Incident ${incSolveMatch[1]} not found` } });
       }
-      session.activeIncidentId = inc.id;
-      session.terminal.commandHistory = [];
-      this.incidents.injectIncident(inc.id, session.cluster);
+      const bound = this.sessionManager.bindIncident(session.sessionId, inc, this.incidents);
       this.db.startIncidentRun(inc.id);
       const commandOutputs = [];
       for (const cmd of inc.solutionCommands) {
@@ -634,6 +644,9 @@ class ApiRouter {
       const report = this.incidents.verifyIncidentResolution(inc.id, session.cluster, session.terminal.commandHistory);
       const runRecord = report.passed ? this.db.resolveIncidentRun(inc.id, inc.xpReward) : null;
       return sendJson(res, 200, {
+        incidentId: inc.id,
+        activeIncidentId: inc.id,
+        contextType: 'incident',
         commandOutputs,
         ...report,
         runRecord,
@@ -656,11 +669,13 @@ class ApiRouter {
       if (!proj) {
         return sendJson(res, 404, { error: { code: 'PROJECT_NOT_FOUND', message: `Project ${projStartMatch[1]} not found` } });
       }
-      session.terminal.commandHistory = [];
-      this.projects.startProject(proj.id, session.cluster);
+      const bound = this.sessionManager.bindProject(session.sessionId, proj, this.projects);
       return sendJson(res, 200, {
         project: proj,
-        clusterState: session.cluster.exportSnapshot()
+        projectId: proj.id,
+        activeProjectId: proj.id,
+        contextType: 'project',
+        clusterState: bound.clusterState
       });
     }
 
@@ -679,6 +694,9 @@ class ApiRouter {
         xpReward: proj.xpReward
       });
       return sendJson(res, 200, {
+        projectId: proj.id,
+        isProject: true,
+        contextType: 'project',
         ...report,
         progressRecord,
         learner: this.db.getProfile(),
@@ -697,6 +715,10 @@ class ApiRouter {
       try {
         const report = this.projects.validateMilestone(proj.id, mNum, session.cluster, session.terminal.commandHistory);
         return sendJson(res, 200, {
+          projectId: proj.id,
+          isProject: true,
+          contextType: 'project',
+          milestoneNumber: mNum,
           ...report,
           clusterState: session.cluster.exportSnapshot()
         });
@@ -711,8 +733,7 @@ class ApiRouter {
       if (!proj) {
         return sendJson(res, 404, { error: { code: 'PROJECT_NOT_FOUND', message: `Project ${projSolveMatch[1]} not found` } });
       }
-      session.terminal.commandHistory = [];
-      this.projects.startProject(proj.id, session.cluster);
+      this.sessionManager.bindProject(session.sessionId, proj, this.projects);
       const commandOutputs = [];
       for (const cmd of proj.solutionCommands) {
         const out = session.terminal.execute(cmd);
@@ -727,6 +748,9 @@ class ApiRouter {
         xpReward: proj.xpReward
       });
       return sendJson(res, 200, {
+        projectId: proj.id,
+        isProject: true,
+        contextType: 'project',
         commandOutputs,
         ...report,
         progressRecord,

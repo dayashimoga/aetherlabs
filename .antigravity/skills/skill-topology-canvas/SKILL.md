@@ -20,3 +20,4 @@ Renders real-time cluster topology visualizations and interactive drag-and-drop 
    - Real-time 4-pillar Well-Architected score calculation.
    - Chaos fault injection (e.g., "Kill AZ-1" SPOF testing).
    - Bi-directional synchronization with Kubernetes YAML and OpenTofu HCL code.
+

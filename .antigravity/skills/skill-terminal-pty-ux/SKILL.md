@@ -13,3 +13,4 @@ Delivers an authentic xterm-style inline terminal emulator, robust command AST t
 2. **Multi-Line Heredoc**: Support `cat <<EOF > manifest.yaml` constructs for writing multi-line YAML files directly from the terminal.
 3. **Context-Aware Quick-Key Bar**: Quick-key buttons must insert tokens at the active cursor position with proper spacing and grammar order (preventing syntax inversions like `describe kubectl`).
 4. **Live Resource Autocompletion**: Tab completion must introspect the live ResourceGraph to suggest dynamic pod names, namespaces, service names, flags, and VFS file paths.
+

@@ -90,12 +90,41 @@
         projects: state.overview ? state.overview.projects : []
       };
     }
+    const labStart = path.match(/\/api\/labs\/([a-z0-9-]+)\/start/);
+    if (labStart) {
+      const labId = labStart[1];
+      const lab = (state.overview?.labs || []).find((l) => l.id === labId);
+      if (typeof oe.resetCluster === 'function') oe.resetCluster();
+      return {
+        lab,
+        activeLabId: labId,
+        clusterState: oe.getClusterState(),
+        message: `Initialized virtual cluster for lab "${lab?.title || labId}"`
+      };
+    }
     if (path === '/api/terminal/exec') {
       const cmd = options.body ? options.body.command : '';
       const res = oe.executeCommand(cmd);
       return {
         exitCode: res.exitCode,
         output: res.output,
+        clusterState: oe.getClusterState()
+      };
+    }
+    const labValidate = path.match(/\/api\/labs\/([a-z0-9-]+)\/validate/);
+    if (labValidate) {
+      const labId = labValidate[1];
+      const lab = (state.overview?.labs || []).find((l) => l.id === labId) || state.activeLab;
+      const rules = (lab && lab.validationRules) || [];
+      const report = oe.evaluateRules(rules, { labId });
+      if (report.passed && lab) {
+        oe.recordProgress({ labId: lab.id, xpReward: lab.xpReward });
+      }
+      return {
+        labId,
+        activeLabId: labId,
+        contextType: 'lab',
+        ...report,
         clusterState: oe.getClusterState()
       };
     }
@@ -120,6 +149,12 @@
     document.querySelectorAll('.nav-tab').forEach((btn) => {
       btn.classList.toggle('active', btn.dataset.view === viewId);
     });
+    if (viewId === 'view-workbench' && state.activeLab) {
+      const sel = document.getElementById('wb-lab-selector');
+      if (sel && sel.value !== state.activeLab.id) {
+        sel.value = state.activeLab.id;
+      }
+    }
   }
 
   function appendTerminalLine(text, isCommand = false) {
@@ -375,19 +410,25 @@
 
       projectsContainer.querySelectorAll('.solve-project-btn').forEach((btn) => {
         btn.addEventListener('click', async () => {
-          const res = await apiCall(`/api/projects/${btn.dataset.projId}/solve`, { method: 'POST' });
-          for (const item of res.commandOutputs || []) {
-            appendTerminalLine(item.command, true);
-            appendTerminalLine(item.output, false);
+          const pId = btn.dataset.projId;
+          const origText = btn.textContent;
+          btn.textContent = 'Building & Validating...';
+          btn.disabled = true;
+          try {
+            const res = await apiCall(`/api/projects/${pId}/solve`, { method: 'POST' });
+            btn.textContent = 'Completed ✓';
+            btn.classList.remove('btn-success');
+            btn.classList.add('completed');
+            if (res.learner) {
+              state.overview.learner = res.learner;
+              updateHeaderTelemetry();
+              renderPathsAndDomains();
+            }
+            announceAria(`Capstone project ${pId} built and validated 100% successfully.`);
+          } catch (err) {
+            btn.textContent = origText || 'Solve Failed';
+            btn.disabled = false;
           }
-          renderClusterTopology(res.clusterState);
-          renderValidationReport(res);
-          if (res.learner) {
-            state.overview.learner = res.learner;
-            updateHeaderTelemetry();
-            renderPathsAndDomains();
-          }
-          switchView('view-workbench');
         });
       });
     }
@@ -496,20 +537,31 @@
       codeEl.addEventListener('click', () => executeTerminalCommand(codeEl.dataset.cmd));
     });
 
-    const validationContainer = document.getElementById('wb-validation-results');
-    validationContainer.innerHTML = (data.lab.validationRules || [])
-      .map(
-        (r) => `
-        <div class="validation-item">
-          <strong>[Pending Verification]</strong> ${r.description}
-        </div>
-      `
-      )
-      .join('');
-
+    renderPendingValidation(data.lab);
     renderClusterTopology(data.clusterState);
     appendTerminalLine(`--- Initialized Lab: ${data.lab.title} ---`);
     switchView('view-workbench');
+  }
+
+  function renderPendingValidation(lab) {
+    const container = document.getElementById('wb-validation-results');
+    if (!container || !lab) return;
+    const rules = lab.validationRules || [];
+    container.innerHTML = `
+      <div style="margin-bottom:0.5rem; font-size:0.84rem; font-weight:700; color:var(--text-secondary);">
+        Pending Verification (0/${rules.length} Assertions Passed)
+      </div>
+      ${rules
+        .map(
+          (r) => `
+        <div class="validation-item">
+          <div><strong>[Pending]:</strong> ${escapeHtml(r.description || r.type)}</div>
+          <div style="font-size:0.74rem; color:var(--text-muted); margin-top:0.2rem;">Expected: ${escapeHtml(r.expectedValue || r.kind || 'Compliant')}</div>
+        </div>
+      `
+        )
+        .join('')}
+    `;
   }
 
   async function executeTerminalCommand(cmd) {
@@ -612,6 +664,8 @@
   }
 
   function renderValidationReport(report) {
+    if (!report || report.isProject || report.contextType === 'project') return;
+    if (report.labId && state.activeLab && report.labId !== state.activeLab.id) return;
     const container = document.getElementById('wb-validation-results');
     if (!container) return;
     container.innerHTML = `
@@ -623,9 +677,9 @@
         .map(
           (r) => `
           <div class="validation-item ${r.passed ? 'pass' : 'fail'}">
-            <div><strong>${r.passed ? 'PASS' : 'FAIL'}:</strong> ${r.description}</div>
-            <div style="font-size:0.74rem; color:var(--text-muted); margin-top:0.2rem;">Observed: ${r.actual} | Expected: ${r.expected}</div>
-            ${!r.passed && r.remediation ? `<div style="font-size:0.74rem; color:#fca5a5; margin-top:0.2rem;">Fix: ${r.remediation}</div>` : ''}
+            <div><strong>${r.passed ? 'PASS' : 'FAIL'}:</strong> ${escapeHtml(r.description || r.type)}</div>
+            <div style="font-size:0.74rem; color:var(--text-muted); margin-top:0.2rem;">Observed: ${escapeHtml(r.actual)} | Expected: ${escapeHtml(r.expected)}</div>
+            ${!r.passed && r.remediation ? `<div style="font-size:0.74rem; color:#fca5a5; margin-top:0.2rem;">Fix: ${escapeHtml(r.remediation)}</div>` : ''}
           </div>
         `
         )

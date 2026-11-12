@@ -11,4 +11,5 @@ require('./stage1-controllers.test');
 require('./stage1-admission.test');
 require('./stage1-network.test');
 require('./stage1-cloud.test');
+require('./stage1-session-binding.test');
 

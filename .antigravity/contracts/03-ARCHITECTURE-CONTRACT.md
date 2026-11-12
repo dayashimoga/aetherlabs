@@ -31,3 +31,4 @@ Status: ACTIVE & ENFORCED
   - Real-time 4-pillar Well-Architected calculation (Security, Reliability, Performance, Cost).
   - Single Point of Failure (SPOF) fault injection engine.
   - Bi-directional synchronization with Kubernetes YAML and OpenTofu HCL.
+

@@ -13,3 +13,4 @@ Manages cross-platform packaging, containerization, native app wrappers, and con
 2. **Mobile Packaging**: Maintain Capacitor 6 configuration (`deploy/mobile/capacitor.config.json`) with safe-area insets (`env(safe-area-inset-*)`), virtual keyboard viewport adaptation (`visualViewport`), and touch ergonomics (≥ 44×44px touch targets).
 3. **Offline PWA**: Maintain Service Worker shell precaching (`public/sw.js`) and ensure offline bundle parity via `public/js/offlineEngine.js`.
 4. **CI/CD & Security**: Maintain multi-arch container builds, zero-CVE posture, strict security headers (CSP, HSTS), and automated release workflows in `.github/workflows/`.
+

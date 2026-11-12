@@ -20,3 +20,4 @@ Authors, structures, and validates curriculum plugins, hands-on multi-step labs,
 3. **24 Production Incidents**:
    - 3 realistic incidents per mandatory category across all 8 classes (Website Down, Pod Restarting, Slow App, DNS Failures, IAM & Auth, Storage Outages, Networking & Mesh, Node NotReady / Cluster Outage).
 4. **Authentic Fixes**: Always mandate canonical Kubernetes and cloud-native remediation patterns.
+

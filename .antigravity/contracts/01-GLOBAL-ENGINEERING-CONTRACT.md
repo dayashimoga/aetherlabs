@@ -21,3 +21,4 @@ No subphase is complete until:
 - `npm run verify:subphases` passes all subphases with 0 errors.
 - `npm run audit:self` passes all quality gates with 0 errors and 0 warnings.
 - Low-resource budget is respected (<65MB idle, <150MB peak RSS).
+

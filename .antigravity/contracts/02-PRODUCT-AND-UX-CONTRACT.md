@@ -54,3 +54,4 @@ Replace any cluttered top bar with 5 clean, distinct customer-facing workspaces:
 - Context-aware Mobile Terminal Bar on Android/iOS: Inserts tokens at cursor without auto-executing incomplete or invalid syntax (preventing syntax errors like `describe kubectl`).
 - Full keyboard navigation, visible focus indicators, and ARIA live regions for screen reader announcements.
 - Dark, Light, and High-Contrast themes.
+

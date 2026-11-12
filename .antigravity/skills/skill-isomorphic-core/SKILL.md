@@ -13,3 +13,4 @@ Enforces universal isomorphism across all engine subsystems in `src/core/`. Ensu
 2. **Zero Node-Only Leakage**: Avoid un-polyfilled Node.js-only modules (`node:child_process`, raw C++ bindings) inside `src/core/`. Use pure JavaScript primitives or abstracted storage/crypto adapters.
 3. **Automated Bundle Generation**: Automatically build `public/js/offlineEngine.js` using `scripts/bundle-isomorphic.js` during the build lifecycle.
 4. **Offline Parity**: Every feature available in the backend API must be functionally identical when executed client-side via `offlineEngine.js`.
+

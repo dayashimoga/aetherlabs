@@ -148,16 +148,36 @@ function compareValues(actual, op, expected) {
 class ValidationEngine {
   constructor(defaultContext = {}) {
     this.defaultContext = defaultContext;
+    this.activeLabId = null;
+    this.boundRules = [];
+  }
+
+  /**
+   * Binds the validation engine to an active lab and assertion rule set.
+   * @param {string} labId Target lab identifier
+   * @param {Array<Object>} [rules] Optional rule set
+   * @returns {ValidationEngine}
+   */
+  bindLab(labId, rules = []) {
+    this.activeLabId = labId;
+    this.boundRules = Array.isArray(rules) ? rules : [];
+    return this;
   }
 
   /**
    * Evaluates an array of validation rules against the cluster or execution context.
-   * @param {Array<Object>} validationRules Array of rule definitions
+   * @param {Array<Object>|null} validationRules Array of rule definitions (or null if bound)
    * @param {Object} clusterOrContext VirtualCluster instance, ResourceGraph, or context map
    * @param {Array} commandHistory List of executed commands
-   * @returns {Object} Validation report { passed, score, passedCount, totalCount, results, evaluatedAt }
+   * @param {Object|string} [options] Evaluation options or target labId
+   * @returns {Object} Validation report { labId, contextType, passed, score, passedCount, totalCount, results, evaluatedAt }
    */
-  evaluate(validationRules = [], clusterOrContext = null, commandHistory = []) {
+  evaluate(validationRules = null, clusterOrContext = null, commandHistory = [], options = {}) {
+    const opts = typeof options === 'string' ? { labId: options } : (options || {});
+    const labId = opts.labId || opts.activeLabId || this.activeLabId || null;
+    const contextType = opts.contextType || (labId ? 'lab' : 'generic');
+    const rules = Array.isArray(validationRules) ? validationRules : (this.boundRules || []);
+
     // 1. Prepare and standardize runtime context
     const context = this._buildContext(clusterOrContext, commandHistory);
 
@@ -173,7 +193,7 @@ class ValidationEngine {
     const results = [];
 
     // 2. Evaluate each rule deterministically
-    for (const rule of validationRules) {
+    for (const rule of rules) {
       const check = this.evaluateRule(rule, context);
       results.push({
         id: rule.id || `rule-${results.length + 1}`,
@@ -192,6 +212,8 @@ class ValidationEngine {
     const passed = totalCount > 0 && passedCount === totalCount;
 
     return {
+      labId,
+      contextType,
       passed,
       score,
       passedCount,

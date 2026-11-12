@@ -14,3 +14,4 @@ Governs high-fidelity emulation of Kubernetes control plane internals, workload 
 3. **Control Plane Internals**: Support authentic etcd Raft snapshot save and restore operations.
 4. **Admission Chains**: Execute mutating webhooks, validating webhooks, Common Expression Language (CEL) policies, and Pod Security Standards (PSS).
 5. **Scheduler & CNI**: Implement 3-phase scheduling (filtering, scoring, binding) with taints/tolerations, and 7-hop virtual CNI packet tracing with NetworkPolicy enforcement.
+

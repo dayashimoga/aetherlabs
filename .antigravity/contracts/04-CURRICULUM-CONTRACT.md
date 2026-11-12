@@ -25,3 +25,4 @@ Every incident and lab must be solvable exclusively through canonical cloud-nati
 - Annotating ServiceAccounts with IAM roles (e.g., `eks.amazonaws.com/role-arn`).
 - Configuring `DestinationRule` TLS modes matching namespace `PeerAuthentication`.
 - Shortcut hacks (e.g., setting arbitrary environment variables on unrelated deployments) are prohibited.
+
