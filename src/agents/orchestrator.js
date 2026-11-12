@@ -117,7 +117,8 @@ class AgentOrchestrator {
       'public/css/styles.css',
       'public/js/app.js',
       'public/manifest.json',
-      'public/sw.js'
+      'public/sw.js',
+      'public/js/offlineEngine.js'
     ];
     const checks = uiFiles.map((rel) => ({
       name: `Cross-platform frontend asset ${rel} present`,
@@ -177,6 +178,7 @@ class AgentOrchestrator {
       '.github/workflows/ci.yml',
       '.github/workflows/release.yml',
       '.github/workflows/security-scan.yml',
+      '.github/workflows/ci-release.yml',
       'docs/05-GITHUB-AND-CICD.md'
     ];
     const checks = files.map((f) => ({
@@ -264,6 +266,7 @@ class AgentOrchestrator {
       'docs/06-IMPLEMENTATION-PLAN.md',
       'docs/07-CURRICULUM-CATALOG.md',
       'docs/08-OPERATIONS-AND-RUNBOOKS.md',
+      'docs/13-V3-STAGE-EXECUTION-BLUEPRINT.md',
       'agents/AGENT-FRAMEWORK.md',
       'README.md'
     ];
@@ -280,13 +283,38 @@ class AgentOrchestrator {
       'src/server.js',
       'src/api/router.js',
       'src/db/database.js',
+      'src/db/storageAdapter.js',
       'src/engine/virtualCluster.js',
       'src/engine/terminalEngine.js',
       'src/engine/validationEngine.js',
       'src/engine/incidentEngine.js',
       'src/engine/architectureEngine.js',
       'src/engine/aiMentor.js',
-      'src/engine/certificationEngine.js'
+      'src/engine/certificationEngine.js',
+      'src/core/virtualFileSystem.js',
+      'src/core/yamlParser.js',
+      'src/core/jsonPath.js',
+      'src/core/resourceGraph.js',
+      'src/core/controllerManager.js',
+      'src/core/admissionController.js',
+      'src/core/networkTracer.js',
+      'src/core/cloudExtensions.js',
+      'src/core/shellParser.js',
+      'src/core/pipelineDriver.js',
+      'src/core/multiCliDispatcher.js',
+      'src/core/schedulerEngine.js',
+      'src/core/networkingEngine.js',
+      'src/core/storageAndSecurityEngine.js',
+      'src/core/terminalEngine.js',
+      'src/core/observabilityEngine.js',
+      'src/core/autoscalingAndMeshEngine.js',
+      'src/core/validationEngine.js',
+      'src/core/incidentEngine.js',
+      'src/core/projectEngine.js',
+      'src/core/architectureEngine.js',
+      'src/core/aiMentor.js',
+      'src/core/certificationEngine.js',
+      'public/js/offlineEngine.js'
     ];
     let hasForbiddenMarker = false;
     for (const rel of srcFiles) {
