@@ -1,0 +1,172 @@
+name: KubeLabs Enterprise CI & Cross-Platform Release Pipeline
+
+on:
+  push:
+    branches: [main, "release/**"]
+    tags: ["v*.*.*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  audit-and-verify:
+    name: Multi-OS Verification (${{ matrix.os }} - Node ${{ matrix.node-version }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        node-version: ["22.x"]
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js Runtime
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+
+      - name: Syntax & Static Lint Verification
+        run: |
+          node --check src/server.js
+          node --check src/api/router.js
+          node --check src/db/database.js
+          node --check src/db/storageAdapter.js
+          node --check src/core/admissionController.js
+          node --check src/core/controllerManager.js
+          node --check src/core/networkingEngine.js
+          node --check src/core/resourceGraph.js
+          node --check src/core/schedulerEngine.js
+          node --check src/core/shellParser.js
+          node --check src/core/terminalEngine.js
+          node --check src/core/validationEngine.js
+          node --check src/core/virtualFileSystem.js
+          node --check src/core/yamlParser.js
+          node --check src/core/jsonPath.js
+          node --check src/core/incidentEngine.js
+          node --check src/core/projectEngine.js
+          node --check src/core/architectureEngine.js
+          node --check src/core/aiMentor.js
+          node --check src/core/certificationEngine.js
+          node --check public/js/app.js
+          node --check public/js/offlineEngine.js
+
+      - name: 11-Agent Self-Audit Gate (50 Quality Checks)
+        run: npm run audit:self
+
+      - name: Subphase Sequential Execution Ledger Verification
+        run: npm run verify:subphases
+
+      - name: Stage 1 Tests (Core, VFS, YAML, Storage, Controllers)
+        run: npm run test:stage1
+
+      - name: Stage 2 Tests (Shell, Pipelines, Scheduler, Network, Storage/Security)
+        run: npm run test:stage2
+
+      - name: Stage 3 Tests (Multi-CLI, Observability, Autoscaling, Validation)
+        run: npm run test:stage3
+
+      - name: Stage 4 Tests (26 Plugins, 15 Incidents, 8 Capstones, Ed25519 Certs)
+        run: npm run test:stage4
+
+      - name: Stage 5 Tests (UI Workbench, Offline Engine, Server Hardening)
+        run: npm run test:stage5
+
+      - name: Comprehensive End-to-End Test Suite
+        run: npm test
+
+  security-and-perf-gate:
+    name: DevSecOps Zero-CVE & Memory Budget Gate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22.x"
+
+      - name: Enforce Zero External Runtime Dependencies
+        run: |
+          DEPS_COUNT=$(node -e 'const pkg = require("./package.json"); console.log(Object.keys(pkg.dependencies || {}).length);')
+          if [ "$DEPS_COUNT" -ne 0 ]; then
+            console.error("VIOLATION: package.json has external runtime dependencies!");
+            exit 1
+          fi
+          echo "Verified: Zero external runtime dependencies."
+
+      - name: Verify CSP, HSTS & Probe Headers
+        run: |
+          node -e '
+            const { createKubeLabsApp } = require("./src/server");
+            const app = createKubeLabsApp({ dbFilePath: ":memory:" });
+            app.server.listen(0, "127.0.0.1", async () => {
+              const port = app.server.address().port;
+              const res = await fetch(`http://127.0.0.1:${port}/api/health`);
+              const csp = res.headers.get("content-security-policy");
+              const hsts = res.headers.get("strict-transport-security");
+              if (!csp || !hsts) {
+                console.error("Missing critical security headers: CSP or HSTS");
+                process.exit(1);
+              }
+              const metricsRes = await fetch(`http://127.0.0.1:${port}/metrics`);
+              const metricsText = await metricsRes.text();
+              if (!metricsText.includes("kubelabs_http_requests_total")) {
+                console.error("Prometheus metrics endpoint missing required counters");
+                process.exit(1);
+              }
+              await app.drainGracefully(2000);
+              console.log("Security headers and metrics verified successfully.");
+            });
+          '
+
+  package-and-release:
+    name: Package Cross-Platform Universal Distribution
+    needs: [audit-and-verify, security-and-perf-gate]
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22.x"
+
+      - name: Package Universal Distribution Tarball
+        run: |
+          mkdir -p dist
+          ARCHIVE_NAME="kubelabs-${GITHUB_REF_NAME:-v3.0.0}-universal.tar.gz"
+          tar -czf "dist/$ARCHIVE_NAME" \
+            package.json README.md Dockerfile docker-compose.yml docs agents schemas plugins src public scripts deploy
+          cd dist && sha256sum "$ARCHIVE_NAME" > SHA256SUMS.txt
+          echo "Distribution archive created: dist/$ARCHIVE_NAME"
+
+      - name: Deployment Smoke Test & Graceful Drain Gate
+        run: |
+          node -e '
+            const { createKubeLabsApp } = require("./src/server");
+            const app = createKubeLabsApp({ dbFilePath: ":memory:" });
+            app.server.listen(0, "127.0.0.1", async () => {
+              const port = app.server.address().port;
+              const ready = await fetch(`http://127.0.0.1:${port}/api/readyz`);
+              if (ready.status !== 200) {
+                console.error("Deployment smoke test failed: /api/readyz not 200");
+                process.exit(1);
+              }
+              await app.drainGracefully(1000);
+              console.log("Deployment smoke test and graceful drain gate passed.");
+            });
+          '
+
+      - name: Upload Release Bundle Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: kubelabs-universal-release
+          path: dist/*

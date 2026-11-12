@@ -19,12 +19,16 @@ const MIME_TYPES = {
 function applySecurityHeaders(res) {
   res.setHeader(
     'Content-Security-Policy',
-    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'"
+    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws:; frame-ancestors 'none'; object-src 'none'; base-uri 'self'"
   );
+  res.setHeader('Strict-Transport-Security', 'max-age=63072000; includeSubDomains; preload');
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('X-XSS-Protection', '0');
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
-  res.setHeader('Permissions-Policy', 'geolocation=(), microphone=(), camera=()');
+  res.setHeader('Permissions-Policy', 'geolocation=(), microphone=(), camera=(), payment=()');
+  res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+  res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
 }
 
 function sendJson(res, statusCode, data) {
@@ -92,6 +96,14 @@ class RateLimiter {
       return true;
     }
     return false;
+  }
+
+  reset(ip = null) {
+    if (ip) {
+      this.buckets.delete(ip);
+    } else {
+      this.buckets.clear();
+    }
   }
 }
 
@@ -249,7 +261,11 @@ class ApiRouter {
           '',
           '# HELP kubelabs_uptime_seconds Total application uptime in seconds',
           '# TYPE kubelabs_uptime_seconds gauge',
-          `kubelabs_uptime_seconds ${Math.floor(process.uptime())}`
+          `kubelabs_uptime_seconds ${Math.floor(process.uptime())}`,
+          '',
+          '# HELP kubelabs_info Application build version and runtime metadata',
+          '# TYPE kubelabs_info gauge',
+          'kubelabs_info{version="3.0.0",edition="isomorphic"} 1'
         ].join('\n');
         res.end(metrics + '\n');
         return;
@@ -266,6 +282,13 @@ class ApiRouter {
 
       // Kubernetes Readiness Probe
       if (method === 'GET' && (pathname === '/readyz' || pathname === '/api/readyz')) {
+        if (this.isDraining) {
+          return sendJson(res, 503, {
+            status: 'draining',
+            message: 'Server is terminating gracefully',
+            timestamp: new Date().toISOString()
+          });
+        }
         return sendJson(res, 200, {
           status: 'ready',
           uptimeSeconds: process.uptime(),
@@ -309,7 +332,7 @@ class ApiRouter {
       return sendJson(res, 200, {
         status: 'ok',
         platform: 'KubeLabs Cloud-Native Learn-by-Doing Platform',
-        version: '2.0.0',
+        version: '3.0.0',
         offlineCapable: true,
         domainsCount: this.plugins.getAllDomains().length,
         labsCount: this.plugins.getAllLabs().length,
@@ -332,7 +355,7 @@ class ApiRouter {
       return sendJson(res, 200, { success: true, profile: updated });
     }
 
-    if (method === 'POST' && pathname === '/api/offline/sync') {
+    if (method === 'POST' && (pathname === '/api/offline/sync' || pathname === '/api/sync')) {
       const body = await readJsonBody(req);
       const syncedProfile = this.db.syncOfflineProgress(body);
       return sendJson(res, 200, {

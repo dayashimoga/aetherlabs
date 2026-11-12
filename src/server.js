@@ -61,9 +61,59 @@ function createKubeLabsApp(options = {}) {
     publicDir: path.join(rootDir, 'public')
   });
 
+  let isDraining = false;
+  let inFlightRequests = 0;
+  const activeSockets = new Set();
+
   const server = http.createServer((req, res) => {
+    inFlightRequests++;
+    res.on('finish', () => {
+      inFlightRequests = Math.max(0, inFlightRequests - 1);
+    });
     router.handle(req, res);
   });
+
+  server.on('connection', (socket) => {
+    activeSockets.add(socket);
+    socket.on('close', () => {
+      activeSockets.delete(socket);
+    });
+  });
+
+  function drainGracefully(timeoutMs = 5000) {
+    isDraining = true;
+    router.isDraining = true;
+
+    return new Promise((resolve) => {
+      server.close(() => {
+        try {
+          if (database && typeof database.close === 'function') {
+            database.close();
+          }
+        } catch {}
+        resolve({ drained: true, inFlightRemaining: inFlightRequests });
+      });
+
+      for (const socket of activeSockets) {
+        if (socket.writable) {
+          socket.end();
+        }
+      }
+
+      const timer = setTimeout(() => {
+        for (const socket of activeSockets) {
+          socket.destroy();
+        }
+        try {
+          if (database && typeof database.close === 'function') {
+            database.close();
+          }
+        } catch {}
+        resolve({ drained: true, forced: true, inFlightRemaining: inFlightRequests });
+      }, timeoutMs);
+      if (typeof timer.unref === 'function') timer.unref();
+    });
+  }
 
   return {
     server,
@@ -80,7 +130,11 @@ function createKubeLabsApp(options = {}) {
     aiMentor,
     certificationEngine,
     agentOrchestrator,
-    router
+    router,
+    isDraining: () => isDraining,
+    drainGracefully,
+    getActiveConnectionsCount: () => activeSockets.size,
+    getInFlightRequestsCount: () => inFlightRequests
   };
 }
 
@@ -91,25 +145,18 @@ if (require.main === module) {
   app.server.listen(port, host, () => {
     const rssMB = Math.round((process.memoryUsage().rss / (1024 * 1024)) * 10) / 10;
     console.log('==============================================================================');
-    console.log(' KubeLabs Cloud-Native & Kubernetes Learn-by-Doing Platform (v2.0.0)');
+    console.log(' KubeLabs Cloud-Native & Kubernetes Learn-by-Doing Platform (v3.0.0)');
     console.log(` URL           : http://${host}:${port}`);
     console.log(` Domains Loaded: ${app.pluginManager.getAllDomains().length} | Labs: ${app.pluginManager.getAllLabs().length} | Incidents: ${app.incidentEngine.listIncidents().length} | Projects: ${app.projectEngine.listProjects().length}`);
     console.log(` Memory Usage  : ${rssMB} MB RSS (Low-Resource Offline-Capable Mode)`);
     console.log('==============================================================================');
   });
 
-  const shutdown = () => {
-    console.log('\n[KubeLabs] SIGTERM/SIGINT received: gracefully closing HTTP server and flushing database...');
-    app.server.close(() => {
-      try {
-        if (app.database && app.database.db) app.database.close();
-      } catch {}
-      console.log('[KubeLabs] Server closed. Exit 0.');
-      process.exit(0);
-    });
-    setTimeout(() => {
-      process.exit(0);
-    }, 5000).unref();
+  const shutdown = async () => {
+    console.log('\n[KubeLabs] SIGTERM/SIGINT received: gracefully draining HTTP server and database...');
+    await app.drainGracefully(5000);
+    console.log('[KubeLabs] Server closed. Exit 0.');
+    process.exit(0);
   };
   process.on('SIGTERM', shutdown);
   process.on('SIGINT', shutdown);

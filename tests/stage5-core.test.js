@@ -5,3 +5,4 @@
  */
 require('./stage5-ui.test');
 require('./stage5-offline.test');
+require('./stage5-server.test');
