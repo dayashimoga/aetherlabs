@@ -250,3 +250,4 @@ test('Subphase 1.2.1: ResourceGraph exportSnapshot and importSnapshot preservati
   assert.ok(restored);
   assert.equal(restored.data.lives, '3');
 });
+

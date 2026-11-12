@@ -7,4 +7,5 @@ require('./stage1-storage.test');
 require('./stage1-vfs.test');
 require('./stage1-yaml-jsonpath.test');
 require('./stage1-graph.test');
+require('./stage1-controllers.test');
 
