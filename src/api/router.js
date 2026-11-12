@@ -2,6 +2,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const crypto = require('node:crypto');
 const { URL } = require('node:url');
 const { SessionManager } = require('../engine/sessionManager');
 
@@ -63,9 +64,10 @@ function readJsonBody(req) {
 }
 
 class RateLimiter {
-  constructor(maxTokens = 180, refillRatePerSec = 3) {
+  constructor(maxTokens = 180, refillRatePerSec = 3, maxBuckets = 5000) {
     this.maxTokens = maxTokens;
     this.refillRatePerSec = refillRatePerSec;
+    this.maxBuckets = maxBuckets;
     this.buckets = new Map();
   }
 
@@ -73,6 +75,10 @@ class RateLimiter {
     const now = Date.now();
     let bucket = this.buckets.get(ip);
     if (!bucket) {
+      if (this.buckets.size >= this.maxBuckets) {
+        const oldestKey = this.buckets.keys().next().value;
+        if (oldestKey !== undefined) this.buckets.delete(oldestKey);
+      }
       bucket = { tokens: this.maxTokens, lastRefill: now };
       this.buckets.set(ip, bucket);
     } else {
@@ -120,6 +126,9 @@ class ApiRouter {
     this.publicDir = publicDir || path.join(__dirname, '..', '..', 'public');
     this.rateLimiter = new RateLimiter(180, 3);
     this.requestCount = 0;
+    this.errorCount = 0;
+    this.totalLatencyMs = 0;
+    this.recentTraces = [];
 
     // Ensure default session has initial cluster/terminal if passed
     const defaultSession = this.sessionManager.getSession('default-session');
@@ -169,11 +178,36 @@ class ApiRouter {
   }
 
   async handle(req, res) {
+    const startTime = performance.now();
+    const traceId = (req.headers && req.headers['x-trace-id']) || crypto.randomBytes(16).toString('hex');
+    const spanId = crypto.randomBytes(8).toString('hex');
+    const traceparent = `00-${traceId}-${spanId}-01`;
+    res.setHeader('X-Trace-Id', traceId);
+    res.setHeader('Traceparent', traceparent);
+
     try {
       this.requestCount += 1;
       const parsedUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
       const pathname = parsedUrl.pathname;
       const method = req.method.toUpperCase();
+
+      res.on('finish', () => {
+        const durationMs = Math.round((performance.now() - startTime) * 100) / 100;
+        this.totalLatencyMs += durationMs;
+        if (res.statusCode >= 500) this.errorCount += 1;
+        this.recentTraces.push({
+          traceId,
+          spanId,
+          method,
+          pathname,
+          statusCode: res.statusCode,
+          durationMs,
+          timestamp: new Date().toISOString()
+        });
+        if (this.recentTraces.length > 100) {
+          this.recentTraces.shift();
+        }
+      });
 
       // Prometheus metrics endpoint
       if (method === 'GET' && pathname === '/metrics') {
@@ -182,10 +216,24 @@ class ApiRouter {
         res.setHeader('Content-Type', 'text/plain; version=0.0.4; charset=utf-8');
         const mem = process.memoryUsage();
         const activeSessions = this.sessionManager ? this.sessionManager.activeSessionsCount : 1;
+        const avgLatency = this.requestCount > 0 ? (this.totalLatencyMs / this.requestCount).toFixed(3) : '0.000';
+        const sloRatio = this.requestCount > 0 ? ((this.requestCount - this.errorCount) / this.requestCount).toFixed(5) : '1.00000';
         const metrics = [
           '# HELP kubelabs_http_requests_total Total number of HTTP requests handled',
           '# TYPE kubelabs_http_requests_total counter',
           `kubelabs_http_requests_total ${this.requestCount}`,
+          '',
+          '# HELP kubelabs_http_errors_total Total number of HTTP 5xx server errors',
+          '# TYPE kubelabs_http_errors_total counter',
+          `kubelabs_http_errors_total ${this.errorCount}`,
+          '',
+          '# HELP kubelabs_http_request_duration_ms_avg Average HTTP request latency in milliseconds',
+          '# TYPE kubelabs_http_request_duration_ms_avg gauge',
+          `kubelabs_http_request_duration_ms_avg ${avgLatency}`,
+          '',
+          '# HELP kubelabs_slo_availability_ratio Availability SLI ratio (target >= 0.999)',
+          '# TYPE kubelabs_slo_availability_ratio gauge',
+          `kubelabs_slo_availability_ratio ${sloRatio}`,
           '',
           '# HELP kubelabs_active_sessions Number of active virtual cluster sessions',
           '# TYPE kubelabs_active_sessions gauge',
@@ -282,6 +330,46 @@ class ApiRouter {
       const body = await readJsonBody(req);
       const updated = this.db.importProfileBundle(body);
       return sendJson(res, 200, { success: true, profile: updated });
+    }
+
+    if (method === 'POST' && pathname === '/api/offline/sync') {
+      const body = await readJsonBody(req);
+      const syncedProfile = this.db.syncOfflineProgress(body);
+      return sendJson(res, 200, {
+        success: true,
+        synced: true,
+        syncedAt: new Date().toISOString(),
+        learner: syncedProfile
+      });
+    }
+
+    if (method === 'GET' && pathname === '/api/observability/telemetry') {
+      const mem = process.memoryUsage();
+      const pods = session.cluster.getResources('Pod', 'all');
+      const unhealthyPods = pods.filter((p) => p.status && p.status.reason !== 'Running');
+      const sloAvailability = this.requestCount > 0 ? (this.requestCount - this.errorCount) / this.requestCount : 1;
+      return sendJson(res, 200, {
+        goldenSignals: {
+          trafficRequestsTotal: this.requestCount,
+          errorsTotal: this.errorCount,
+          avgLatencyMs: this.requestCount > 0 ? Math.round((this.totalLatencyMs / this.requestCount) * 100) / 100 : 0,
+          saturationRssMB: Math.round((mem.rss / (1024 * 1024)) * 10) / 10
+        },
+        slo: {
+          targetAvailability: 0.999,
+          currentAvailability: Number(sloAvailability.toFixed(5)),
+          errorBudgetRemainingPercent: Math.max(0, Math.min(100, Math.round((1 - (1 - sloAvailability) / 0.001) * 100)))
+        },
+        activeAlerts: unhealthyPods.map((p) => ({
+          alertName: `KubePod${p.status.reason}`,
+          severity: 'critical',
+          namespace: p.metadata.namespace || 'default',
+          pod: p.metadata.name,
+          message: p.status.message
+        })),
+        recentTraces: this.recentTraces.slice(-20),
+        clusterEvents: session.cluster.state.events.slice(-25)
+      });
     }
 
     // 2. Full Platform Overview

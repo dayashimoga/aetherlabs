@@ -45,7 +45,13 @@ class SessionManager {
       };
 
       if (snapshot) {
-        if (snapshot.clusterSnapshot) cluster.importSnapshot(snapshot.clusterSnapshot);
+        if (snapshot.clusterSnapshot) {
+          if (typeof cluster.importSnapshot === 'function') {
+            cluster.importSnapshot(snapshot.clusterSnapshot);
+          } else if (typeof cluster.loadSnapshot === 'function') {
+            cluster.loadSnapshot(snapshot.clusterSnapshot);
+          }
+        }
         if (snapshot.vfsSnapshot) vfs.importSnapshot(snapshot.vfsSnapshot);
         if (snapshot.activeLabId) session.activeLabId = snapshot.activeLabId;
         if (snapshot.activeIncidentId) session.activeIncidentId = snapshot.activeIncidentId;
@@ -116,6 +122,10 @@ class SessionManager {
   }
 
   getActiveSessionsCount() {
+    return this.sessions.size;
+  }
+
+  get activeSessionsCount() {
     return this.sessions.size;
   }
 }

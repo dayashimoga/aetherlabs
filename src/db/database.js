@@ -115,6 +115,14 @@ class KubeLabsDatabase {
         score INTEGER NOT NULL DEFAULT 0,
         completed_at TEXT
       );
+
+      CREATE TABLE IF NOT EXISTS platform_keys (
+        key_id TEXT PRIMARY KEY,
+        algorithm TEXT NOT NULL,
+        public_key_pem TEXT NOT NULL,
+        private_key_pem TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
     `);
 
     try {
@@ -211,7 +219,10 @@ class KubeLabsDatabase {
         'default-learner'
       );
 
-    return this.getProfile();
+    return {
+      synced: true,
+      ...this.getProfile()
+    };
   }
 
   recordLabAttempt({ labId, domainId, passed, score, xpReward }) {
@@ -530,6 +541,7 @@ class KubeLabsDatabase {
           learnerName: c.learner_name,
           scorePercent: c.score_percent,
           signatureSha256: c.signature_sha256,
+          signatureEd25519: c.signature_ed25519 || null,
           issuedAt: c.issued_at
         });
       }
@@ -545,7 +557,74 @@ class KubeLabsDatabase {
         });
       }
     }
-    return this.getProfile();
+    return {
+      synced: true,
+      ...this.getProfile()
+    };
+  }
+
+  getOrCreateSigningKeys(keyId = 'ed25519-cert-authority') {
+    const existing = this.db
+      .prepare('SELECT * FROM platform_keys WHERE key_id = ?')
+      .get(keyId);
+    if (existing && existing.public_key_pem && existing.private_key_pem) {
+      return {
+        publicKey: existing.public_key_pem,
+        privateKey: existing.private_key_pem
+      };
+    }
+    const pair = crypto.generateKeyPairSync('ed25519', {
+      publicKeyEncoding: { type: 'spki', format: 'pem' },
+      privateKeyEncoding: { type: 'pkcs8', format: 'pem' }
+    });
+    this.db
+      .prepare(
+        `INSERT INTO platform_keys (key_id, algorithm, public_key_pem, private_key_pem, created_at)
+         VALUES (?, 'ed25519', ?, ?, ?)
+         ON CONFLICT(key_id) DO NOTHING`
+      )
+      .run(keyId, pair.publicKey, pair.privateKey, new Date().toISOString());
+    return {
+      publicKey: pair.publicKey,
+      privateKey: pair.privateKey
+    };
+  }
+
+  syncOfflineProgress(payload = {}) {
+    const completedLabs = Array.isArray(payload.completedLabs) ? payload.completedLabs : [];
+    const completedIncidents = Array.isArray(payload.incidents) ? payload.incidents : [];
+    const completedProjects = Array.isArray(payload.projects) ? payload.projects : [];
+
+    for (const item of completedLabs) {
+      const labId = typeof item === 'string' ? item : item.labId;
+      const domainId = (typeof item === 'object' && item.domainId) || 'kubernetes-core';
+      const xpReward = (typeof item === 'object' && item.xpReward) || 150;
+      if (labId) {
+        this.recordLabAttempt({ labId, domainId, passed: true, score: 100, xpReward });
+      }
+    }
+    for (const inc of completedIncidents) {
+      const incId = typeof inc === 'string' ? inc : inc.incidentId;
+      if (incId) {
+        this.resolveIncidentRun(incId, (typeof inc === 'object' && inc.xpReward) || 250);
+      }
+    }
+    for (const proj of completedProjects) {
+      const projId = typeof proj === 'string' ? proj : proj.projectId;
+      if (projId) {
+        this.recordProjectAttempt({
+          projectId: projId,
+          trackId: (typeof proj === 'object' && proj.trackId) || 'track-k8s-admin',
+          passed: true,
+          score: 100,
+          xpReward: (typeof proj === 'object' && proj.xpReward) || 450
+        });
+      }
+    }
+    return {
+      synced: true,
+      ...this.getProfile()
+    };
   }
 
   close() {

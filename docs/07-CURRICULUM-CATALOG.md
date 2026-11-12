@@ -297,7 +297,10 @@ flowchart LR
 | `inc-09-etcd-quorum-loss` | SEV-1 (P0) | `k8s-control-plane-lifecycle` | 15 min | etcd cluster lost member quorum leading to API server read-only freeze. Restore etcd snapshot with `etcdctl snapshot restore` and verify health. |
 | `inc-10-kyverno-admission-block` | SEV-1 (P0) | `policy-as-code-kyverno` | 10 min | Broken `ValidatingWebhookConfiguration` targeting unreachable endpoint rejecting all namespace creation. Patch failurePolicy to Ignore or delete invalid config. |
 | `inc-11-coredns-loop-crash` | SEV-1 (P0) | `cloud-networking` | 12 min | Upstream DNS loop detected in CoreDNS Corefile causing CoreDNS pods to crash and cluster-wide name resolution failure. Fix forward configuration in CoreDNS ConfigMap. |
-| `inc-12-pvc-storageclass-pending` | SEV-2 (P1) | `storage-csi-velero-dr` | 10 min | Stateful database PVC stuck in `Pending` because requested `StorageClass` does not exist. Create the required StorageClass to trigger dynamic volume binding. |
+| `inc-12-pvc-storageclass-pending` | SEV-2 (P1) | `storage-csi-velero-dr` | 10 min | Stateful database PVC stuck in `Pending` because requested `StorageClass` does not exist. Patch PVC storageClassName to `standard-csi` to trigger dynamic volume binding. |
+| `inc-13-slow-app-cpu-throttling` | SEV-2 (P1) | `autoscaling-karpenter-keda` | 10 min | Slow application response & P99 latency spike caused by severe CFS CPU throttling (`limits.cpu: 5m`) and missing HPA. Increase CPU limits via `kubectl set resources` and configure HPA via `kubectl autoscale`. |
+| `inc-14-iam-irsa-access-denied` | SEV-1 (P0) | `aws-eks-cloud` | 10 min | AWS EKS S3 ingestion outage (`AccessDenied: WebIdentityErr`) caused by missing `eks.amazonaws.com/role-arn` annotation on `ServiceAccount`. Annotate ServiceAccount with IAM role ARN. |
+| `inc-15-node-notready-kubelet-down` | SEV-1 (P0) | `k8s-architecture` | 10 min | Worker node `kubelabs-worker-01` is `NotReady` and cordoned (`unschedulable: true`) due to stopped `kubelet` daemon. Restart `kubelet` via `systemctl restart kubelet` and uncordon node. |
 
 
 

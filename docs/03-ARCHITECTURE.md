@@ -221,3 +221,60 @@ Each plugin defines:
 - `labs`: Interactive hands-on labs with `initialClusterState`, `starterManifest`, `steps`, `validationRules`, `solutionCommands`, `troubleshootingHint`, and `productionScenario`
 - `assessmentQuestions`: Scenario and performance-based questions for certification exams
 
+---
+
+## 6. Module Dependency, API-Flow & Data-Flow Diagrams
+
+### 6.1 Module Dependency Graph
+
+```mermaid
+flowchart LR
+    SRV["src/server.js"] --> RTR["src/api/router.js"]
+    SRV --> DB["src/db/database.js"]
+    SRV --> PM["src/plugins/pluginManager.js"]
+    SRV --> SM["src/engine/sessionManager.js"]
+    SRV --> VCE["src/engine/virtualCluster.js"]
+    SRV --> TE["src/engine/terminalEngine.js"]
+    SRV --> VE["src/engine/validationEngine.js"]
+    SRV --> IE["src/engine/incidentEngine.js"]
+    SRV --> PE["src/engine/projectEngine.js"]
+    SRV --> AE["src/engine/architectureEngine.js"]
+    SRV --> AIM["src/engine/aiMentor.js"]
+    SRV --> CE["src/engine/certificationEngine.js"]
+    SRV --> AO["src/agents/orchestrator.js"]
+
+    SM --> VCE
+    SM --> TE
+    SM --> VFS["src/engine/virtualFileSystem.js"]
+    SM --> DB
+    TE --> VCE
+    TE --> VFS
+    IE --> VE
+    PE --> VE
+    CE --> DB
+    CE --> PM
+```
+
+### 6.2 Multi-Tenant Session & Offline Sync Data-Flow
+
+```mermaid
+sequenceDiagram
+    participant Browser as Client (Web / Tauri / Capacitor)
+    participant Router as ApiRouter (RateLimiter + W3C Traceparent)
+    participant Sess as SessionManager (X-KubeLabs-Session)
+    participant Cluster as VirtualCluster + VFS
+    participant SQLite as SQLite WAL Store
+
+    Browser->>Router: HTTP Request (+ X-KubeLabs-Session header)
+    Router->>Router: Inject Traceparent, CSP & Security Headers, Check RateLimiter
+    Router->>Sess: getSession(sessionId)
+    alt Session Not in Memory
+        Sess->>SQLite: getSessionSnapshot(sessionId)
+        Sess->>Cluster: Hydrate VirtualCluster & VirtualFileSystem
+    end
+    Router->>Cluster: Execute CLI / Reconcile / Validate
+    Sess->>SQLite: saveSessionSnapshot(sessionId, cluster, vfs)
+    Router-->>Browser: JSON Response + Cluster Topology State
+```
+
+

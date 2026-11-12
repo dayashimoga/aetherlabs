@@ -88,6 +88,16 @@ test('3. TerminalEngine executes multi-CLI commands across Kubernetes, CNCF, Lin
   assert.equal(term.execute('aiops analyze').exitCode, 0);
   assert.equal(term.execute('systemctl status kubelet').exitCode, 0);
   assert.equal(term.execute('ss -tulpn').exitCode, 0);
+  assert.equal(term.execute('flux check').exitCode, 0);
+  assert.equal(term.execute('flux reconcile kustomization flux-system').exitCode, 0);
+  assert.equal(term.execute('linkerd check').exitCode, 0);
+  assert.equal(term.execute('consul members').exitCode, 0);
+  assert.equal(term.execute('opa eval').exitCode, 0);
+  assert.equal(term.execute('conftest test').exitCode, 0);
+  assert.equal(term.execute('chaos inject -n production').exitCode, 0);
+  assert.equal(term.execute('kubectl create job db-migrate --image=postgres:16-alpine -n production').exitCode, 0);
+  assert.equal(term.execute('kubectl create cronjob nightly-report --image=busybox:1.36 -n production').exitCode, 0);
+  assert.equal(cluster.getResources('Job', 'production').length >= 2, true);
 });
 
 test('4. Deterministic E2E Lab Solver Suite: Every single lab (52/52) fails before solution and passes 100% after solution', () => {
@@ -123,10 +133,10 @@ test('4. Deterministic E2E Lab Solver Suite: Every single lab (52/52) fails befo
   app.database.close();
 });
 
-test('5. Deterministic E2E Incident Simulation Solver Suite: All 12 production outages resolve cleanly', () => {
+test('5. Deterministic E2E Incident Simulation Solver Suite: All 15 production outages resolve cleanly', () => {
   const app = createKubeLabsApp({ dbFilePath: ':memory:' });
   const incidents = app.incidentEngine.scenarios;
-  assert.equal(incidents.length, 12);
+  assert.equal(incidents.length, 15);
 
   for (const inc of incidents) {
     const cluster = new VirtualCluster();
@@ -213,6 +223,12 @@ test('7. Contextual Socratic AI Mentor & Certification Engine issue and verify E
   assert.equal(verificationEd.valid, true);
   assert.equal(verificationEd.algorithm, 'ed25519');
 
+  // Security Regression Test (BUG-SEC-01): Reject forged/tampered caller-supplied signatures
+  const forgedShort = app.certificationEngine.verifyCertificate(graded.certificate.certId, 'deadbeef1234');
+  assert.equal(forgedShort.valid, false);
+  const forged128 = app.certificationEngine.verifyCertificate(graded.certificate.certId, 'a'.repeat(128));
+  assert.equal(forged128.valid, false);
+
   app.database.close();
 });
 
@@ -232,7 +248,8 @@ test('8. HTTP Server, Observability Probes, Rate Limiter & Public Key API Integr
     assert.equal(healthJson.domainsCount, 26);
     assert.equal(healthJson.labsCount, 52);
     assert.equal(healthJson.projectsCount, 8);
-    assert.equal(healthJson.incidentsCount, 12);
+    assert.equal(healthJson.incidentsCount, 15);
+    assert.ok(healthRes.headers.get('traceparent'));
 
     // Prometheus OpenMetrics format
     const metricsRes = await fetch(`${baseUrl}/metrics`);
@@ -240,6 +257,39 @@ test('8. HTTP Server, Observability Probes, Rate Limiter & Public Key API Integr
     const metricsText = await metricsRes.text();
     assert.ok(metricsText.includes('kubelabs_http_requests_total'));
     assert.ok(metricsText.includes('kubelabs_memory_rss_bytes'));
+    assert.ok(metricsText.includes('kubelabs_slo_availability_ratio'));
+
+    // Observability Golden Signals & SLO Telemetry API
+    const telemetryRes = await fetch(`${baseUrl}/api/observability/telemetry`);
+    assert.equal(telemetryRes.status, 200);
+    const telemetryJson = await telemetryRes.json();
+    assert.ok(telemetryJson.slo && telemetryJson.goldenSignals);
+
+    // Offline Progress Sync API
+    const syncRes = await fetch(`${baseUrl}/api/offline/sync`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ completedLabs: ['lab-linux-01'], incidents: ['inc-01-selector-blackhole'] })
+    });
+    assert.equal(syncRes.status, 200);
+    const syncJson = await syncRes.json();
+    assert.equal(syncJson.synced, true);
+
+    // Multi-Tenant Session Isolation Verification
+    await fetch(`${baseUrl}/api/terminal/exec`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-kubelabs-session': 'tenant-alpha' },
+      body: JSON.stringify({ command: 'kubectl create namespace alpha-isolated' })
+    });
+    const betaClusterRes = await fetch(`${baseUrl}/api/cluster/state`, {
+      headers: { 'x-kubelabs-session': 'tenant-beta' }
+    });
+    const betaCluster = await betaClusterRes.json();
+    assert.equal(
+      betaCluster.clusterState.resources.some((r) => r.kind === 'Namespace' && r.metadata.name === 'alpha-isolated'),
+      false,
+      'Tenant Beta should not see Tenant Alpha namespace'
+    );
 
     // Kubernetes Probes
     const livezRes = await fetch(`${baseUrl}/api/livez`);

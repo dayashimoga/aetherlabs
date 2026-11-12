@@ -771,6 +771,256 @@ const INCIDENT_SCENARIOS = [
     solutionCommands: [
       'kubectl patch pvc analytics-db-data -n production -p \'{"spec":{"storageClassName":"standard-csi"}}\''
     ]
+  },
+  {
+    id: 'inc-13-slow-app-cpu-throttling',
+    title: 'SEV-2: Slow Application Response & P99 Latency Spike (CFS CPU Throttling)',
+    severity: 'SEV-2 (P1)',
+    domainId: 'autoscaling-karpenter-keda',
+    estimatedMttrMinutes: 10,
+    xpReward: 275,
+    alertSummary: 'Prometheus Alert: HighRequestLatencyP99: order-processor P99 latency > 4.8s; container_cpu_cfs_throttled_periods_total > 96%.',
+    customerImpact: 'Checkout order confirmation takes > 5 seconds and intermittently times out due to severe CPU throttling.',
+    symptoms: [
+      'Deployment order-processor in namespace production is severely throttled with limits.cpu: 5m.',
+      'No HorizontalPodAutoscaler exists to scale order-processor during traffic spikes.'
+    ],
+    diagnosticHints: [
+      'Inspect container resource limits on deployment/order-processor in namespace production.',
+      'Update CPU/memory limits via kubectl set resources and create an HPA via kubectl autoscale.'
+    ],
+    initialClusterState: {
+      resources: [
+        {
+          apiVersion: 'apps/v1',
+          kind: 'Deployment',
+          metadata: { name: 'order-processor', namespace: 'production' },
+          spec: {
+            replicas: 2,
+            selector: { matchLabels: { app: 'order-processor' } },
+            template: {
+              metadata: { labels: { app: 'order-processor' } },
+              spec: {
+                containers: [
+                  {
+                    name: 'order-processor',
+                    image: 'registry.kubelabs.io/commerce/order-processor:v2.4.0',
+                    resources: {
+                      requests: { cpu: '5m', memory: '128Mi' },
+                      limits: { cpu: '5m', memory: '256Mi' }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      ]
+    },
+    validationRules: [
+      {
+        id: 'inc-13-r1',
+        description: 'Deployment order-processor CPU limit increased to 500m to eliminate CFS throttling',
+        type: 'resource_field_equals',
+        kind: 'Deployment',
+        name: 'order-processor',
+        namespace: 'production',
+        fieldPath: 'spec.template.spec.containers.0.resources.limits.cpu',
+        expectedValue: '500m',
+        remediation: 'Run: kubectl set resources deployment/order-processor --limits=cpu=500m,memory=256Mi -n production'
+      },
+      {
+        id: 'inc-13-r2',
+        description: 'HorizontalPodAutoscaler order-processor configured in namespace production',
+        type: 'resource_exists',
+        kind: 'HorizontalPodAutoscaler',
+        name: 'order-processor',
+        namespace: 'production',
+        remediation: 'Run: kubectl autoscale deployment order-processor --min=2 --max=10 --cpu-percent=70 -n production'
+      },
+      {
+        id: 'inc-13-r3',
+        description: 'All order-processor replicas are Running without CPU throttling',
+        type: 'pod_status_running',
+        kind: 'Deployment',
+        name: 'order-processor',
+        namespace: 'production',
+        remediation: 'Ensure order-processor pods are Running.'
+      }
+    ],
+    solutionCommands: [
+      'kubectl set resources deployment/order-processor --limits=cpu=500m,memory=256Mi -n production',
+      'kubectl autoscale deployment order-processor --min=2 --max=10 --cpu-percent=70 -n production'
+    ]
+  },
+  {
+    id: 'inc-14-iam-irsa-access-denied',
+    title: 'SEV-1: AWS EKS S3 Ingestion Outage (IAM IRSA Role Annotation Missing)',
+    severity: 'SEV-1 (P0)',
+    domainId: 'aws-eks-cloud',
+    estimatedMttrMinutes: 10,
+    xpReward: 300,
+    alertSummary: 'CloudWatch Alert: S3AccessDeniedException: pod s3-sync-worker in namespace production failed AssumeRoleWithWebIdentity.',
+    customerImpact: 'Customer invoice PDFs and audit exports cannot be uploaded to S3 bucket.',
+    symptoms: [
+      'Deployment s3-sync-worker in namespace production is crashing with CrashLoopBackOff (AccessDenied: WebIdentityErr).',
+      'ServiceAccount s3-worker-sa is missing annotation eks.amazonaws.com/role-arn.'
+    ],
+    diagnosticHints: [
+      'Check ServiceAccount s3-worker-sa in namespace production.',
+      'Annotate ServiceAccount s3-worker-sa with eks.amazonaws.com/role-arn=arn:aws:iam::123456789012:role/eks-s3-access.'
+    ],
+    initialClusterState: {
+      resources: [
+        {
+          apiVersion: 'v1',
+          kind: 'ServiceAccount',
+          metadata: {
+            name: 's3-worker-sa',
+            namespace: 'production',
+            annotations: {}
+          }
+        },
+        {
+          apiVersion: 'apps/v1',
+          kind: 'Deployment',
+          metadata: { name: 's3-sync-worker', namespace: 'production' },
+          spec: {
+            replicas: 1,
+            selector: { matchLabels: { app: 's3-sync-worker' } },
+            template: {
+              metadata: { labels: { app: 's3-sync-worker' } },
+              spec: {
+                serviceAccountName: 's3-worker-sa',
+                containers: [
+                  {
+                    name: 's3-sync',
+                    image: 'registry.kubelabs.io/cloud/s3-sync:v1.8.0',
+                    env: [{ name: 'REQUIRE_IRSA_ROLE', value: 'true' }]
+                  }
+                ]
+              }
+            }
+          }
+        }
+      ]
+    },
+    validationRules: [
+      {
+        id: 'inc-14-r1',
+        description: 'ServiceAccount s3-worker-sa has valid AWS IAM role annotation (IRSA)',
+        type: 'resource_field_equals',
+        kind: 'ServiceAccount',
+        name: 's3-worker-sa',
+        namespace: 'production',
+        fieldPath: 'metadata.annotations.eks.amazonaws.com/role-arn',
+        expectedValue: 'arn:aws:iam::123456789012:role/eks-s3-access',
+        remediation: 'Run: kubectl annotate serviceaccount s3-worker-sa eks.amazonaws.com/role-arn=arn:aws:iam::123456789012:role/eks-s3-access -n production'
+      },
+      {
+        id: 'inc-14-r2',
+        description: 'Deployment s3-sync-worker pod transitions to Running with valid STS WebIdentity token',
+        type: 'pod_status_running',
+        kind: 'Deployment',
+        name: 's3-sync-worker',
+        namespace: 'production',
+        remediation: 'Ensure s3-sync-worker pod is Running after annotating the ServiceAccount.'
+      }
+    ],
+    solutionCommands: [
+      'kubectl annotate serviceaccount s3-worker-sa eks.amazonaws.com/role-arn=arn:aws:iam::123456789012:role/eks-s3-access -n production'
+    ]
+  },
+  {
+    id: 'inc-15-node-notready-kubelet-down',
+    title: 'SEV-1: Worker Node NotReady & Cordoned (Kubelet Daemon Stopped)',
+    severity: 'SEV-1 (P0)',
+    domainId: 'k8s-architecture',
+    estimatedMttrMinutes: 10,
+    xpReward: 300,
+    alertSummary: 'PagerDuty P0: KubeNodeNotReady: Node kubelabs-worker-01 is NotReady and cordoned; pinned workloads degraded.',
+    customerImpact: 'Edge payment gateway pods pinned to kubelabs-worker-01 are in NodeNotReady state.',
+    symptoms: [
+      'Node kubelabs-worker-01 has status.phase = NotReady and spec.unschedulable = true.',
+      'kubelet systemd unit on the worker node is stopped.'
+    ],
+    diagnosticHints: [
+      'Restart kubelet via systemctl restart kubelet.',
+      'Uncordon node kubelabs-worker-01 via kubectl uncordon kubelabs-worker-01.'
+    ],
+    initialClusterState: {
+      resources: [
+        {
+          apiVersion: 'v1',
+          kind: 'Node',
+          metadata: {
+            name: 'kubelabs-worker-01',
+            labels: {
+              'kubernetes.io/hostname': 'kubelabs-worker-01',
+              'node-role.kubernetes.io/worker': 'true',
+              'workload-tier': 'general'
+            }
+          },
+          spec: { taints: [], unschedulable: true },
+          status: {
+            phase: 'NotReady',
+            capacity: { cpu: '8', memory: '16Gi', pods: '110' },
+            allocatable: { cpu: '7800m', memory: '15Gi', pods: '110' },
+            nodeInfo: {
+              kubeletVersion: 'v1.31.2',
+              containerRuntimeVersion: 'containerd://2.0.0',
+              osImage: 'Ubuntu 24.04.1 LTS'
+            }
+          }
+        },
+        {
+          apiVersion: 'v1',
+          kind: 'Pod',
+          metadata: { name: 'payments-edge-gw', namespace: 'production', labels: { app: 'payments-edge' } },
+          spec: {
+            nodeName: 'kubelabs-worker-01',
+            containers: [{ name: 'edge-gw', image: 'registry.kubelabs.io/payments/edge-gw:v1.5.0' }]
+          }
+        }
+      ]
+    },
+    validationRules: [
+      {
+        id: 'inc-15-r1',
+        description: 'Node kubelabs-worker-01 status.phase is Ready',
+        type: 'resource_field_equals',
+        kind: 'Node',
+        name: 'kubelabs-worker-01',
+        namespace: 'default',
+        fieldPath: 'status.phase',
+        expectedValue: 'Ready',
+        remediation: 'Restart kubelet with: systemctl restart kubelet'
+      },
+      {
+        id: 'inc-15-r2',
+        description: 'Node kubelabs-worker-01 is uncordoned (spec.unschedulable is false)',
+        type: 'resource_field_equals',
+        kind: 'Node',
+        name: 'kubelabs-worker-01',
+        namespace: 'default',
+        fieldPath: 'spec.unschedulable',
+        expectedValue: false,
+        remediation: 'Uncordon node with: kubectl uncordon kubelabs-worker-01'
+      },
+      {
+        id: 'inc-15-r3',
+        description: 'Pod payments-edge-gw on kubelabs-worker-01 is Running',
+        type: 'pod_status_running',
+        kind: 'Pod',
+        name: 'payments-edge-gw',
+        namespace: 'production',
+        remediation: 'Ensure payments-edge-gw transitions to Running once node is Ready.'
+      }
+    ],
+    solutionCommands: [
+      'systemctl restart kubelet',
+      'kubectl uncordon kubelabs-worker-01'
+    ]
   }
 ];
 

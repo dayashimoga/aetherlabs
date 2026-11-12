@@ -13,6 +13,10 @@ class CertificationEngine {
     if (options.publicKey && options.privateKey) {
       this.publicKey = options.publicKey;
       this.privateKey = options.privateKey;
+    } else if (this.database && typeof this.database.getOrCreateSigningKeys === 'function') {
+      const pair = this.database.getOrCreateSigningKeys();
+      this.publicKey = pair.publicKey;
+      this.privateKey = pair.privateKey;
     } else {
       const pair = crypto.generateKeyPairSync('ed25519', {
         publicKeyEncoding: { type: 'spki', format: 'pem' },
@@ -221,17 +225,27 @@ class CertificationEngine {
     let valid = false;
     let algorithm = 'hmac-sha256';
 
-    // If an Ed25519 signature is provided or saved in the database
-    const edSig = providedSignature && providedSignature.length === 128 ? providedSignature : cert.signature_ed25519;
-    if (edSig) {
-      valid = this.verifyCertificateEd25519(payload, edSig);
+    if (providedSignature !== undefined && providedSignature !== null && String(providedSignature).trim() !== '') {
+      const sigStr = String(providedSignature).trim();
+      if (sigStr.length === 128) {
+        valid = this.verifyCertificateEd25519(payload, sigStr);
+        algorithm = 'ed25519';
+      } else {
+        const expectedShaSig = this.signCertificatePayload(payload);
+        valid = sigStr === expectedShaSig;
+        algorithm = 'hmac-sha256';
+      }
+    } else if (cert.signature_ed25519) {
+      valid = this.verifyCertificateEd25519(payload, cert.signature_ed25519);
       algorithm = 'ed25519';
-    }
-
-    if (!valid) {
+      if (!valid && cert.signature_sha256) {
+        const expectedShaSig = this.signCertificatePayload(payload);
+        valid = cert.signature_sha256 === expectedShaSig;
+        algorithm = 'hmac-sha256';
+      }
+    } else {
       const expectedShaSig = this.signCertificatePayload(payload);
-      const shaSigToCheck = providedSignature || cert.signature_sha256;
-      valid = shaSigToCheck === expectedShaSig;
+      valid = cert.signature_sha256 === expectedShaSig;
       algorithm = 'hmac-sha256';
     }
 

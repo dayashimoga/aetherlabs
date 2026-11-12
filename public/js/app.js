@@ -24,14 +24,29 @@
     lastClusterState: null,
     commandHistory: [],
     historyIndex: -1,
-    currentTheme: localStorage.getItem('kubelabs_theme') || 'dark'
+    currentTheme: localStorage.getItem('kubelabs_theme') || 'dark',
+    sessionId: (function () {
+      try {
+        let sid = sessionStorage.getItem('kubelabs_session_id');
+        if (!sid) {
+          sid = 'sess-' + Math.random().toString(36).slice(2, 10);
+          sessionStorage.setItem('kubelabs_session_id', sid);
+        }
+        return sid;
+      } catch {
+        return 'default';
+      }
+    })()
   };
 
   async function apiCall(path, options = {}) {
     try {
       const res = await fetch(path, {
         method: options.method || 'GET',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-kubelabs-session': state.sessionId
+        },
         body: options.body ? JSON.stringify(options.body) : undefined
       });
       const data = await res.json();

@@ -14,8 +14,8 @@
    - `VirtualFileSystem` (`src/engine/virtualFileSystem.js`) provides sandboxed in-memory filesystem emulation (`/etc/kubernetes/manifests/`, `/var/lib/etcd/`, `/home/learner/`, etc.) with redirection support (`>`, `>>`) and `kubectl apply -f <vfs-path>`.
    - `SessionManager` (`src/engine/sessionManager.js`) isolates virtual clusters and terminal states per session (`X-KubeLabs-Session` header) with SQLite snapshot persistence.
 4. **Sandboxed Multi-CLI Built-In Terminal (`src/engine/terminalEngine.js`)**:
-   - Supports `kubectl`, `helm`, `docker`, `crictl`, `argocd`, `istioctl`, `tofu`, `terraform`, `aws`, `az`, `gcloud`, `trivy`, `falco`, `cosign`, `aiops`, `etcdctl`, `kubeadm`, `velero`, `kyverno`, `vcluster`, `crossplane`, and Linux/Networking utilities (`systemctl`, `sysctl`, `ss`, `ip`, `ps`, `free`, `df`, `dig`, `curl`, `mkdir`, `cat`, `ls`).
-5. **52 Interactive Hands-On Labs, 12 Live Outages & 8 Multi-Milestone Capstone Projects**:
+   - Supports `kubectl`, `helm`, `docker`, `crictl`, `argocd`, `flux`, `istioctl`, `linkerd`, `consul`, `tofu`, `terraform`, `aws`, `az`, `gcloud`, `trivy`, `falco`, `cosign`, `opa`, `conftest`, `chaos`, `litmusctl`, `aiops`, `etcdctl`, `kubeadm`, `velero`, `kyverno`, `vcluster`, `crossplane`, and Linux/Networking utilities (`systemctl`, `sysctl`, `ss`, `ip`, `ps`, `free`, `df`, `dig`, `curl`, `mkdir`, `cat`, `ls`).
+5. **52 Interactive Hands-On Labs, 15 Live Outages & 8 Multi-Milestone Capstone Projects**:
    - Every lab, incident, and capstone is verified by a **Deterministic Multi-Assertion Validation Engine** (`src/engine/validationEngine.js`) and proven solvable via automated E2E solver tests.
 6. **Visual UI Architecture Designer & 8 Enterprise Reference Architectures (`src/engine/architectureEngine.js`)**:
    - Interactive topology builder with automated Well-Architected 4-Pillar scoring, Single Point of Failure (SPOF) detection, bi-directional Kubernetes YAML + OpenTofu HCL compilation, and one-click deployment to the virtual cluster.
@@ -36,10 +36,10 @@
 # 1. Run the 11-Agent Engineering Quality Gate & Self-Audit (50/50 Quality Checks)
 npm run audit:self
 
-# 2. Run the Full Automated Test Suite (All 52 Labs, 12 Incidents, 8 Capstones)
+# 2. Run the Full Automated Test Suite (All 52 Labs, 15 Incidents, 8 Capstones)
 npm test
 
-# 3. Verify all 36 Execution Subphases Sequentially
+# 3. Verify all 40 Execution Subphases Sequentially
 npm run verify:subphases
 
 # 4. Start the Standalone Production Server (Default: http://127.0.0.1:4100)
@@ -66,7 +66,7 @@ npm start
 - [Architecture Decision Records (ADRs)](docs/04-ADRS.md)
 - [GitHub Organization, Repo Structure & CI/CD](docs/05-GITHUB-AND-CICD.md)
 - [Phased Implementation Plan (Stage → Phase → Subphase)](docs/06-IMPLEMENTATION-PLAN.md)
-- [Master Curriculum Catalog (26 Domains, 52 Labs, 12 Incidents, 8 Capstones)](docs/07-CURRICULUM-CATALOG.md)
+- [Master Curriculum Catalog (26 Domains, 52 Labs, 15 Incidents, 8 Capstones)](docs/07-CURRICULUM-CATALOG.md)
 - [Operational Runbooks, Deployment Guides & PRR](docs/08-OPERATIONS-AND-RUNBOOKS.md)
 - [Comprehensive Project Walkthrough](docs/11-COMPREHENSIVE-PROJECT-WALKTHROUGH.md)
 - [Enterprise Gap Analysis & Execution Plan](docs/12-ENTERPRISE-GAP-ANALYSIS-AND-EXECUTION-PLAN.md)

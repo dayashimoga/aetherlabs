@@ -329,12 +329,45 @@
       }
 
       if (verb === 'apply') {
+        const fIdx = cleanArgs.indexOf('-f');
+        if (fIdx !== -1 && cleanArgs[fIdx + 1]) {
+          const file = cleanArgs[fIdx + 1];
+          if (this.vfs.exists(file)) {
+            const content = this.vfs.readFile(file);
+            this.cluster.applyManifest(content);
+          }
+        }
         return { exitCode: 0, output: 'manifest configured/applied (offline)' };
       }
 
       return { exitCode: 0, output: `kubectl ${verb} OK (offline)` };
     }
   }
+
+  BrowserCluster.prototype.applyManifest = function (yamlText) {
+    if (!yamlText) return [];
+    const docs = String(yamlText).split(/^---+\s*$/m);
+    const applied = [];
+    for (const doc of docs) {
+      const kindMatch = doc.match(/^\s*kind:\s*([^\s#]+)/m);
+      const nameMatch = doc.match(/^\s*name:\s*([^\s#]+)/m);
+      const nsMatch = doc.match(/^\s*namespace:\s*([^\s#]+)/m);
+      if (kindMatch && nameMatch) {
+        const obj = {
+          apiVersion: 'v1',
+          kind: kindMatch[1].replace(/^['"]|['"]$/g, ''),
+          metadata: {
+            name: nameMatch[1].replace(/^['"]|['"]$/g, ''),
+            namespace: nsMatch ? nsMatch[1].replace(/^['"]|['"]$/g, '') : 'default'
+          },
+          spec: {}
+        };
+        this.applyResource(obj);
+        applied.push(obj);
+      }
+    }
+    return applied;
+  };
 
   // 4. Client-side Validation Engine
   class BrowserValidator {
@@ -354,8 +387,19 @@
           passed = Boolean(res);
           actual = res ? `${rule.kind}/${rule.name} exists` : 'Not found';
         } else if (rule.type === 'command_executed') {
-          passed = commandHistory.some((cmd) => cmd.includes(rule.pattern || rule.name));
+          const targetPattern = rule.commandSubstring || rule.pattern || rule.name || '';
+          passed = commandHistory.some((cmd) => cmd.includes(targetPattern));
           actual = passed ? 'Command found in history' : 'Command not yet executed';
+        } else if (rule.type === 'service_has_endpoints') {
+          const svc = cluster.getResource('Service', rule.name, rule.namespace || 'default');
+          const count = (svc && svc.status && svc.status.endpointCount) || 0;
+          passed = count > 0;
+          actual = `${count} endpoints`;
+        } else if (rule.type === 'replica_count_min') {
+          const res = cluster.getResource(rule.kind || 'Deployment', rule.name, rule.namespace || 'default');
+          const replicas = (res && res.spec && res.spec.replicas) || 0;
+          passed = Number(replicas) >= Number(rule.minReplicas || 1);
+          actual = `${replicas} replicas`;
         } else if (rule.type === 'resource_field_equals') {
           const res = cluster.getResource(rule.kind, rule.name, rule.namespace || 'default');
           if (res) {
@@ -429,6 +473,7 @@
     validator,
     isOffline: () => typeof navigator !== 'undefined' && !navigator.onLine,
     executeCommand: (cmd) => terminal.execute(cmd),
+    applyManifest: (yaml) => cluster.applyManifest(yaml),
     getClusterState: () => cluster.exportSnapshot(),
     resetCluster: (state) => cluster.reset(state),
     evaluateRules: (rules) => validator.evaluate(rules, cluster, terminal.commandHistory),

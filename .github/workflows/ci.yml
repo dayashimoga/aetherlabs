@@ -26,8 +26,23 @@ jobs:
         with:
           node-version: "25.x"
 
+      - name: Syntax & Static Lint Verification
+        run: |
+          node --check src/server.js
+          node --check src/api/router.js
+          node --check src/db/database.js
+          node --check src/engine/virtualCluster.js
+          node --check src/engine/terminalEngine.js
+          node --check src/engine/incidentEngine.js
+          node --check src/engine/certificationEngine.js
+          node --check public/js/app.js
+          node --check public/js/offlineEngine.js
+
       - name: Run 11-Agent Self-Audit & Schema Quality Gates
         run: npm run audit:self
+
+      - name: Run 40-Subphase Sequential Verification Ledger
+        run: npm run verify:subphases
 
       - name: Run Unit, Integration, Security & E2E Lab Solver Tests
         run: npm test

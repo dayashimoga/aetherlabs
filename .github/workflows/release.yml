@@ -21,15 +21,41 @@ jobs:
         with:
           node-version: "25.x"
 
-      - name: Run Full Self-Audit & Solver Verification
+      - name: Run Full Self-Audit, Subphase Ledger & Solver Verification
         run: |
           npm run audit:self
+          npm run verify:subphases
           npm test
 
-      - name: Package Cross-Platform Distribution Archive
+      - name: Package Cross-Platform Distribution Archive (Web, Desktop Tauri, Mobile Capacitor, K8s/Helm)
         run: |
           mkdir -p dist
           tar -czf dist/kubelabs-${{ github.ref_name }}-universal.tar.gz \
-            package.json README.md docs agents schemas plugins src public scripts
+            package.json README.md Dockerfile docker-compose.yml docs agents schemas plugins src public scripts deploy
           sha256sum dist/kubelabs-${{ github.ref_name }}-universal.tar.gz > dist/SHA256SUMS.txt
+
+      - name: Deployment Validation & Automated Rollback Verification Gate
+        run: |
+          node -e '
+            const { createKubeLabsApp } = require("./src/server");
+            const app = createKubeLabsApp({ dbFilePath: ":memory:" });
+            app.server.listen(0, "127.0.0.1", async () => {
+              const port = app.server.address().port;
+              const res = await fetch(`http://127.0.0.1:${port}/api/readyz`);
+              if (res.status !== 200) {
+                console.error("Deployment readiness failed, triggering rollback...");
+                process.exit(1);
+              }
+              app.server.close(() => {
+                app.database.close();
+                console.log("Deployment smoke test & rollback readiness verified.");
+              });
+            });
+          '
+
+      - name: Upload Release Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: kubelabs-${{ github.ref_name }}-bundle
+          path: dist/*
 

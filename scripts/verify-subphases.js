@@ -406,11 +406,72 @@ const SUBPHASES = [
       fs.existsSync(path.join(rootDir, 'deploy', 'kubernetes', 'kubelabs-k8s.yaml')) &&
       fs.existsSync(path.join(rootDir, 'docs', '09-SECURITY-AND-THREAT-MODEL.md')) &&
       fs.existsSync(path.join(rootDir, 'docs', '10-PERFORMANCE-AND-SCALABILITY-BENCHMARKS.md'))
+  },
+  {
+    id: 'Subphase 10.1.1',
+    stage: 'Stage 10',
+    phase: 'Phase 10.1',
+    title: 'Persistent Ed25519 Keypair, Forged Signature Rejection & Bounded RateLimiter',
+    verify: () => {
+      const qs = app.pluginManager.getTrackQuestions('track-foundations');
+      const answers = {};
+      for (const q of qs) answers[q.id] = q.correctIndex;
+      const graded = app.certificationEngine.gradeExam({ trackId: 'track-foundations', answers, learnerName: 'SecAudit' });
+      const validEd = app.certificationEngine.verifyCertificate(graded.certificate.certId, graded.certificate.signatureEd25519);
+      const forged = app.certificationEngine.verifyCertificate(graded.certificate.certId, 'forged-sig-123');
+      return validEd.valid === true && forged.valid === false;
+    }
+  },
+  {
+    id: 'Subphase 10.2.1',
+    stage: 'Stage 10',
+    phase: 'Phase 10.2',
+    title: 'Job/CronJob/ReplicaSet Reconciliation, IRSA, CFS CPU Throttling & Multi-CLI Parity',
+    verify: () => {
+      const c = new VirtualCluster();
+      const t = new TerminalEngine(c);
+      t.execute('kubectl create cronjob audit-job --image=busybox:1.36 -n production');
+      return (
+        c.getResources('CronJob', 'production').length === 1 &&
+        c.getResources('Job', 'production').length === 1 &&
+        t.execute('flux check').exitCode === 0 &&
+        t.execute('linkerd check').exitCode === 0
+      );
+    }
+  },
+  {
+    id: 'Subphase 10.3.1',
+    stage: 'Stage 10',
+    phase: 'Phase 10.3',
+    title: 'All 15 Production Outage Scenarios (Website Down, Slow App, DNS, IAM IRSA, Storage, Node NotReady, etcd)',
+    verify: () => {
+      const incidents = app.incidentEngine.scenarios;
+      if (incidents.length !== 15) return false;
+      for (const inc of incidents) {
+        const c = new VirtualCluster();
+        app.incidentEngine.injectIncident(inc.id, c);
+        const t = new TerminalEngine(c);
+        if (app.incidentEngine.verifyIncidentResolution(inc.id, c, []).passed) return false;
+        for (const cmd of inc.solutionCommands) t.execute(cmd);
+        if (!app.incidentEngine.verifyIncidentResolution(inc.id, c, t.commandHistory).passed) return false;
+      }
+      return true;
+    }
+  },
+  {
+    id: 'Subphase 10.4.1',
+    stage: 'Stage 10',
+    phase: 'Phase 10.4',
+    title: 'Cross-Platform Packaging (Tauri Desktop, Capacitor Android/iOS, Helm Chart, Kustomize)',
+    verify: () =>
+      fs.existsSync(path.join(rootDir, 'deploy', 'helm', 'kubelabs', 'Chart.yaml')) &&
+      fs.existsSync(path.join(rootDir, 'deploy', 'desktop', 'tauri.conf.json')) &&
+      fs.existsSync(path.join(rootDir, 'deploy', 'mobile', 'capacitor.config.json'))
   }
 ];
 
 console.log('========================================================================================');
-console.log(' KUBELABS SUBPHASE-BY-SUBPHASE SEQUENTIAL EXECUTION & VALIDATION LEDGER (36 SUBPHASES)');
+console.log(' KUBELABS SUBPHASE-BY-SUBPHASE SEQUENTIAL EXECUTION & VALIDATION LEDGER (40 SUBPHASES)');
 console.log('========================================================================================');
 
 let passedCount = 0;

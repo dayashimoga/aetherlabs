@@ -46,6 +46,8 @@ function parseKubeFlags(tokens) {
   let patchJson = null;
   const fromLiterals = {};
   const hardLimits = {};
+  const limits = {};
+  const requests = {};
   const rest = [];
 
   for (let i = 0; i < tokens.length; i++) {
@@ -101,6 +103,18 @@ function parseKubeFlags(tokens) {
         const [k, v] = p.split('=');
         if (k && v) hardLimits[k] = v;
       }
+    } else if (t.startsWith('--limits=')) {
+      const parts = t.slice('--limits='.length).split(',');
+      for (const p of parts) {
+        const [k, v] = p.split('=');
+        if (k && v) limits[k] = v;
+      }
+    } else if (t.startsWith('--requests=')) {
+      const parts = t.slice('--requests='.length).split(',');
+      for (const p of parts) {
+        const [k, v] = p.split('=');
+        if (k && v) requests[k] = v;
+      }
     } else if (t === '--overwrite') {
       // ignore flag
     } else {
@@ -120,6 +134,8 @@ function parseKubeFlags(tokens) {
     patchJson,
     fromLiterals,
     hardLimits,
+    limits,
+    requests,
     rest
   };
 }
@@ -305,6 +321,17 @@ class TerminalEngine {
         return this.handleVcluster(args);
       case 'crossplane':
         return this.handleCrossplane(args);
+      case 'flux':
+        return this.handleFlux(args);
+      case 'linkerd':
+      case 'consul':
+        return this.handleServiceMeshCli(bin, args);
+      case 'opa':
+      case 'conftest':
+        return this.handleOpa(bin, args);
+      case 'chaos':
+      case 'litmusctl':
+        return this.handleChaos(bin, args);
       case 'systemctl':
       case 'sysctl':
       case 'journalctl':
@@ -455,8 +482,11 @@ class TerminalEngine {
       return { exitCode: 0, output: `node/${nodeName} tainted` };
     }
     if (sub === 'delete') {
-      const kind = subArgs[0];
-      const name = subArgs[1];
+      let kind = subArgs[0];
+      let name = subArgs[1];
+      if (kind && kind.includes('/')) {
+        [kind, name] = kind.split('/');
+      }
       if (!kind || !name) throw new Error('Usage: kubectl delete <kind> <name> [-n <ns>]');
       const deleted = this.cluster.deleteResource(kind, name, flags.namespace);
       if (!deleted) {
@@ -469,8 +499,11 @@ class TerminalEngine {
   }
 
   kubectlGet(subArgs, flags) {
-    const rawKind = subArgs[0] || 'pods';
-    const targetName = subArgs[1] || null;
+    let rawKind = subArgs[0] || 'pods';
+    let targetName = subArgs[1] || null;
+    if (rawKind && rawKind.includes('/')) {
+      [rawKind, targetName] = rawKind.split('/');
+    }
     const nsQuery = flags.allNamespaces ? 'all' : flags.namespace;
 
     if (rawKind === 'all') {
@@ -614,8 +647,12 @@ class TerminalEngine {
   }
 
   kubectlDescribe(subArgs, flags) {
-    const kind = normalizeKind(subArgs[0] || 'Pod');
-    const name = subArgs[1];
+    let rawKind = subArgs[0] || 'Pod';
+    let name = subArgs[1];
+    if (rawKind && rawKind.includes('/')) {
+      [rawKind, name] = rawKind.split('/');
+    }
+    const kind = normalizeKind(rawKind);
     const items = name
       ? [this.cluster.getResource(kind, name, flags.namespace)].filter(Boolean)
       : this.cluster.getResources(kind, flags.namespace);
@@ -740,6 +777,48 @@ class TerminalEngine {
       return { exitCode: 0, output: `resourcequota/${name} created` };
     }
 
+    if (kind === 'Job') {
+      const image = flags.image || 'busybox:1.36';
+      this.cluster.applyResource({
+        apiVersion: 'batch/v1',
+        kind: 'Job',
+        metadata: { name, namespace: flags.namespace },
+        spec: {
+          completions: 1,
+          template: {
+            spec: {
+              restartPolicy: 'Never',
+              containers: [{ name, image }]
+            }
+          }
+        }
+      });
+      return { exitCode: 0, output: `job.batch/${name} created` };
+    }
+
+    if (kind === 'CronJob') {
+      const image = flags.image || 'busybox:1.36';
+      this.cluster.applyResource({
+        apiVersion: 'batch/v1',
+        kind: 'CronJob',
+        metadata: { name, namespace: flags.namespace },
+        spec: {
+          schedule: '*/5 * * * *',
+          jobTemplate: {
+            spec: {
+              template: {
+                spec: {
+                  restartPolicy: 'OnFailure',
+                  containers: [{ name, image }]
+                }
+              }
+            }
+          }
+        }
+      });
+      return { exitCode: 0, output: `cronjob.batch/${name} created` };
+    }
+
     this.cluster.applyResource({
       apiVersion: 'v1',
       kind,
@@ -850,6 +929,36 @@ class TerminalEngine {
       return { exitCode: 0, output: `${normalizeKind(kind).toLowerCase()}.apps/${name} env updated` };
     }
 
+    if (setType === 'resources') {
+      let kind = 'Deployment';
+      let name = subArgs[1];
+      if (name && name.includes('/')) {
+        const parts = name.split('/');
+        kind = parts[0];
+        name = parts[1];
+      } else {
+        kind = subArgs[1];
+        name = subArgs[2];
+      }
+      const res = this.cluster.getResource(kind, name, flags.namespace);
+      if (!res) throw new Error(`${kind} "${name}" not found`);
+      const containers =
+        res.kind === 'Pod'
+          ? res.spec.containers
+          : res.spec && res.spec.template && res.spec.template.spec && res.spec.template.spec.containers;
+      if (Array.isArray(containers) && containers[0]) {
+        containers[0].resources = containers[0].resources || {};
+        if (flags.limits && Object.keys(flags.limits).length > 0) {
+          containers[0].resources.limits = Object.assign(containers[0].resources.limits || {}, flags.limits);
+        }
+        if (flags.requests && Object.keys(flags.requests).length > 0) {
+          containers[0].resources.requests = Object.assign(containers[0].resources.requests || {}, flags.requests);
+        }
+      }
+      this.cluster.reconcile();
+      return { exitCode: 0, output: `${normalizeKind(kind).toLowerCase()}.apps/${name} resource requirements updated` };
+    }
+
     throw new Error(`Unsupported kubectl set command "${setType}"`);
   }
 
@@ -953,8 +1062,12 @@ class TerminalEngine {
   }
 
   kubectlAutoscale(subArgs, flags) {
-    const kind = normalizeKind(subArgs[0]);
-    const name = subArgs[1];
+    let rawKind = subArgs[0];
+    let name = subArgs[1];
+    if (rawKind && rawKind.includes('/')) {
+      [rawKind, name] = rawKind.split('/');
+    }
+    const kind = normalizeKind(rawKind);
     let min = 2;
     let max = 10;
     let cpu = 75;
@@ -1027,11 +1140,21 @@ class TerminalEngine {
     if (asIdx > -1 && args[asIdx + 1]) asUser = args[asIdx + 1];
 
     if (this.cluster && typeof this.cluster.evaluateRBAC === 'function') {
+      let serviceAccount = null;
+      let rbacNamespace = flags.namespace || 'default';
+      if (asUser && asUser.startsWith('system:serviceaccount:')) {
+        const saParts = asUser.split(':');
+        if (saParts.length >= 4) {
+          rbacNamespace = saParts[2] || rbacNamespace;
+          serviceAccount = saParts[3];
+        }
+      }
       const allowed = this.cluster.evaluateRBAC({
         user: asUser,
+        serviceAccount,
         verb,
         resource,
-        namespace: flags.namespace || 'default'
+        namespace: rbacNamespace
       });
       return {
         exitCode: 0,
@@ -1492,6 +1615,16 @@ class TerminalEngine {
           enabled: true,
           description: `Hardened ${unit} daemon`
         };
+        if (unit === 'kubelet' || unit === 'containerd') {
+          const nodes = this.cluster.getResources('Node');
+          for (const node of nodes) {
+            node.status = node.status || {};
+            if (node.status.phase === 'NotReady') {
+              node.status.phase = 'Ready';
+            }
+          }
+          this.cluster.reconcile();
+        }
         return { exitCode: 0, output: `● ${unit}.service - active (running) [restarted & enabled]` };
       }
       const st = this.cluster.state.systemdUnits[unit] || { active: 'active', enabled: true };
@@ -1819,6 +1952,112 @@ class TerminalEngine {
         'PostgresInstance/fintech-payment-db            True     True    Available',
         '└─ CompositePostgreSQLTable/fintech-table-01   True     True    Available'
       ].join('\n')
+    };
+  }
+
+  handleFlux(args) {
+    const sub = args[0] || 'get';
+    if (sub === 'reconcile') {
+      const kind = args[1] || 'kustomization';
+      const name = args[2] || 'flux-system';
+      this.cluster.reconcile();
+      return {
+        exitCode: 0,
+        output: [
+          `► annotating ${kind} ${name} in flux-system namespace`,
+          `✔ ${kind} annotated`,
+          `◎ waiting for ${kind} reconciliation`,
+          `✔ ${kind} reconciliation completed -> Applied revision: main@sha1:9a8b7c6d`
+        ].join('\n')
+      };
+    }
+    if (sub === 'check') {
+      return {
+        exitCode: 0,
+        output: [
+          '► checking prerequisites',
+          '✔ Kubernetes 1.32.0 >=1.28.0-0',
+          '► checking controllers',
+          '✔ helm-controller: deployment ready',
+          '✔ kustomize-controller: deployment ready',
+          '✔ notification-controller: deployment ready',
+          '✔ source-controller: deployment ready',
+          '✔ all checks passed'
+        ].join('\n')
+      };
+    }
+    return {
+      exitCode: 0,
+      output: [
+        'NAME          REVISION              SUSPENDED   READY   MESSAGE',
+        'flux-system   main@sha1:9a8b7c6d    False       True    Applied revision: main@sha1:9a8b7c6d'
+      ].join('\n')
+    };
+  }
+
+  handleServiceMeshCli(bin, args) {
+    if (bin === 'linkerd') {
+      const sub = args[0] || 'check';
+      if (sub === 'viz' || sub === 'stat') {
+        const deploys = this.cluster.getResources('Deployment', 'all');
+        const rows = deploys.map(
+          (d) =>
+            `${padRight(d.metadata.name, 22)}${padRight(d.metadata.namespace, 14)}1/1       100.00%   42rps    2ms      9ms`
+        );
+        return {
+          exitCode: 0,
+          output: ['NAME                  NAMESPACE     MESHED    SUCCESS   RPS      LATENCY_P50   LATENCY_P99', ...rows].join('\n')
+        };
+      }
+      return {
+        exitCode: 0,
+        output: [
+          'linkerd-core',
+          '------------',
+          '√ control plane Namespace exists',
+          '√ control plane proxies are ready',
+          '√ mTLS identity certificates are valid',
+          'Status check results are √'
+        ].join('\n')
+      };
+    }
+    // consul
+    return {
+      exitCode: 0,
+      output: [
+        'Node                  Address          Status  Type    Build   Protocol  DC   Partition',
+        'consul-server-0       10.244.0.14:8301 alive   server  1.19.2  2         dc1  default',
+        'kubelabs-worker-01    10.244.1.10:8301 alive   client  1.19.2  2         dc1  default'
+      ].join('\n')
+    };
+  }
+
+  handleOpa(bin, args) {
+    const sub = args[0] || 'eval';
+    const constraints = this.cluster.getResources('K8sRequiredLabels', 'all');
+    const templates = this.cluster.getResources('ConstraintTemplate', 'all');
+    if (bin === 'conftest' || sub === 'test' || sub === 'eval') {
+      return {
+        exitCode: 0,
+        output: `PASS - ${constraints.length + templates.length + 3} Rego policy assertions verified (0 violations, 0 warnings)`
+      };
+    }
+    return { exitCode: 0, output: 'OPA Gatekeeper / Conftest Rego Engine v0.68.0' };
+  }
+
+  handleChaos(bin, args) {
+    const action = args[0] || 'status';
+    if (action === 'inject' || action === 'pod-delete') {
+      const ns = args.includes('-n') ? args[args.indexOf('-n') + 1] : 'default';
+      this.cluster.reconcile();
+      return {
+        exitCode: 0,
+        output: `[ChaosEngine] Injected fault experiment in namespace "${ns}". Self-healing ReplicaSet controller reconciled target pods in 180ms.`
+      };
+    }
+    return {
+      exitCode: 0,
+      output: 'LitmusChaos / ChaosMesh Resilience Engine v3.9.0 - Steady-State Hypothesis: VERIFIED'
     };
   }
 }

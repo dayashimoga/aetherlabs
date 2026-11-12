@@ -173,7 +173,7 @@ Located at [`src/engine/validationEngine.js`](file:///h:/kubelabs/src/engine/val
 10. `security_hardened`: Validates dropped Linux capabilities and read-only filesystems.
 
 ### 3.6 Production Incident Simulator (`incidentEngine.js`)
-Located at [`src/engine/incidentEngine.js`](file:///h:/kubelabs/src/engine/incidentEngine.js), provides 12 high-impact SEV-1/SEV-2 production outages:
+Located at [`src/engine/incidentEngine.js`](file:///h:/kubelabs/src/engine/incidentEngine.js), provides 15 high-impact SEV-1/SEV-2 production outages:
 - `inc-01-selector-blackhole`: Service selector drift leaving endpoints at zero (503 Service Unavailable).
 - `inc-02-bad-image-rollout`: Defective canary tag causing `ImagePullBackOff`.
 - `inc-03-crashloop-missing-secret`: Application crashing on start due to missing secret environment keys.
@@ -186,6 +186,9 @@ Located at [`src/engine/incidentEngine.js`](file:///h:/kubelabs/src/engine/incid
 - `inc-10-kyverno-admission-block`: Misconfigured validating webhook rejecting all namespace creation.
 - `inc-11-coredns-loop-crash`: CoreDNS forwarding loop causing cluster-wide DNS failure.
 - `inc-12-pvc-storageclass-pending`: Stateful database PVC stuck pending due to missing StorageClass.
+- `inc-13-slow-app-cpu-throttling`: Slow application & P99 latency spike caused by severe CFS CPU throttling (`limits.cpu: 5m`) and missing HPA.
+- `inc-14-iam-irsa-access-denied`: AWS EKS S3 ingestion outage (`AccessDenied: WebIdentityErr`) caused by missing `eks.amazonaws.com/role-arn` annotation on ServiceAccount.
+- `inc-15-node-notready-kubelet-down`: Worker node `kubelabs-worker-01` `NotReady` and cordoned due to stopped `kubelet` daemon.
 
 ### 3.7 Visual Architecture Designer & IaC Compiler (`architectureEngine.js`)
 Located at [`src/engine/architectureEngine.js`](file:///h:/kubelabs/src/engine/architectureEngine.js):

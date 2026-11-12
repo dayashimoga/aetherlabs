@@ -103,7 +103,36 @@ const KIND_ALIASES = {
   pytorchjob: 'PyTorchJob',
   pytorchjobs: 'PyTorchJob',
   inferenceservice: 'InferenceService',
-  inferenceservices: 'InferenceService'
+  inferenceservices: 'InferenceService',
+  job: 'Job',
+  jobs: 'Job',
+  cj: 'CronJob',
+  cronjob: 'CronJob',
+  cronjobs: 'CronJob',
+  vpa: 'VerticalPodAutoscaler',
+  verticalpodautoscaler: 'VerticalPodAutoscaler',
+  verticalpodautoscalers: 'VerticalPodAutoscaler',
+  pdb: 'PodDisruptionBudget',
+  poddisruptionbudget: 'PodDisruptionBudget',
+  poddisruptionbudgets: 'PodDisruptionBudget',
+  limits: 'LimitRange',
+  limitrange: 'LimitRange',
+  limitranges: 'LimitRange',
+  pc: 'PriorityClass',
+  priorityclass: 'PriorityClass',
+  priorityclasses: 'PriorityClass',
+  gatewayclass: 'GatewayClass',
+  gatewayclasses: 'GatewayClass',
+  gw: 'Gateway',
+  gateway: 'Gateway',
+  gateways: 'Gateway',
+  httproute: 'HTTPRoute',
+  httproutes: 'HTTPRoute',
+  constrainttemplate: 'ConstraintTemplate',
+  constrainttemplates: 'ConstraintTemplate',
+  ciliumnetworkpolicy: 'CiliumNetworkPolicy',
+  ciliumnetworkpolicies: 'CiliumNetworkPolicy',
+  cnp: 'CiliumNetworkPolicy'
 };
 
 const CLUSTER_SCOPED_KINDS = new Set([
@@ -119,7 +148,10 @@ const CLUSTER_SCOPED_KINDS = new Set([
   'RuntimeClass',
   'ClusterPolicy',
   'ClusterSecretStore',
-  'CustomResourceDefinition'
+  'CustomResourceDefinition',
+  'PriorityClass',
+  'GatewayClass',
+  'ConstraintTemplate'
 ]);
 
 function normalizeKind(input) {
@@ -535,6 +567,10 @@ class VirtualCluster {
     }
   }
 
+  importSnapshot(snapshot) {
+    return this.loadSnapshot(snapshot);
+  }
+
   exportSnapshot() {
     return JSON.parse(JSON.stringify(this.state));
   }
@@ -830,6 +866,81 @@ class VirtualCluster {
       };
     }
 
+    // Check Severe CPU Throttling / Slow App trigger
+    const cpuLimit = String(limits.cpu || '');
+    if (cpuLimit === '5m' || cpuLimit === '10m') {
+      return {
+        phase: 'Running',
+        reason: 'CrashLoopBackOff',
+        ready: '0/1',
+        restarts: 6,
+        message: `Liveness probe failed: HTTP probe timed out due to severe CFS CPU quota throttling (limits.cpu=${cpuLimit})`
+      };
+    }
+
+    // Check IAM / IRSA ServiceAccount annotation requirement
+    const requireIrsa = envList.some((e) => e.name === 'REQUIRE_IRSA_ROLE' && String(e.value) === 'true');
+    if (requireIrsa) {
+      const saName = spec.serviceAccountName || 'default';
+      const sa = this.getResource('ServiceAccount', saName, ns);
+      const roleArn = sa && sa.metadata && sa.metadata.annotations && sa.metadata.annotations['eks.amazonaws.com/role-arn'];
+      if (!roleArn) {
+        return {
+          phase: 'Running',
+          reason: 'CrashLoopBackOff',
+          ready: '0/1',
+          restarts: 5,
+          message: `AccessDenied: WebIdentityErr: ServiceAccount "${saName}" missing annotation "eks.amazonaws.com/role-arn"`
+        };
+      }
+    }
+
+    // Check NodeSelector & NodeAffinity scheduling constraints
+    const readyNodes = this.state.resources.filter(
+      (r) => r.kind === 'Node' && (!r.spec || !r.spec.unschedulable) && (!r.status || r.status.phase !== 'NotReady')
+    );
+    if (readyNodes.length === 0) {
+      return {
+        phase: 'Pending',
+        reason: 'Unschedulable',
+        ready: '0/1',
+        restarts: 0,
+        message: '0/3 nodes are available: all nodes are NotReady or cordoned.'
+      };
+    }
+
+    if (spec.nodeSelector && typeof spec.nodeSelector === 'object') {
+      const selectorEntries = Object.entries(spec.nodeSelector);
+      const matchingNode = readyNodes.find((n) => {
+        const nLabels = (n.metadata && n.metadata.labels) || {};
+        return selectorEntries.every(([k, v]) => String(nLabels[k]) === String(v));
+      });
+      if (!matchingNode) {
+        return {
+          phase: 'Pending',
+          reason: 'Unschedulable',
+          ready: '0/1',
+          restarts: 0,
+          message: `0/${readyNodes.length} nodes are available: node(s) didn't match Pod's nodeSelector ${JSON.stringify(spec.nodeSelector)}.`
+        };
+      }
+    }
+
+    // Check if explicitly assigned node is NotReady
+    if (spec.nodeName) {
+      const assignedNode = this.getResource('Node', spec.nodeName);
+      if (assignedNode && assignedNode.status && assignedNode.status.phase === 'NotReady') {
+        return {
+          phase: 'Pending',
+          reason: 'NodeNotReady',
+          ready: '0/1',
+          restarts: 1,
+          nodeName: spec.nodeName,
+          message: `Node "${spec.nodeName}" is NotReady (kubelet stopped posting node status)`
+        };
+      }
+    }
+
     // Check CoreDNS upstream loop
     if (pod.metadata && pod.metadata.name && pod.metadata.name.includes('coredns')) {
       const cm = this.getResource('ConfigMap', 'coredns', 'kube-system');
@@ -1006,7 +1117,45 @@ class VirtualCluster {
       }
     }
 
-    // 3. Reconcile Deployments, StatefulSets, Rollouts -> Pods
+    // 2d. Reconcile CronJobs -> Jobs, and Jobs -> Pods
+    const cronJobs = this.state.resources.filter((r) => r.kind === 'CronJob');
+    for (const cj of cronJobs) {
+      const ns = (cj.metadata && cj.metadata.namespace) || 'default';
+      const jobName = `${cj.metadata.name}-run-1`;
+      if (!this.getResource('Job', jobName, ns)) {
+        const jobSpec = (cj.spec && cj.spec.jobTemplate && cj.spec.jobTemplate.spec) || {};
+        this.state.resources.push({
+          apiVersion: 'batch/v1',
+          kind: 'Job',
+          metadata: { name: jobName, namespace: ns, ownerCronJob: cj.metadata.name },
+          spec: jobSpec,
+          status: { succeeded: 1, conditions: [{ type: 'Complete', status: 'True' }] }
+        });
+      }
+      cj.status = { active: 0, lastScheduleTime: new Date().toISOString() };
+    }
+
+    const jobs = this.state.resources.filter((r) => r.kind === 'Job');
+    for (const job of jobs) {
+      const ns = (job.metadata && job.metadata.namespace) || 'default';
+      const completions = (job.spec && job.spec.completions) || 1;
+      const podName = `${job.metadata.name}-pod-1`;
+      if (!this.getResource('Pod', podName, ns)) {
+        const template = (job.spec && job.spec.template) || {
+          spec: { containers: [{ name: job.metadata.name, image: 'busybox:1.36' }] }
+        };
+        this.state.resources.push({
+          apiVersion: 'v1',
+          kind: 'Pod',
+          metadata: { name: podName, namespace: ns, labels: { 'job-name': job.metadata.name }, ownerJob: job.metadata.name },
+          spec: JSON.parse(JSON.stringify(template.spec || { containers: [{ name: job.metadata.name, image: 'busybox:1.36' }] })),
+          status: { phase: 'Running', reason: 'Running', podIP: this.nextPodIP() }
+        });
+      }
+      job.status = { succeeded: completions, ready: completions, conditions: [{ type: 'Complete', status: 'True' }] };
+    }
+
+    // 3. Reconcile Deployments, StatefulSets, Rollouts -> ReplicaSets & Pods
     const workloads = this.state.resources.filter(
       (r) => r.kind === 'Deployment' || r.kind === 'StatefulSet' || r.kind === 'Rollout'
     );
@@ -1024,6 +1173,24 @@ class VirtualCluster {
         ...((wl.spec && wl.spec.selector && wl.spec.selector.matchLabels) || {}),
         ...((template.metadata && template.metadata.labels) || { app: name })
       };
+
+      if (wl.kind === 'Deployment') {
+        const rsName = `${name}-7d9f8b`;
+        let rs = this.getResource('ReplicaSet', rsName, ns);
+        if (!rs) {
+          rs = {
+            apiVersion: 'apps/v1',
+            kind: 'ReplicaSet',
+            metadata: { name: rsName, namespace: ns, labels: { ...podLabels }, ownerDeployment: name },
+            spec: { replicas: desiredReplicas, selector: { matchLabels: { ...podLabels } }, template },
+            status: { replicas: desiredReplicas, readyReplicas: desiredReplicas, availableReplicas: desiredReplicas }
+          };
+          this.state.resources.push(rs);
+        } else {
+          rs.spec.replicas = desiredReplicas;
+          rs.status = { replicas: desiredReplicas, readyReplicas: desiredReplicas, availableReplicas: desiredReplicas };
+        }
+      }
 
       // Remove existing owned pods for this workload and recreate/update to match desiredReplicas & template
       const existingPods = this.state.resources.filter(
@@ -1221,7 +1388,8 @@ class VirtualCluster {
   uncordonNode(nodeName) {
     const node = this.getResource('Node', nodeName);
     if (!node) throw new Error(`node "${nodeName}" not found`);
-    if (node.spec) delete node.spec.unschedulable;
+    node.spec = node.spec || {};
+    node.spec.unschedulable = false;
     this.reconcile();
     return node;
   }
