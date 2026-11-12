@@ -10,6 +10,7 @@
   <link rel="stylesheet" href="/css/styles.css" />
 </head>
 <body>
+  <div id="aria-live-announcer" class="sr-only" aria-live="polite" aria-atomic="true"></div>
   <header class="top-header" role="banner">
     <div class="brand-wrap">
       <div class="brand-logo" aria-hidden="true">KL</div>
@@ -78,9 +79,16 @@
         </div>
       </div>
 
-      <div class="workbench-layout">
+      <!-- Mobile Workbench Pane Switcher (Small Screens <= 900px) -->
+      <div class="mobile-pane-switcher" role="tablist" aria-label="Mobile Workbench Pane Tabs">
+        <button class="mobile-pane-tab active" data-pane="wb-pane-left" role="tab" aria-selected="true" type="button">1. Guide &amp; Steps</button>
+        <button class="mobile-pane-tab" data-pane="wb-pane-center" role="tab" aria-selected="false" type="button">2. Terminal &amp; YAML</button>
+        <button class="mobile-pane-tab" data-pane="wb-pane-right" role="tab" aria-selected="false" type="button">3. Topology &amp; Checks</button>
+      </div>
+
+      <div class="workbench-layout" id="workbench-layout">
         <!-- Left Column: Scenario, Steps & Troubleshooting -->
-        <div class="workbench-pane">
+        <div class="workbench-pane mobile-active" id="wb-pane-left" role="region" aria-label="Lab Instructions and Steps">
           <div>
             <h2 style="font-size:0.95rem; color:var(--accent-blue);">Production Scenario &amp; Context</h2>
             <p id="wb-scenario" style="font-size:0.84rem; color:var(--text-secondary); margin-top:0.3rem;"></p>
@@ -98,14 +106,37 @@
           </div>
         </div>
 
+        <!-- Resizer Divider 1 -->
+        <div class="workbench-resizer" id="resizer-left" role="separator" aria-orientation="vertical" tabindex="0" title="Drag or use Left/Right arrow keys to resize left pane" aria-label="Resize instructions panel"></div>
+
         <!-- Center Column: Built-in Terminal & YAML/HCL Manifest Editor -->
-        <div class="workbench-pane">
+        <div class="workbench-pane" id="wb-pane-center" role="region" aria-label="Terminal and Manifest Editor">
           <div class="terminal-box">
             <div class="terminal-topbar">
               <span>Sandboxed Cloud-Native Shell (kubectl | helm | docker | argocd | istioctl | tofu | aws | az | gcloud | trivy | aiops)</span>
               <button class="btn" id="btn-clear-terminal" type="button" style="padding:0.15rem 0.5rem; font-size:0.72rem;">Clear</button>
             </div>
             <div id="terminal-output" class="terminal-output" role="log" aria-live="polite"></div>
+
+            <!-- Mobile & Touch Virtual Quick-Key Bar -->
+            <div id="mobile-quick-keybar" class="mobile-quick-keybar" role="toolbar" aria-label="Mobile Terminal Quick Keys">
+              <button type="button" class="quick-key-btn" data-insert="kubectl " aria-label="Insert kubectl">kubectl</button>
+              <button type="button" class="quick-key-btn" data-insert="get " aria-label="Insert get">get</button>
+              <button type="button" class="quick-key-btn" data-insert="describe " aria-label="Insert describe">describe</button>
+              <button type="button" class="quick-key-btn" data-insert="apply -f " aria-label="Insert apply -f">apply -f</button>
+              <button type="button" class="quick-key-btn" data-insert="-n " aria-label="Insert namespace flag">-n</button>
+              <button type="button" class="quick-key-btn" data-insert="pods " aria-label="Insert pods">pods</button>
+              <button type="button" class="quick-key-btn" data-insert="svc " aria-label="Insert svc">svc</button>
+              <button type="button" class="quick-key-btn" data-insert="deploy " aria-label="Insert deploy">deploy</button>
+              <button type="button" class="quick-key-btn" data-insert="| " aria-label="Insert pipe">|</button>
+              <button type="button" class="quick-key-btn" data-insert="grep " aria-label="Insert grep">grep</button>
+              <button type="button" class="quick-key-btn" data-action="tab" aria-label="Trigger Tab completion">Tab</button>
+              <button type="button" class="quick-key-btn" data-action="ctrl-c" aria-label="Cancel command (Ctrl+C)">Ctrl+C</button>
+              <button type="button" class="quick-key-btn" data-action="history-up" aria-label="Previous history command (Up Arrow)">&uarr;</button>
+              <button type="button" class="quick-key-btn" data-action="history-down" aria-label="Next history command (Down Arrow)">&darr;</button>
+              <button type="button" class="quick-key-btn" data-action="clear" aria-label="Clear input line">Clear</button>
+            </div>
+
             <form id="terminal-form" class="terminal-input-row">
               <span class="terminal-prompt">learner@kubelabs:~$</span>
               <input id="terminal-input" class="terminal-input" type="text" autocomplete="off" spellcheck="false"
@@ -131,8 +162,11 @@
           </div>
         </div>
 
+        <!-- Resizer Divider 2 -->
+        <div class="workbench-resizer" id="resizer-right" role="separator" aria-orientation="vertical" tabindex="0" title="Drag or use Left/Right arrow keys to resize right pane" aria-label="Resize visualizer and validation panel"></div>
+
         <!-- Right Column: Live Cluster Visualizer, Validation Engine & AI Mentor -->
-        <div class="workbench-pane">
+        <div class="workbench-pane" id="wb-pane-right" role="region" aria-label="Cluster Topology and Validation Objectives">
           <div>
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.4rem;">
               <h3 style="font-size:0.9rem; color:var(--accent-blue);">Live Virtual Cluster Topology</h3>
