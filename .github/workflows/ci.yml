@@ -47,3 +47,15 @@ jobs:
       - name: Run Unit, Integration, Security & E2E Lab Solver Tests
         run: npm test
 
+      - name: Package Universal App Distribution
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          node scripts/package-release.js
+
+      - name: Upload KubeLabs Application Build Artifacts
+        if: matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: kubelabs-universal-app
+          path: dist/*
+

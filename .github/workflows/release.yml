@@ -2,8 +2,11 @@ name: Cross-Platform Release Pipeline
 
 on:
   push:
+    branches:
+      - main
     tags:
       - "v*.*.*"
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -29,10 +32,7 @@ jobs:
 
       - name: Package Cross-Platform Distribution Archive (Web, Desktop Tauri, Mobile Capacitor, K8s/Helm)
         run: |
-          mkdir -p dist
-          tar -czf dist/kubelabs-${{ github.ref_name }}-universal.tar.gz \
-            package.json README.md Dockerfile docker-compose.yml docs agents schemas plugins src public scripts deploy
-          sha256sum dist/kubelabs-${{ github.ref_name }}-universal.tar.gz > dist/SHA256SUMS.txt
+          node scripts/package-release.js
 
       - name: Deployment Validation & Automated Rollback Verification Gate
         run: |
