@@ -158,6 +158,10 @@
   }
 
   function appendTerminalLine(text, isCommand = false) {
+    if (state.terminalView) {
+      state.terminalView.writeLine(text, isCommand ? 'command' : 'output');
+      return;
+    }
     const out = document.getElementById('terminal-output');
     if (!out) return;
     const div = document.createElement('div');
@@ -568,8 +572,13 @@
     if (!cmd || !cmd.trim()) return;
     state.commandHistory.push(cmd);
     state.historyIndex = -1;
+    if (state.terminalView) {
+      await state.terminalView.executeRaw(cmd);
+      return;
+    }
     appendTerminalLine(cmd, true);
-    const manifestText = document.getElementById('wb-manifest-editor').value;
+    const manifestEditor = document.getElementById('wb-manifest-editor');
+    const manifestText = manifestEditor ? manifestEditor.value : '';
     const res = await apiCall('/api/terminal/exec', {
       method: 'POST',
       body: { command: cmd, manifestText }
@@ -1055,7 +1064,7 @@
   function setupMobileQuickKeybar() {
     const keybar = document.getElementById('mobile-quick-keybar');
     const termInput = document.getElementById('terminal-input');
-    if (!keybar || !termInput) return;
+    if (!keybar) return;
 
     keybar.querySelectorAll('.quick-key-btn').forEach((btn) => {
       btn.addEventListener('click', (e) => {
@@ -1063,6 +1072,25 @@
         const toInsert = btn.dataset.insert;
         const action = btn.dataset.action;
 
+        if (state.terminalView) {
+          if (toInsert) {
+            state.terminalView.insertAtCursor(toInsert);
+          } else if (action === 'tab') {
+            state.terminalView.handleTabCompletion();
+          } else if (action === 'ctrl-c') {
+            state.terminalView.interrupt();
+          } else if (action === 'history-up') {
+            state.terminalView.historyUp();
+          } else if (action === 'history-down') {
+            state.terminalView.historyDown();
+          } else if (action === 'clear') {
+            state.terminalView.setCommand('');
+          }
+          state.terminalView.focus();
+          return;
+        }
+
+        if (!termInput) return;
         if (toInsert) {
           const start = termInput.selectionStart || termInput.value.length;
           const end = termInput.selectionEnd || termInput.value.length;
@@ -1098,8 +1126,8 @@
               state.historyIndex = -1;
               termInput.value = '';
             }
-            termInput.focus();
           }
+          termInput.focus();
         } else if (action === 'clear') {
           termInput.value = '';
           termInput.focus();
@@ -1174,6 +1202,37 @@
 
     initTheme();
 
+    // Initialize Authentic Inline Terminal Emulator
+    const termOutput = document.getElementById('terminal-output');
+    if (termOutput && typeof TerminalView !== 'undefined') {
+      state.terminalView = new TerminalView(termOutput, {
+        prompt: 'learner@kubelabs:~$ ',
+        continuationPrompt: '> ',
+        onExecute: async (cmd) => {
+          const manifestEditor = document.getElementById('wb-manifest-editor');
+          const manifestText = manifestEditor ? manifestEditor.value : '';
+          return await apiCall('/api/terminal/exec', {
+            method: 'POST',
+            body: { command: cmd, manifestText }
+          });
+        },
+        onClusterStateUpdate: (clusterState) => {
+          renderClusterTopology(clusterState);
+        },
+        onTabComplete: (line, pos) => {
+          const inputProxy = { value: line };
+          handleTabCompletion(inputProxy);
+          return inputProxy.value;
+        }
+      });
+
+      // Hide legacy detached input form in favor of authentic inline prompt
+      const legacyForm = document.getElementById('terminal-form');
+      if (legacyForm) {
+        legacyForm.style.display = 'none';
+      }
+    }
+
     // Domain search input
     const searchInput = document.getElementById('domain-search-input');
     if (searchInput) {
@@ -1233,7 +1292,12 @@
     });
 
     document.getElementById('btn-clear-terminal').addEventListener('click', () => {
-      document.getElementById('terminal-output').innerHTML = '';
+      if (state.terminalView) {
+        state.terminalView.clear();
+      } else {
+        const out = document.getElementById('terminal-output');
+        if (out) out.innerHTML = '';
+      }
     });
 
     // Lab buttons

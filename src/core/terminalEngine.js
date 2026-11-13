@@ -577,32 +577,33 @@ function padRight(str, width) {
 
 
 class TerminalEngine {
-    constructor(clusterOrOptions = null, maybeVfs = null) {
+  constructor(clusterOrOptions = null, maybeVfs = null) {
     let cluster = null;
     let vfs = null;
     let graph = null;
     let env = {};
     let history = [];
 
-    if (clusterOrOptions && typeof clusterOrOptions === 'object') {
-      if (clusterOrOptions.cluster || clusterOrOptions.graph || (clusterOrOptions.vfs && !maybeVfs)) {
-        cluster = clusterOrOptions.cluster || null;
-        vfs = clusterOrOptions.vfs || null;
-        graph = clusterOrOptions.graph || null;
-        env = clusterOrOptions.env || {};
-        history = clusterOrOptions.history || [];
-      } else {
-        cluster = clusterOrOptions;
-        vfs = maybeVfs;
-      }
+    const isVirtualCluster = clusterOrOptions && (typeof clusterOrOptions.applyManifest === 'function' || clusterOrOptions.state);
+
+    if (isVirtualCluster) {
+      cluster = clusterOrOptions;
+      vfs = maybeVfs || clusterOrOptions.vfs || null;
+      graph = clusterOrOptions.graph || null;
+    } else if (clusterOrOptions && typeof clusterOrOptions === 'object') {
+      cluster = clusterOrOptions.cluster || null;
+      vfs = clusterOrOptions.vfs || maybeVfs || null;
+      graph = clusterOrOptions.graph || null;
+      env = clusterOrOptions.env || {};
+      history = clusterOrOptions.history || [];
     } else {
       cluster = clusterOrOptions;
       vfs = maybeVfs;
     }
 
     this.cluster = cluster;
-    this.vfs = vfs || (this.cluster ? this.cluster.vfs : (VirtualFileSystem ? new VirtualFileSystem() : null));
-    this.graph = graph || (this.cluster ? this.cluster.graph : (ResourceGraph ? new ResourceGraph() : null));
+    this.vfs = vfs || (this.cluster && this.cluster.vfs ? this.cluster.vfs : (VirtualFileSystem ? new VirtualFileSystem() : null));
+    this.graph = graph || (this.cluster && this.cluster.graph ? this.cluster.graph : (ResourceGraph ? new ResourceGraph() : null));
 
     // Bootstrap kube-apiserver control-plane pod if graph has no pods
     if (this.graph && typeof this.graph.get === 'function' && !this.graph.get('Pod', 'kube-system', 'kube-apiserver-control-plane')) {
@@ -661,10 +662,162 @@ class TerminalEngine {
     this.commandHistory = Array.isArray(h) ? h : [];
   }
 
+  _executeHeredoc(commandStr, options = {}) {
+    const lines = commandStr.split(/\r?\n/);
+    const firstLine = lines[0].trim();
+
+    if (!firstLine.includes('<<')) return null;
+
+    // Pattern matches:
+    // cat <<EOF > manifest.yaml
+    // cat <<'EOF'>manifest.yaml
+    // cat << "EOF" >> /tmp/manifest.yaml
+    // cat <<EOF | kubectl apply -f -
+    // kubectl apply -f - <<EOF
+    // cat <<EOF
+    const match = firstLine.match(/<<\s*['"]?([A-Za-z0-9_-]+)['"]?(.*)$/);
+    if (!match) return null;
+
+    const delimiter = match[1];
+    const remainder = (match[2] || '').trim();
+
+    let redirOp = null;
+    let targetFile = null;
+    let pipeCommand = null;
+
+    if (remainder.startsWith('>>') || remainder.startsWith('>')) {
+      const rm = remainder.match(/^(>>|>)\s*([^\s|]+)/);
+      if (rm) {
+        redirOp = rm[1];
+        targetFile = rm[2].trim();
+      }
+    } else if (remainder.startsWith('|')) {
+      pipeCommand = remainder.slice(1).trim();
+    }
+
+    if (!targetFile && !pipeCommand) {
+      const rm2 = firstLine.match(/(>>|>)\s*([^\s|]+)$/);
+      if (rm2) {
+        redirOp = rm2[1];
+        targetFile = rm2[2].trim();
+      } else if (firstLine.includes('|')) {
+        pipeCommand = firstLine.split('|').slice(1).join('|').trim();
+      }
+    }
+
+    // Collect body lines until delimiter line
+    const bodyLines = [];
+    for (let i = 1; i < lines.length; i++) {
+      const l = lines[i];
+      if (l.trim() === delimiter) {
+        break;
+      }
+      bodyLines.push(l);
+    }
+    const bodyContent = bodyLines.join('\n');
+
+    // Case A: Pipe to kubectl apply or first line includes kubectl apply
+    if ((pipeCommand && pipeCommand.includes('kubectl apply')) || firstLine.includes('kubectl apply')) {
+      if (this.cluster && typeof this.cluster.applyManifest === 'function') {
+        const applied = this.cluster.applyManifest(bodyContent);
+        const out = (applied || [])
+          .map((a) => {
+            const kind = (a.resource ? a.resource.kind : a.kind || 'resource').toLowerCase();
+            const name = a.resource ? a.resource.metadata.name : (a.name || 'item');
+            const action = a.action || 'configured';
+            return `${kind}/${name} ${action}`;
+          })
+          .join('\n');
+        return {
+          exitCode: 0,
+          code: 0,
+          output: out || 'configured',
+          stdout: out || 'configured',
+          stderr: '',
+          command: commandStr
+        };
+      }
+      if (this.graph && typeof this.graph.apply === 'function') {
+        let docs = [];
+        try {
+          const { parseYamlManifests } = require('./virtualCluster');
+          docs = parseYamlManifests(bodyContent);
+        } catch {
+          docs = [];
+        }
+        const outputs = [];
+        for (const doc of docs) {
+          if (doc && doc.kind && doc.metadata && doc.metadata.name) {
+            this.graph.apply(doc);
+            outputs.push(`${doc.kind.toLowerCase()}/${doc.metadata.name} configured`);
+          }
+        }
+        const out = outputs.join('\n') || 'configured';
+        return {
+          exitCode: 0,
+          code: 0,
+          output: out,
+          stdout: out,
+          stderr: '',
+          command: commandStr
+        };
+      }
+    }
+
+    // Case B: Redirection to VFS file (> or >>)
+    if (targetFile) {
+      if (this.vfs) {
+        try {
+          if (redirOp === '>>') {
+            this.vfs.appendFile(targetFile, bodyContent + '\n');
+          } else {
+            this.vfs.writeFile(targetFile, bodyContent + '\n');
+          }
+          return {
+            exitCode: 0,
+            code: 0,
+            output: '',
+            stdout: '',
+            stderr: '',
+            command: commandStr
+          };
+        } catch (err) {
+          return {
+            exitCode: 1,
+            code: 1,
+            output: `sh: ${err.message}\n`,
+            stdout: '',
+            stderr: `sh: ${err.message}\n`,
+            command: commandStr
+          };
+        }
+      }
+    }
+
+    // Case C: Standard heredoc output to stdout
+    return {
+      exitCode: 0,
+      code: 0,
+      output: bodyContent,
+      stdout: bodyContent,
+      stderr: '',
+      command: commandStr
+    };
+  }
+
   execute(rawCommand, options = {}) {
     const trimmed = String(rawCommand || '').trim();
     if (!trimmed) {
       return { exitCode: 0, code: 0, output: '', stdout: '', stderr: '', command: '' };
+    }
+
+    // Multi-line YAML Heredoc execution (cat <<EOF > file.yaml, cat <<EOF | kubectl apply -f -, etc.)
+    if (trimmed.includes('<<')) {
+      const heredocRes = this._executeHeredoc(trimmed, options);
+      if (heredocRes) {
+        this.commandHistory.push({ command: trimmed, timestamp: new Date().toISOString() });
+        return heredocRes;
+      }
     }
 
     // Graph-only pipeline execution

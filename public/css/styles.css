@@ -419,7 +419,7 @@ body {
   border-radius: 8px;
   display: flex;
   flex-direction: column;
-  height: 350px;
+  height: 380px;
 }
 
 .terminal-topbar {
@@ -442,6 +442,87 @@ body {
   font-size: 0.8rem;
   white-space: pre-wrap;
   color: #e2e8f0;
+}
+
+/* Authentic Inline Terminal Emulator */
+.inline-terminal-wrapper {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 280px;
+  background: var(--bg-terminal);
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  overflow-y: auto;
+  padding: 0.45rem 0.6rem;
+  outline: none;
+  cursor: text;
+}
+
+.inline-terminal-scrollback {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.inline-terminal-active-line {
+  display: flex;
+  align-items: baseline;
+  position: relative;
+  min-height: 1.4rem;
+  margin-top: 0.25rem;
+  font-family: var(--font-mono);
+}
+
+.inline-prompt {
+  color: var(--accent-green, #4ade80);
+  font-weight: 700;
+  white-space: pre;
+  margin-right: 0.35rem;
+  user-select: none;
+}
+
+.inline-command-display {
+  display: inline-flex;
+  align-items: baseline;
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  word-break: break-all;
+  flex: 1;
+}
+
+.term-text-before, .term-text-after {
+  white-space: pre-wrap;
+}
+
+.term-cursor {
+  display: inline-block;
+  background: #38bdf8;
+  color: #050811;
+  min-width: 8px;
+  line-height: 1.1;
+  font-weight: 700;
+  border-radius: 1px;
+}
+
+@keyframes termBlink {
+  0%, 49% { opacity: 1; }
+  50%, 100% { opacity: 0; }
+}
+
+.term-cursor.blink {
+  animation: termBlink 1s infinite step-start;
+}
+
+.terminal-capture-input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+  width: 1px;
+  height: 1px;
+  left: -9999px;
+  top: 0;
 }
 
 .terminal-input-row {

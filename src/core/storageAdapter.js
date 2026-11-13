@@ -5,3 +5,4 @@
  * Single Source of Truth forwarding to src/db/storageAdapter.js
  */
 module.exports = require('../db/storageAdapter');
+
