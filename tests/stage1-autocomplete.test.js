@@ -182,3 +182,4 @@ test('Subphase 1.2.3: Live lab cluster state dynamic autocompletion (CrashLoopBa
   assert.deepEqual(r2.completions, ['order-processor']);
   assert.equal(r2.line, 'kubectl describe deploy order-processor ');
 });
+

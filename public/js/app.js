@@ -157,6 +157,24 @@
     }
   }
 
+  function openDiagnosticsModal() {
+    const modal = document.getElementById('diagnostics-modal');
+    if (!modal) return;
+    modal.style.display = 'flex';
+    runLiveAgentAudit();
+    const closeBtn = document.getElementById('btn-close-diagnostics');
+    if (closeBtn) closeBtn.focus();
+  }
+
+  function closeDiagnosticsModal() {
+    const modal = document.getElementById('diagnostics-modal');
+    if (!modal) return;
+    modal.style.display = 'none';
+    if (window.location.hash === '#admin-diagnostics') {
+      history.replaceState(null, document.title, window.location.pathname + window.location.search);
+    }
+  }
+
   function appendTerminalLine(text, isCommand = false) {
     if (state.terminalView) {
       state.terminalView.writeLine(text, isCommand ? 'command' : 'output');
@@ -1205,16 +1223,7 @@
 
         if (state.terminalView) {
           if (toInsert) {
-            if (typeof ContextAwareQuickKeyEngine !== 'undefined') {
-              const res = ContextAwareQuickKeyEngine.insertToken(
-                state.terminalView.lineBuffer,
-                state.terminalView.cursorPos,
-                toInsert
-              );
-              state.terminalView.setLineAndCursor(res.line, res.cursorPos);
-            } else {
-              state.terminalView.insertAtCursor(toInsert);
-            }
+            state.terminalView.insertAtCursor(toInsert);
           } else if (action === 'tab') {
             state.terminalView.handleTabCompletion();
           } else if (action === 'ctrl-c') {
@@ -1232,23 +1241,12 @@
 
         if (!termInput) return;
         if (toInsert) {
-          if (typeof ContextAwareQuickKeyEngine !== 'undefined') {
-            const start = termInput.selectionStart || termInput.value.length;
-            const res = ContextAwareQuickKeyEngine.insertToken(
-              termInput.value,
-              start,
-              toInsert
-            );
-            termInput.value = res.line;
-            termInput.setSelectionRange(res.cursorPos, res.cursorPos);
-          } else {
-            const start = termInput.selectionStart || termInput.value.length;
-            const end = termInput.selectionEnd || termInput.value.length;
-            const val = termInput.value;
-            termInput.value = val.slice(0, start) + toInsert + val.slice(end);
-            const nextPos = start + toInsert.length;
-            termInput.setSelectionRange(nextPos, nextPos);
-          }
+          const start = termInput.selectionStart || termInput.value.length;
+          const end = termInput.selectionEnd || termInput.value.length;
+          const val = termInput.value;
+          termInput.value = val.slice(0, start) + toInsert + val.slice(end);
+          const nextPos = start + toInsert.length;
+          termInput.setSelectionRange(nextPos, nextPos);
           termInput.focus();
         } else if (action === 'tab') {
           handleTabCompletion(termInput);
@@ -1330,9 +1328,6 @@
     document.querySelectorAll('.nav-tab').forEach((btn) => {
       btn.addEventListener('click', () => {
         switchView(btn.dataset.view);
-        if (btn.dataset.view === 'view-governance') {
-          runLiveAgentAudit();
-        }
       });
     });
 
@@ -1544,7 +1539,62 @@
     });
 
     // 11-Agent Audit button
-    document.getElementById('btn-run-agent-audit').addEventListener('click', runLiveAgentAudit);
+    const auditBtn = document.getElementById('btn-run-agent-audit');
+    if (auditBtn) auditBtn.addEventListener('click', runLiveAgentAudit);
+
+    // Diagnostics Modal Triggers (Ctrl+Shift+D, Header badge, Footer link)
+    const openDiagBtn = document.getElementById('btn-open-diagnostics');
+    if (openDiagBtn) {
+      openDiagBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        openDiagnosticsModal();
+      });
+    }
+
+    const footerDiagLink = document.getElementById('footer-diagnostics-link');
+    if (footerDiagLink) {
+      footerDiagLink.addEventListener('click', (e) => {
+        e.preventDefault();
+        openDiagnosticsModal();
+      });
+    }
+
+    const closeDiagBtn = document.getElementById('btn-close-diagnostics');
+    if (closeDiagBtn) {
+      closeDiagBtn.addEventListener('click', closeDiagnosticsModal);
+    }
+
+    const diagModal = document.getElementById('diagnostics-modal');
+    if (diagModal) {
+      diagModal.addEventListener('click', (e) => {
+        if (e.target === diagModal) {
+          closeDiagnosticsModal();
+        }
+      });
+    }
+
+    // Ctrl+Shift+D keyboard shortcut & Escape handler
+    document.addEventListener('keydown', (e) => {
+      if (e.ctrlKey && e.shiftKey && (e.key === 'D' || e.key === 'd')) {
+        e.preventDefault();
+        const modal = document.getElementById('diagnostics-modal');
+        if (modal && modal.style.display !== 'none') {
+          closeDiagnosticsModal();
+        } else {
+          openDiagnosticsModal();
+        }
+      }
+      if (e.key === 'Escape') {
+        const modal = document.getElementById('diagnostics-modal');
+        if (modal && modal.style.display !== 'none') {
+          closeDiagnosticsModal();
+        }
+      }
+    });
+
+    if (window.location.hash === '#admin-diagnostics' || window.location.pathname === '/admin/diagnostics') {
+      openDiagnosticsModal();
+    }
   }
 
   document.addEventListener('DOMContentLoaded', init);

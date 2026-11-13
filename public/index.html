@@ -21,18 +21,18 @@
     </div>
 
     <nav class="main-nav" role="navigation" aria-label="Primary Workspace Navigation">
-      <button class="nav-tab active" data-view="view-paths" type="button">1. Curriculum &amp; Paths (26 Domains)</button>
+      <button class="nav-tab active" data-view="view-paths" type="button">1. Learning Paths &amp; Catalog</button>
       <button class="nav-tab" data-view="view-workbench" type="button">2. Interactive Lab Workbench</button>
-      <button class="nav-tab" data-view="view-incidents" type="button">3. Incident Simulator (12 Scenarios)</button>
-      <button class="nav-tab" data-view="view-architect" type="button">4. UI Architecture Designer</button>
-      <button class="nav-tab" data-view="view-certs" type="button">5. Exams &amp; Certifications</button>
-      <button class="nav-tab" data-view="view-governance" type="button">6. 11-Agent Quality Gate</button>
+      <button class="nav-tab" data-view="view-incidents" type="button">3. Incident Response War Room</button>
+      <button class="nav-tab" data-view="view-architect" type="button">4. Interactive Architecture Studio</button>
+      <button class="nav-tab" data-view="view-certs" type="button">5. Certifications &amp; Skill Profile</button>
     </nav>
 
     <div class="telemetry-bar" aria-label="Learner Telemetry">
       <span class="pill xp" id="header-xp">0 XP</span>
       <span class="pill" id="header-labs-completed">0/52 Labs</span>
       <button class="pill" id="theme-toggle" type="button" title="Toggle Theme (Dark / Light / High Contrast)" style="cursor:pointer; background:var(--bg-card); border:1px solid var(--border-subtle); color:var(--text-primary); font-size:0.75rem;">Theme: Dark</button>
+      <button class="pill" id="btn-open-diagnostics" type="button" title="Open 11-Agent Self-Audit &amp; Diagnostics (Ctrl+Shift+D)" style="cursor:pointer; background:var(--bg-card); border:1px solid var(--border-subtle); color:var(--text-secondary); font-size:0.75rem;">Diagnostics (Ctrl+Shift+D)</button>
       <span class="pill online" id="header-runtime-mode">Offline-Ready Engine</span>
     </div>
   </header>
@@ -314,22 +314,41 @@
       </div>
     </section>
 
-    <!-- VIEW 6: 11-AGENT QUALITY GATE & LIVE SELF-AUDIT CONSOLE -->
-    <section id="view-governance" class="view-panel" aria-labelledby="gov-heading">
-      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.75rem; margin-bottom:1rem;">
+  </main>
+
+  <!-- INTERNAL DIAGNOSTICS MODAL (11-AGENT QUALITY GATE) - Accessible via Ctrl+Shift+D or Footer -->
+  <div id="diagnostics-modal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="gov-heading" style="display:none;">
+    <div class="modal-dialog diagnostics-modal-dialog">
+      <div class="modal-header">
         <div>
-          <h1 id="gov-heading" style="font-size:1.4rem;">11-Agent Autonomous Engineering Framework &amp; Production Readiness Audit</h1>
-          <p style="color:var(--text-secondary); font-size:0.88rem;">
+          <div style="display:flex; align-items:center; gap:0.5rem;">
+            <span class="badge" style="background:rgba(56,189,248,0.15); color:var(--accent-blue); border:1px solid rgba(56,189,248,0.3);">Internal Diagnostics</span>
+            <h2 id="gov-heading" style="font-size:1.2rem; margin:0;">11-Agent Autonomous Engineering Framework &amp; Production Readiness Audit</h2>
+          </div>
+          <p style="color:var(--text-secondary); font-size:0.82rem; margin:0.35rem 0 0 0;">
             Real-time self-audit verifying Product, Architecture, Backend, Frontend, Kubernetes, Curriculum, DevOps, Security, QA Solver, Documentation, and Platform resource budgets.
           </p>
         </div>
-        <button class="btn btn-primary" id="btn-run-agent-audit" type="button">Run Full 11-Agent Self-Audit Now</button>
+        <div style="display:flex; gap:0.6rem; align-items:center;">
+          <button class="btn btn-primary" id="btn-run-agent-audit" type="button">Run Full Self-Audit Now</button>
+          <button class="modal-close-btn" id="btn-close-diagnostics" type="button" aria-label="Close Diagnostics Modal">&times;</button>
+        </div>
       </div>
+      <div class="modal-body" style="padding:1.25rem; overflow-y:auto; max-height:calc(85vh - 100px);">
+        <div id="agent-audit-summary" class="card" style="margin-bottom:1rem;"></div>
+        <div id="agent-audit-grid" class="grid-3"></div>
+      </div>
+    </div>
+  </div>
 
-      <div id="agent-audit-summary" class="card" style="margin-bottom:1rem;"></div>
-      <div id="agent-audit-grid" class="grid-3"></div>
-    </section>
-  </main>
+  <footer class="app-footer" role="contentinfo">
+    <span>KubeLabs v3.0 &copy; 2026 &bull; Cloud-Native &amp; Kubernetes Learn-by-Doing Engine</span>
+    <div style="display:flex; gap:1rem; align-items:center;">
+      <a href="#admin-diagnostics" id="footer-diagnostics-link" style="color:var(--text-muted); font-size:0.78rem; text-decoration:none;">11-Agent Autonomous Quality Gate</a>
+      <span style="color:var(--border-subtle);">&bull;</span>
+      <span style="color:var(--text-muted); font-size:0.78rem;">Press <kbd style="background:var(--bg-card); padding:2px 5px; border-radius:3px; border:1px solid var(--border-subtle); color:var(--text-primary); font-family:monospace;">Ctrl+Shift+D</kbd> for Diagnostics</span>
+    </div>
+  </footer>
 
   <script src="/js/offlineEngine.js"></script>
   <script src="/js/quickKeyEngine.js"></script>

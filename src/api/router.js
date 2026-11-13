@@ -890,7 +890,7 @@ class ApiRouter {
 
   serveStaticAsset(pathname, res) {
     applySecurityHeaders(res);
-    let relPath = pathname === '/' ? '/index.html' : pathname;
+    let relPath = (pathname === '/' || pathname === '/admin/diagnostics') ? '/index.html' : pathname;
     relPath = path.normalize(relPath).replace(/^(\.\.(\/|\\|$))+/, '');
     const fullPath = path.join(this.publicDir, relPath);
 
