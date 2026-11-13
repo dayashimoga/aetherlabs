@@ -126,7 +126,8 @@
       "productionContext": "Elastic autoscaling prevents saturation cascading failures during unexpected traffic surges.",
       "prerequisites": ["lab-sre-01"],
       "objectives": [
-        "Configure `HorizontalPodAutoscaler` `api-gateway` in `production` with `minReplicas: 3` and `maxReplicas: 12`"
+        "Configure `HorizontalPodAutoscaler` `api-gateway` in `production` with `minReplicas: 3` and `maxReplicas: 12`",
+        "Set target CPU utilization to 70% to trigger elastic scaling under high traffic"
       ],
       "initialClusterState": {
         "resources": [
