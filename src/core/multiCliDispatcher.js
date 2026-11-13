@@ -262,7 +262,68 @@ class MultiCliDispatcher {
     this.mesh = this.autoscaling ? this.autoscaling.istio : null;
 
     // Initialize Git & Simulated Host/Runtime Subsystems
+    this.cluster = options.cluster || null;
     this.gitEngine = options.gitEngine || (GitEngine ? new GitEngine({ vfs: this.vfs }) : null);
+
+    // Helm State
+    this.helmReleases = (this.cluster && this.cluster.state && this.cluster.state.helmReleases) || [];
+    this.helmRepos = {
+      bitnami: 'https://charts.bitnami.com/bitnami',
+      ingress_nginx: 'https://kubernetes.github.io/ingress-nginx'
+    };
+
+    // ArgoCD State
+    this.argocdApps = (this.cluster && this.cluster.state && this.cluster.state.argoApps) || [
+      {
+        name: 'payments-gitops',
+        namespace: 'argocd',
+        destNamespace: 'production',
+        project: 'default',
+        repo: 'https://github.com/kubelabs/payments-deploy.git',
+        targetRevision: 'main',
+        path: 'deploy/prod',
+        syncStatus: 'Synced',
+        healthStatus: 'Healthy',
+        syncPolicy: 'Automated'
+      }
+    ];
+
+    // Flux State
+    this.fluxSources = [
+      { name: 'podinfo', type: 'git', url: 'https://github.com/stefanprodan/podinfo', branch: 'master', revision: 'master@sha1:123abc4', ready: 'True', status: 'stored artifact for revision' }
+    ];
+    this.fluxKustomizations = [
+      { name: 'apps', path: './k8s/apps', revision: 'main@sha1:e84f291', ready: 'True', suspended: 'False', message: 'Applied revision: main@sha1:e84f291' },
+      { name: 'infrastructure', path: './k8s/infra', revision: 'main@sha1:e84f291', ready: 'True', suspended: 'False', message: 'Applied revision: main@sha1:e84f291' }
+    ];
+    this.fluxHelmReleases = [
+      { name: 'redis-cluster', chart: 'redis', version: '6.2.14', ready: 'True', suspended: 'False', message: 'Release reconciliation succeeded' },
+      { name: 'ingress-nginx', chart: 'ingress-nginx', version: '4.10.1', ready: 'True', suspended: 'False', message: 'Release reconciliation succeeded' }
+    ];
+
+    // OpenTofu / Terraform State
+    this.tofuResources = (this.cluster && this.cluster.state && this.cluster.state.terraformState && this.cluster.state.terraformState.resources) || [
+      'aws_vpc.main',
+      'aws_eks_cluster.prod',
+      'aws_s3_bucket.artifacts'
+    ];
+    this.tofuOutputs = {
+      cluster_endpoint: 'https://78A9C12.gr7.us-east-1.eks.amazonaws.com',
+      vpc_id: 'vpc-01a2b3c4d5e'
+    };
+
+    // Simulated S3
+    this.simulatedS3 = {
+      buckets: ['kubelabs-tfstate-bucket', 'kubelabs-backup-artifacts'],
+      objects: new Map()
+    };
+
+    // Velero Backups & Restores
+    this.veleroBackups = [
+      { name: 'daily-backup-2026-11-10', status: 'Completed', errors: 0, warnings: 0, created: '2026-11-10 02:00:00' }
+    ];
+    this.veleroRestores = [];
+
     this.systemdUnits = {
       kubelet: { status: 'active', substate: 'running', pid: 1420, desc: 'kubelet: The Kubernetes Node Agent' },
       containerd: { status: 'active', substate: 'running', pid: 1204, desc: 'containerd container runtime' },
@@ -449,6 +510,7 @@ class MultiCliDispatcher {
     pipelineDriver.registerCommand('k', boundKubectl);
 
     pipelineDriver.registerCommand('helm', this.handleHelm.bind(this));
+    pipelineDriver.registerCommand('kustomize', this.handleKustomize.bind(this));
     pipelineDriver.registerCommand('docker', this.handleDocker.bind(this));
     pipelineDriver.registerCommand('crictl', this.handleCrictl.bind(this));
     pipelineDriver.registerCommand('git', this.handleGit.bind(this));
@@ -462,6 +524,7 @@ class MultiCliDispatcher {
     pipelineDriver.registerCommand('trivy', this.handleTrivy.bind(this));
     pipelineDriver.registerCommand('falco', this.handleFalco.bind(this));
     pipelineDriver.registerCommand('cosign', this.handleCosign.bind(this));
+    pipelineDriver.registerCommand('k8sgpt', this.handleK8sGPT.bind(this));
     pipelineDriver.registerCommand('aiops', this.handleAiOps.bind(this));
     pipelineDriver.registerCommand('etcdctl', this.handleEtcdctl.bind(this));
     pipelineDriver.registerCommand('kubeadm', this.handleKubeadm.bind(this));
@@ -470,7 +533,9 @@ class MultiCliDispatcher {
     pipelineDriver.registerCommand('flux', this.handleFlux.bind(this));
     pipelineDriver.registerCommand('velero', this.handleVelero.bind(this));
     pipelineDriver.registerCommand('vcluster', this.handleVcluster.bind(this));
+    pipelineDriver.registerCommand('promql', this.handlePromql.bind(this));
     pipelineDriver.registerCommand('promtool', this.handlePromtool.bind(this));
+    pipelineDriver.registerCommand('logql', this.handleLogql.bind(this));
     pipelineDriver.registerCommand('logcli', this.handleLogcli.bind(this));
     pipelineDriver.registerCommand('otelcol', this.handleOtelcol.bind(this));
     pipelineDriver.registerCommand('curl', this.handleCurl.bind(this));
@@ -523,6 +588,7 @@ class MultiCliDispatcher {
       kubectl: this.handleKubectl.bind(this),
       k: this.handleKubectl.bind(this),
       helm: this.handleHelm.bind(this),
+      kustomize: this.handleKustomize.bind(this),
       docker: this.handleDocker.bind(this),
       crictl: this.handleCrictl.bind(this),
       git: this.handleGit.bind(this),
@@ -536,6 +602,7 @@ class MultiCliDispatcher {
       trivy: this.handleTrivy.bind(this),
       falco: this.handleFalco.bind(this),
       cosign: this.handleCosign.bind(this),
+      k8sgpt: this.handleK8sGPT.bind(this),
       aiops: this.handleAiOps.bind(this),
       etcdctl: this.handleEtcdctl.bind(this),
       kubeadm: this.handleKubeadm.bind(this),
@@ -544,7 +611,9 @@ class MultiCliDispatcher {
       flux: this.handleFlux.bind(this),
       velero: this.handleVelero.bind(this),
       vcluster: this.handleVcluster.bind(this),
+      promql: this.handlePromql.bind(this),
       promtool: this.handlePromtool.bind(this),
+      logql: this.handleLogql.bind(this),
       logcli: this.handleLogcli.bind(this),
       otelcol: this.handleOtelcol.bind(this),
       curl: this.handleCurl.bind(this),
@@ -2480,43 +2549,176 @@ class MultiCliDispatcher {
   // 2. HELM CLI HANDLER
   // -------------------------------------------------------------------------
 
-  handleHelm({ argv = [] }) {
+  handleHelm({ argv = [], cwd = '/home/learner', vfs = null }) {
+    const fs = vfs || this.vfs;
     const sub = argv[1];
-    if (!sub) return { stdout: 'The Kubernetes Package Manager\n', stderr: '', code: 0 };
+    if (!sub || sub === '--help' || sub === '-h') {
+      return {
+        stdout: 'The Kubernetes Package Manager\n\nCommon actions for Helm:\n- helm search:    search for charts\n- helm pull:      download a chart to your local directory to view\n- helm install:   upload the chart to Kubernetes\n- helm list:      list releases of charts\n',
+        stderr: '',
+        code: 0
+      };
+    }
+
+    if (sub === 'version') {
+      return { stdout: 'version.BuildInfo{Version:"v3.16.2", GitCommit:"13651c8a", GitTreeState:"clean", GoVersion:"go1.22.7"}\n', stderr: '', code: 0 };
+    }
 
     if (sub === 'list' || sub === 'ls') {
-      const releases = this.helm ? this.helm.list() : [];
-      if (releases.length === 0) {
+      const allNs = argv.includes('-A') || argv.includes('--all-namespaces');
+      let targetNs = 'default';
+      const nIdx = argv.findIndex((a) => a === '-n' || a === '--namespace');
+      if (nIdx !== -1 && argv[nIdx + 1]) targetNs = argv[nIdx + 1];
+
+      let list = this.helmReleases;
+      if (!allNs && nIdx !== -1) {
+        list = list.filter((r) => r.namespace === targetNs);
+      }
+      if (list.length === 0) {
         return { stdout: 'NAME\tNAMESPACE\tREVISION\tUPDATED\tSTATUS\tCHART\tAPP VERSION\n', stderr: '', code: 0 };
       }
       const headers = ['NAME', 'NAMESPACE', 'REVISION', 'UPDATED', 'STATUS', 'CHART', 'APP VERSION'];
-      const rows = releases.map((r) => [r.name, r.namespace, String(r.revision), r.updatedAt || r.updated || 'now', r.status, r.chart, '1.0.0']);
+      const rows = list.map((r) => [r.name, r.namespace || 'default', String(r.revision || 1), r.updated || 'now', r.status || 'deployed', r.chart || 'chart', r.appVersion || '1.0.0']);
       return { stdout: this._formatTable(headers, rows) + '\n', stderr: '', code: 0 };
     }
 
     if (sub === 'install') {
       const name = argv[2];
       const chart = argv[3];
-      if (!name || !chart) return { stdout: '', stderr: 'Error: install requires release name and chart\n', code: 1 };
-      let ns = 'default';
-      const nIdx = argv.indexOf('-n');
-      if (nIdx !== -1) ns = argv[nIdx + 1] || 'default';
-
-      if (this.helm) {
-        this.helm.install(name, chart, {}, { namespace: ns });
+      if (!name || !chart || name.startsWith('-') || chart.startsWith('-')) {
+        return { stdout: '', stderr: 'Error: install requires release name and chart\n', code: 1 };
       }
-      // Provision simulated workload in cluster graph
+      let ns = 'default';
+      let replicas = 1;
+      const values = {};
+      for (let i = 4; i < argv.length; i++) {
+        if (argv[i] === '-n' || argv[i] === '--namespace') ns = argv[++i] || 'default';
+        else if (argv[i].startsWith('--namespace=')) ns = argv[i].split('=')[1];
+        else if (argv[i] === '--set' && argv[i + 1]) {
+          const pairs = argv[++i].split(',');
+          for (const p of pairs) {
+            const [k, v] = p.split('=');
+            if (k) values[k] = v;
+            if (k === 'replicaCount' || k === 'replicas') replicas = parseInt(v, 10) || 1;
+          }
+        }
+      }
+
+      const existing = this.helmReleases.find((r) => r.name === name);
+      if (existing) {
+        return { stdout: '', stderr: `Error: cannot re-use a name that is still in use: ${name}\n`, code: 1 };
+      }
+
+      const newRelease = {
+        name,
+        namespace: ns,
+        revision: 1,
+        updated: new Date().toISOString(),
+        status: 'deployed',
+        chart,
+        appVersion: '1.0.0',
+        values
+      };
+      this.helmReleases.push(newRelease);
+      if (this.cluster && this.cluster.state && Array.isArray(this.cluster.state.helmReleases) && !this.cluster.state.helmReleases.includes(newRelease)) {
+        this.cluster.state.helmReleases.push(newRelease);
+      }
+
+      const shortChart = chart.split('/').pop();
+      const depName = shortChart === name ? name : `${name}-${shortChart}`;
       if (this.graph) {
         this.graph.create({
           apiVersion: 'apps/v1',
           kind: 'Deployment',
-          metadata: { name: `${name}-${chart}`, namespace: ns, labels: { 'app.kubernetes.io/instance': name } },
-          spec: { replicas: 1, selector: { matchLabels: { app: name } }, template: { metadata: { labels: { app: name } }, spec: { containers: [{ name, image: chart }] } } }
+          metadata: {
+            name: depName,
+            namespace: ns,
+            labels: { 'app.kubernetes.io/instance': name, 'app.kubernetes.io/managed-by': 'Helm', app: name }
+          },
+          spec: {
+            replicas,
+            selector: { matchLabels: { app: name } },
+            template: {
+              metadata: { labels: { app: name } },
+              spec: { containers: [{ name: shortChart, image: `${shortChart}:latest` }] }
+            }
+          }
+        });
+        if (depName !== name) {
+          this.graph.create({
+            apiVersion: 'apps/v1',
+            kind: 'Deployment',
+            metadata: {
+              name,
+              namespace: ns,
+              labels: { 'app.kubernetes.io/instance': name, 'app.kubernetes.io/managed-by': 'Helm', app: name }
+            },
+            spec: {
+              replicas,
+              selector: { matchLabels: { app: name } },
+              template: {
+                metadata: { labels: { app: name } },
+                spec: { containers: [{ name: shortChart, image: `${shortChart}:latest` }] }
+              }
+            }
+          });
+        }
+        this.graph.create({
+          apiVersion: 'v1',
+          kind: 'Service',
+          metadata: {
+            name: depName,
+            namespace: ns,
+            labels: { 'app.kubernetes.io/instance': name, 'app.kubernetes.io/managed-by': 'Helm', app: name }
+          },
+          spec: {
+            selector: { app: name },
+            ports: [{ port: 80, targetPort: 80, protocol: 'TCP' }]
+          }
         });
         if (this.controllerManager) this.controllerManager.reconcile();
       }
+
+      if (this.cluster && typeof this.cluster.applyResource === 'function') {
+        const createClusterDep = (dName) => {
+          this.cluster.applyResource({
+            apiVersion: 'apps/v1',
+            kind: 'Deployment',
+            metadata: {
+              name: dName,
+              namespace: ns,
+              labels: { 'app.kubernetes.io/instance': name, 'app.kubernetes.io/managed-by': 'Helm', app: name }
+            },
+            spec: {
+              replicas,
+              selector: { matchLabels: { app: name } },
+              template: {
+                metadata: { labels: { app: name } },
+                spec: { containers: [{ name: shortChart, image: `${shortChart}:latest` }] }
+              }
+            }
+          });
+        };
+        createClusterDep(name);
+        if (depName !== name) createClusterDep(depName);
+
+        this.cluster.applyResource({
+          apiVersion: 'v1',
+          kind: 'Service',
+          metadata: {
+            name: depName,
+            namespace: ns,
+            labels: { 'app.kubernetes.io/instance': name, 'app.kubernetes.io/managed-by': 'Helm', app: name }
+          },
+          spec: {
+            selector: { app: name },
+            ports: [{ port: 80, targetPort: 80, protocol: 'TCP' }]
+          }
+        });
+      }
+
       return {
-        stdout: `NAME: ${name}\nLAST DEPLOYED: ${new Date().toUTCString()}\nNAMESPACE: ${ns}\nSTATUS: deployed\nREVISION: 1\nTEST SUITE: None\n`,
+        stdout: `NAME: ${name}\nLAST DEPLOYED: ${new Date().toUTCString()}\nNAMESPACE: ${ns}\nSTATUS: deployed\nREVISION: 1\nTEST SUITE: None\nNOTES:\nThank you for installing ${chart}.\n`,
         stderr: '',
         code: 0
       };
@@ -2525,28 +2727,357 @@ class MultiCliDispatcher {
     if (sub === 'upgrade') {
       const name = argv[2];
       const chart = argv[3];
-      if (this.helm) this.helm.upgrade(name, {}, {});
-      return { stdout: `Release "${name}" has been upgraded. Happy Helming!\n`, stderr: '', code: 0 };
+      const isInstall = argv.includes('-i') || argv.includes('--install');
+      let rel = this.helmReleases.find((r) => r.name === name);
+      if (!rel) {
+        if (isInstall) {
+          return this.handleHelm({ argv: ['helm', 'install', ...argv.slice(2)], cwd, vfs });
+        }
+        return { stdout: '', stderr: `Error: release: not found\n`, code: 1 };
+      }
+
+      rel.revision = (rel.revision || 1) + 1;
+      rel.updated = new Date().toISOString();
+      if (chart && !chart.startsWith('-')) rel.chart = chart;
+
+      return {
+        stdout: `Release "${name}" has been upgraded. Happy Helming!\nNAME: ${name}\nLAST DEPLOYED: ${new Date().toUTCString()}\nNAMESPACE: ${rel.namespace}\nSTATUS: deployed\nREVISION: ${rel.revision}\nTEST SUITE: None\n`,
+        stderr: '',
+        code: 0
+      };
     }
 
     if (sub === 'rollback') {
       const name = argv[2];
-      const rev = argv[3] || 1;
-      if (this.helm) this.helm.rollback(name, parseInt(rev, 10), {});
+      const rev = argv[3] ? parseInt(argv[3], 10) : 1;
+      const rel = this.helmReleases.find((r) => r.name === name);
+      if (!rel) return { stdout: '', stderr: `Error: release: not found\n`, code: 1 };
+      rel.revision = rev;
+      rel.updated = new Date().toISOString();
       return { stdout: `Rollback was a success! Happy Helming!\n`, stderr: '', code: 0 };
     }
 
     if (sub === 'uninstall') {
       const name = argv[2];
-      if (this.helm) this.helm.uninstall(name, {});
+      if (!name) return { stdout: '', stderr: 'Error: uninstall requires release name\n', code: 1 };
+      const idx = this.helmReleases.findIndex((r) => r.name === name);
+      if (idx === -1) {
+        return { stdout: '', stderr: `Error: uninstall: Release not loaded: "${name}": release: not found\n`, code: 1 };
+      }
+      const [rel] = this.helmReleases.splice(idx, 1);
+      if (this.cluster && this.cluster.state && Array.isArray(this.cluster.state.helmReleases)) {
+        const cIdx = this.cluster.state.helmReleases.findIndex((r) => r.name === name);
+        if (cIdx !== -1) this.cluster.state.helmReleases.splice(cIdx, 1);
+      }
+      if (this.graph) {
+        const deps = this.graph.list({ kind: 'Deployment', labelSelector: `app.kubernetes.io/instance=${name}` });
+        for (const d of deps) this.graph.delete('Deployment', d.metadata.namespace, d.metadata.name);
+        const svcs = this.graph.list({ kind: 'Service', labelSelector: `app.kubernetes.io/instance=${name}` });
+        for (const s of svcs) this.graph.delete('Service', s.metadata.namespace, s.metadata.name);
+      }
       return { stdout: `release "${name}" uninstalled\n`, stderr: '', code: 0 };
     }
 
     if (sub === 'repo') {
+      const action = argv[2];
+      if (action === 'add') {
+        const rName = argv[3];
+        const rUrl = argv[4];
+        if (!rName || !rUrl) return { stdout: '', stderr: 'Error: repo add requires name and url\n', code: 1 };
+        this.helmRepos[rName] = rUrl;
+        return { stdout: `"${rName}" has been added to your repositories\n`, stderr: '', code: 0 };
+      }
+      if (action === 'update') {
+        const names = Object.keys(this.helmRepos);
+        const updates = names.map((n) => `...Successfully got an update from the "${n}" chart repository`).join('\n');
+        return { stdout: `Hang tight while we grab the latest from your chart repositories...\n${updates}\nUpdate Complete. ⎈Happy Helming!⎈\n`, stderr: '', code: 0 };
+      }
+      if (action === 'list') {
+        const headers = ['NAME', 'URL'];
+        const rows = Object.entries(this.helmRepos);
+        return { stdout: this._formatTable(headers, rows) + '\n', stderr: '', code: 0 };
+      }
+      if (action === 'remove' || action === 'rm') {
+        const rName = argv[3];
+        delete this.helmRepos[rName];
+        return { stdout: `"${rName}" has been removed from your repositories\n`, stderr: '', code: 0 };
+      }
       return { stdout: 'repositories updated successfully\n', stderr: '', code: 0 };
     }
 
+    if (sub === 'template') {
+      const name = argv[2] || 'release-name';
+      const chart = argv[3] || 'my-chart';
+      const shortChart = chart.split('/').pop();
+      const yaml = `---
+# Source: ${shortChart}/templates/serviceaccount.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ${name}-${shortChart}
+  labels:
+    helm.sh/chart: ${shortChart}-1.0.0
+    app.kubernetes.io/name: ${shortChart}
+    app.kubernetes.io/instance: ${name}
+---
+# Source: ${shortChart}/templates/service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: ${name}-${shortChart}
+  labels:
+    app.kubernetes.io/name: ${shortChart}
+    app.kubernetes.io/instance: ${name}
+spec:
+  type: ClusterIP
+  ports:
+    - port: 80
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    app.kubernetes.io/name: ${shortChart}
+    app.kubernetes.io/instance: ${name}
+---
+# Source: ${shortChart}/templates/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ${name}-${shortChart}
+  labels:
+    app.kubernetes.io/name: ${shortChart}
+    app.kubernetes.io/instance: ${name}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ${shortChart}
+      app.kubernetes.io/instance: ${name}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ${shortChart}
+        app.kubernetes.io/instance: ${name}
+    spec:
+      serviceAccountName: ${name}-${shortChart}
+      containers:
+        - name: ${shortChart}
+          image: "${shortChart}:1.0.0"
+          ports:
+            - name: http
+              containerPort: 80
+              protocol: TCP
+`;
+      return { stdout: yaml, stderr: '', code: 0 };
+    }
+
+    if (sub === 'lint') {
+      const chartPath = argv[2] || '.';
+      const absPath = chartPath.startsWith('/') ? chartPath : `${cwd}/${chartPath}`.replace(/\/+/g, '/');
+      if (fs && fs.exists(`${absPath}/Chart.yaml`)) {
+        return { stdout: `==> Linting ${chartPath}\n\n1 chart(s) linted, 0 chart(s) failed\n`, stderr: '', code: 0 };
+      }
+      if (fs && !fs.exists(`${absPath}/Chart.yaml`)) {
+        return { stdout: `==> Linting ${chartPath}\n[ERROR] Chart.yaml: file does not exist\n\nError: 1 chart(s) linted, 1 chart(s) failed\n`, stderr: '', code: 1 };
+      }
+      return { stdout: `==> Linting ${chartPath}\n\n1 chart(s) linted, 0 chart(s) failed\n`, stderr: '', code: 0 };
+    }
+
+    if (sub === 'package') {
+      const chartPath = argv[2] || '.';
+      const absPath = chartPath.startsWith('/') ? chartPath : `${cwd}/${chartPath}`.replace(/\/+/g, '/');
+      let chartName = chartPath.split('/').pop() || 'chart';
+      let chartVer = '0.1.0';
+      if (fs && fs.exists(`${absPath}/Chart.yaml`)) {
+        try {
+          const content = fs.readFile(`${absPath}/Chart.yaml`);
+          const parsed = yamlParser.parseYaml ? yamlParser.parseYaml(content) : null;
+          if (parsed && parsed.name) chartName = parsed.name;
+          if (parsed && parsed.version) chartVer = parsed.version;
+        } catch {}
+      }
+      const pkgFile = `${chartName}-${chartVer}.tgz`;
+      const outDir = argv.includes('-d') ? argv[argv.indexOf('-d') + 1] : cwd;
+      const targetPkg = `${outDir}/${pkgFile}`.replace(/\/+/g, '/');
+      if (fs) {
+        fs.writeFile(targetPkg, 'SIMULATED_GZIP_CHART_ARCHIVE');
+      }
+      return { stdout: `Successfully packaged chart and saved it to: ${targetPkg}\n`, stderr: '', code: 0 };
+    }
+
     return { stdout: '', stderr: `Error: unknown command "${sub}" for "helm"\n`, code: 1 };
+  }
+
+  // -------------------------------------------------------------------------
+  // 2b. KUSTOMIZE CLI HANDLER
+  // -------------------------------------------------------------------------
+
+  handleKustomize({ argv = [], cwd = '/home/learner', vfs = null }) {
+    const fs = vfs || this.vfs;
+    const sub = argv[1];
+    if (!sub || sub === '--help' || sub === '-h') {
+      return {
+        stdout: 'Manages declarative configuration of Kubernetes\n\nUsage:\n  kustomize [command]\n\nAvailable Commands:\n  build                   Build a kustomization target\n  edit                    Edits a kustomization file\n  version                 Prints the kustomize version\n',
+        stderr: '',
+        code: 0
+      };
+    }
+
+    if (sub === 'version') {
+      return { stdout: '{Version:kustomize/v5.4.3 GitCommit:2a3e792c GoVersion:go1.22.5}\n', stderr: '', code: 0 };
+    }
+
+    if (sub === 'build') {
+      const targetDir = argv[2] || '.';
+      const absDir = targetDir.startsWith('/') ? targetDir : `${cwd}/${targetDir}`.replace(/\/+/g, '/').replace(/\/$/, '');
+      if (!fs) {
+        return { stdout: '', stderr: `Error: unable to access filesystem\n`, code: 1 };
+      }
+
+      let kustomizeFile = null;
+      for (const candidate of ['kustomization.yaml', 'kustomization.yml', 'Kustomization']) {
+        const full = `${absDir}/${candidate}`;
+        if (fs.exists(full)) {
+          kustomizeFile = full;
+          break;
+        }
+      }
+
+      if (!kustomizeFile) {
+        return {
+          stdout: '',
+          stderr: `Error: unable to find one of 'kustomization.yaml', 'kustomization.yml' in directory "${targetDir}"\n`,
+          code: 1
+        };
+      }
+
+      let parsedKust = {};
+      try {
+        const raw = fs.readFile(kustomizeFile);
+        parsedKust = yamlParser.parseYaml ? yamlParser.parseYaml(raw) : JSON.parse(raw);
+        parsedKust = parsedKust || {};
+      } catch (err) {
+        return { stdout: '', stderr: `Error parsing ${kustomizeFile}: ${err.message}\n`, code: 1 };
+      }
+
+      const resources = parsedKust.resources || [];
+      const outputDocs = [];
+
+      for (const resPath of resources) {
+        const resFullPath = resPath.startsWith('/') ? resPath : `${absDir}/${resPath}`.replace(/\/+/g, '/');
+        if (fs.exists(resFullPath)) {
+          const resRaw = fs.readFile(resFullPath);
+          let docs = [];
+          try {
+            docs = yamlParser.parseAllYaml ? yamlParser.parseAllYaml(resRaw) : [yamlParser.parseYaml(resRaw)];
+          } catch {
+            docs = [];
+          }
+          for (const doc of docs) {
+            if (!doc || typeof doc !== 'object') continue;
+            // Apply namespace
+            if (parsedKust.namespace) {
+              doc.metadata = doc.metadata || {};
+              doc.metadata.namespace = parsedKust.namespace;
+            }
+            // Apply namePrefix / nameSuffix
+            if (parsedKust.namePrefix) {
+              doc.metadata = doc.metadata || {};
+              doc.metadata.name = `${parsedKust.namePrefix}${doc.metadata.name || ''}`;
+            }
+            if (parsedKust.nameSuffix) {
+              doc.metadata = doc.metadata || {};
+              doc.metadata.name = `${doc.metadata.name || ''}${parsedKust.nameSuffix}`;
+            }
+            // Apply commonLabels
+            if (parsedKust.commonLabels && typeof parsedKust.commonLabels === 'object') {
+              doc.metadata = doc.metadata || {};
+              doc.metadata.labels = { ...(doc.metadata.labels || {}), ...parsedKust.commonLabels };
+              if (doc.spec && doc.spec.template && doc.spec.template.metadata) {
+                doc.spec.template.metadata.labels = {
+                  ...(doc.spec.template.metadata.labels || {}),
+                  ...parsedKust.commonLabels
+                };
+              }
+            }
+            // Apply commonAnnotations
+            if (parsedKust.commonAnnotations && typeof parsedKust.commonAnnotations === 'object') {
+              doc.metadata = doc.metadata || {};
+              doc.metadata.annotations = { ...(doc.metadata.annotations || {}), ...parsedKust.commonAnnotations };
+            }
+            // Apply image transformations
+            if (Array.isArray(parsedKust.images)) {
+              const containers = doc.spec?.template?.spec?.containers || doc.spec?.containers || [];
+              for (const c of containers) {
+                for (const imgTransform of parsedKust.images) {
+                  if (c.image && (c.image === imgTransform.name || c.image.startsWith(`${imgTransform.name}:`))) {
+                    const newName = imgTransform.newName || imgTransform.name;
+                    const newTag = imgTransform.newTag ? `:${imgTransform.newTag}` : '';
+                    c.image = `${newName}${newTag}`;
+                  }
+                }
+              }
+            }
+            outputDocs.push(doc);
+          }
+        }
+      }
+
+      if (outputDocs.length === 0) {
+        return {
+          stdout: `apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: ${parsedKust.namePrefix || ''}kustomize-config\n  namespace: ${parsedKust.namespace || 'default'}\ndata:\n  env: production\n`,
+          stderr: '',
+          code: 0
+        };
+      }
+
+      const formattedDocs = outputDocs.map((d) => (yamlParser.stringifyYaml ? yamlParser.stringifyYaml(d) : JSON.stringify(d, null, 2))).join('---\n');
+      return { stdout: formattedDocs + '\n', stderr: '', code: 0 };
+    }
+
+    if (sub === 'edit') {
+      const action = argv[2];
+      const kustomizeFile = `${cwd}/kustomization.yaml`;
+      let parsedKust = {};
+      if (fs && fs.exists(kustomizeFile)) {
+        try {
+          parsedKust = yamlParser.parseYaml(fs.readFile(kustomizeFile)) || {};
+        } catch {}
+      }
+
+      if (action === 'set') {
+        const target = argv[3];
+        if (target === 'namespace') {
+          const ns = argv[4];
+          parsedKust.namespace = ns;
+          if (fs) fs.writeFile(kustomizeFile, yamlParser.stringifyYaml ? yamlParser.stringifyYaml(parsedKust) : JSON.stringify(parsedKust));
+          return { stdout: '', stderr: '', code: 0 };
+        }
+        if (target === 'image') {
+          const imgExpr = argv[4];
+          if (imgExpr) {
+            const [name, targetImg] = imgExpr.split('=');
+            parsedKust.images = parsedKust.images || [];
+            parsedKust.images.push({ name, newName: targetImg });
+            if (fs) fs.writeFile(kustomizeFile, yamlParser.stringifyYaml ? yamlParser.stringifyYaml(parsedKust) : JSON.stringify(parsedKust));
+          }
+          return { stdout: '', stderr: '', code: 0 };
+        }
+      }
+
+      if (action === 'add') {
+        const target = argv[3];
+        if (target === 'resource') {
+          const res = argv[4];
+          parsedKust.resources = parsedKust.resources || [];
+          if (!parsedKust.resources.includes(res)) parsedKust.resources.push(res);
+          if (fs) fs.writeFile(kustomizeFile, yamlParser.stringifyYaml ? yamlParser.stringifyYaml(parsedKust) : JSON.stringify(parsedKust));
+          return { stdout: '', stderr: '', code: 0 };
+        }
+      }
+    }
+
+    return { stdout: '', stderr: `Error: unknown command "${sub}" for "kustomize"\n`, code: 1 };
   }
 
   // -------------------------------------------------------------------------
@@ -2805,36 +3336,211 @@ class MultiCliDispatcher {
 
   handleArgoCD({ argv = [] }) {
     const sub = argv[1];
+    if (!sub || sub === 'version' || sub === '--version') {
+      return { stdout: 'argocd: v2.12.3+3c41551\n  BuildDate: 2024-08-20T14:02:18Z\n  GitCommit: 3c415515\n', stderr: '', code: 0 };
+    }
+
     if (sub === 'app') {
       const action = argv[2];
-      const appName = argv[3] || 'guestbook';
+      const appName = argv[3] || 'payments-gitops';
 
       if (action === 'list') {
-        const headers = ['NAME', 'CLUSTER', 'NAMESPACE', 'PROJECT', 'STATUS', 'HEALTH'];
+        const headers = ['NAME', 'CLUSTER', 'NAMESPACE', 'PROJECT', 'STATUS', 'HEALTH', 'SYNCPOLICY'];
+        const rows = this.argocdApps.map((a) => [
+          a.name,
+          'https://kubernetes.default.svc',
+          a.destNamespace || 'default',
+          a.project || 'default',
+          a.syncStatus || 'Synced',
+          a.healthStatus || 'Healthy',
+          a.syncPolicy || 'Automated'
+        ]);
+        return { stdout: this._formatTable(headers, rows) + '\n', stderr: '', code: 0 };
+      }
+
+      if (action === 'get') {
+        const app = this.argocdApps.find((a) => a.name === appName) || {
+          name: appName,
+          destNamespace: 'production',
+          project: 'default',
+          syncStatus: 'Synced',
+          healthStatus: 'Healthy',
+          syncPolicy: 'Automated'
+        };
+        const lines = [
+          `Name:               ${app.name}`,
+          `Project:            ${app.project || 'default'}`,
+          `Server:             https://kubernetes.default.svc`,
+          `Namespace:          ${app.destNamespace || 'production'}`,
+          `URL:                https://argocd.example.com/applications/${app.name}`,
+          `Repo:               ${app.repo || 'https://github.com/kubelabs/payments-deploy.git'}`,
+          `Target:             ${app.targetRevision || 'main'}`,
+          `Path:               ${app.path || 'deploy/prod'}`,
+          `Sync Policy:        ${app.syncPolicy || 'Automated'}`,
+          `Sync Status:        ${app.syncStatus || 'Synced'} to ${app.targetRevision || 'main'}`,
+          `Health Status:      ${app.healthStatus || 'Healthy'}\n`,
+          `GROUP  KIND        NAMESPACE   NAME      STATUS  HEALTH`,
+          `apps   Deployment  ${app.destNamespace || 'production'}  ${app.name}    ${app.syncStatus || 'Synced'}  ${app.healthStatus || 'Healthy'}`
+        ];
+        return { stdout: lines.join('\n') + '\n', stderr: '', code: 0 };
+      }
+
+      if (action === 'create') {
+        let repo = 'https://github.com/kubelabs/app.git';
+        let path = 'deploy';
+        let destServer = 'https://kubernetes.default.svc';
+        let destNs = 'default';
+        let syncPolicy = 'Manual';
+
+        for (let i = 4; i < argv.length; i++) {
+          if (argv[i] === '--repo') repo = argv[++i];
+          else if (argv[i] === '--path') path = argv[++i];
+          else if (argv[i] === '--dest-server') destServer = argv[++i];
+          else if (argv[i] === '--dest-namespace') destNs = argv[++i];
+          else if (argv[i] === '--sync-policy') syncPolicy = argv[++i];
+        }
+
+        const newApp = {
+          name: appName,
+          repo,
+          path,
+          destServer,
+          destNamespace: destNs,
+          syncPolicy,
+          syncStatus: 'OutOfSync',
+          healthStatus: 'Missing',
+          targetRevision: 'HEAD'
+        };
+        this.argocdApps.push(newApp);
+        if (this.cluster && this.cluster.state && Array.isArray(this.cluster.state.argoApps)) {
+          this.cluster.state.argoApps.push(newApp);
+        }
+        if (this.graph) {
+          this.graph.create({
+            apiVersion: 'argoproj.io/v1alpha1',
+            kind: 'Application',
+            metadata: { name: appName, namespace: 'argocd' },
+            spec: {
+              destination: { namespace: destNs, server: destServer },
+              source: { repoURL: repo, path, targetRevision: 'HEAD' }
+            },
+            status: { sync: { status: 'OutOfSync' }, health: { status: 'Missing' } }
+          });
+        }
+        return { stdout: `application '${appName}' created\n`, stderr: '', code: 0 };
+      }
+
+      if (action === 'sync') {
+        let app = this.argocdApps.find((a) => a.name === appName);
+        if (!app) {
+          app = {
+            name: appName,
+            destNamespace: 'production',
+            project: 'default',
+            syncStatus: 'Synced',
+            healthStatus: 'Healthy',
+            syncPolicy: 'Automated'
+          };
+          this.argocdApps.push(app);
+          if (this.cluster && this.cluster.state && Array.isArray(this.cluster.state.argoApps)) {
+            this.cluster.state.argoApps.push(app);
+          }
+        } else {
+          app.syncStatus = 'Synced';
+          app.healthStatus = 'Healthy';
+        }
+
+        if (this.graph) {
+          const appRes = this.graph.get('Application', 'argocd', appName);
+          if (appRes) {
+            appRes.status = { sync: { status: 'Synced' }, health: { status: 'Healthy' } };
+          }
+          const depName = appName;
+          const ns = app.destNamespace || 'production';
+          if (!this.graph.get('Deployment', ns, depName)) {
+            this.graph.create({
+              apiVersion: 'apps/v1',
+              kind: 'Deployment',
+              metadata: { name: depName, namespace: ns, labels: { 'argocd.argoproj.io/instance': appName, app: appName } },
+              spec: { replicas: 2, selector: { matchLabels: { app: appName } }, template: { metadata: { labels: { app: appName } }, spec: { containers: [{ name: appName, image: 'ghcr.io/kubelabs/app:v1.0.0' }] } } }
+            });
+            if (this.controllerManager) this.controllerManager.reconcile();
+          }
+        }
+
+        if (this.cluster && typeof this.cluster.applyResource === 'function') {
+          const depName = appName;
+          const ns = app.destNamespace || 'production';
+          this.cluster.applyResource({
+            apiVersion: 'apps/v1',
+            kind: 'Deployment',
+            metadata: { name: depName, namespace: ns, labels: { 'argocd.argoproj.io/instance': appName, app: appName } },
+            spec: {
+              replicas: 2,
+              selector: { matchLabels: { app: appName } },
+              template: {
+                metadata: { labels: { app: appName } },
+                spec: { containers: [{ name: appName, image: 'ghcr.io/kubelabs/app:v1.0.0' }] }
+              }
+            }
+          });
+          const appResource = typeof this.cluster.getResource === 'function' ? this.cluster.getResource('Application', appName, 'argocd') : null;
+          if (appResource) {
+            appResource.status = { syncStatus: 'Synced', healthStatus: 'Healthy' };
+          }
+        }
+
+        return {
+          stdout: `TIMESTAMP                  GROUP        KIND   NAMESPACE                  NAME    STATUS    HEALTH   HOOK  MESSAGE\n${new Date().toISOString()}   apps  Deployment     ${app.destNamespace || 'production'}             ${appName}    Synced   Healthy\n`,
+          stderr: '',
+          code: 0
+        };
+      }
+
+      if (action === 'wait') {
+        return { stdout: `Application '${appName}' is Synced and Healthy\n`, stderr: '', code: 0 };
+      }
+
+      if (action === 'diff') {
+        const app = this.argocdApps.find((a) => a.name === appName);
+        if (app && app.syncStatus === 'OutOfSync') {
+          return {
+            stdout: `===== apps/Deployment ${appName} =====\n12c12\n<         image: ghcr.io/kubelabs/app:v1.0.0\n---\n>         image: ghcr.io/kubelabs/app:v2.0.0\n`,
+            stderr: '',
+            code: 0
+          };
+        }
+        return { stdout: '', stderr: '', code: 0 };
+      }
+
+      if (action === 'history') {
+        const headers = ['ID', 'DATE', 'REVISION'];
         const rows = [
-          [appName, 'https://192.168.1.10:6443', 'default', 'default', 'Synced', 'Healthy'],
-          ['prod-payment', 'https://192.168.1.10:6443', 'prod', 'default', 'Synced', 'Healthy']
+          ['1', '2026-11-12 10:00:00', 'main@sha1:e84f291'],
+          ['2', '2026-11-13 14:00:00', 'main@sha1:c8a91f2']
         ];
         return { stdout: this._formatTable(headers, rows) + '\n', stderr: '', code: 0 };
       }
 
-      if (action === 'sync') {
-        if (this.argocd) this.argocd.syncApp(appName);
-        return {
-          stdout: `TIMESTAMP                  GROUP        KIND   NAMESPACE                  NAME    STATUS    HEALTH   HOOK  MESSAGE\n2026-11-12T16:00:00Z   apps  Deployment     default             ${appName}    Synced   Healthy\n`,
-          stderr: '',
-          code: 0
-        };
-      }
-
-      if (action === 'get') {
-        return {
-          stdout: `Name:               ${appName}\nProject:            default\nServer:             https://192.168.1.10:6443\nNamespace:          default\nStatus:             Synced\nHealth:             Healthy\n`,
-          stderr: '',
-          code: 0
-        };
+      if (action === 'rollback') {
+        const revId = argv[4] || '1';
+        return { stdout: `Rolled back application '${appName}' to revision ${revId}\n`, stderr: '', code: 0 };
       }
     }
+
+    if (sub === 'repo') {
+      const action = argv[2];
+      if (action === 'add') {
+        const repoUrl = argv[3];
+        return { stdout: `Repository '${repoUrl}' added\n`, stderr: '', code: 0 };
+      }
+      if (action === 'list') {
+        const headers = ['TYPE', 'NAME', 'REPO', 'STATUS'];
+        const rows = [['git', 'main', 'https://github.com/kubelabs/payments-deploy.git', 'Successful']];
+        return { stdout: this._formatTable(headers, rows) + '\n', stderr: '', code: 0 };
+      }
+    }
+
     return { stdout: 'argocd GitOps controller connected\n', stderr: '', code: 0 };
   }
 
@@ -2949,6 +3655,62 @@ class MultiCliDispatcher {
       ];
       return { stdout: this._formatTable(headers, rows) + '\n', stderr: '', code: 0 };
     }
+
+    if (sub === 'proxy-config' || sub === 'pc') {
+      const configType = argv[2] || 'endpoints';
+      const podName = argv[3] || 'web-frontend';
+
+      if (configType === 'endpoints' || configType === 'ep') {
+        const headers = ['ENDPOINT', 'STATUS', 'OUTLIER CHECK', 'CLUSTER'];
+        const rows = [
+          ['10.244.1.15:80', 'HEALTHY', 'OK', 'outbound|80||details.default.svc.cluster.local'],
+          ['10.244.1.18:9080', 'HEALTHY', 'OK', 'outbound|9080||ratings.default.svc.cluster.local'],
+          ['127.0.0.1:15000', 'HEALTHY', 'OK', 'prometheus_stats']
+        ];
+        return { stdout: this._formatTable(headers, rows) + '\n', stderr: '', code: 0 };
+      }
+
+      if (configType === 'clusters' || configType === 'c') {
+        const headers = ['SERVICE FQDN', 'PORT', 'SUBSET', 'DIRECTION', 'TYPE', 'DESTINATION RULE'];
+        const rows = [
+          ['details.default.svc.cluster.local', '80', '-', 'outbound', 'EDS', 'details.default'],
+          ['ratings.default.svc.cluster.local', '9080', 'v1', 'outbound', 'EDS', 'ratings.default'],
+          ['BlackHoleCluster', '-', '-', '-', 'STATIC', '-']
+        ];
+        return { stdout: this._formatTable(headers, rows) + '\n', stderr: '', code: 0 };
+      }
+
+      if (configType === 'listeners' || configType === 'l') {
+        const headers = ['ADDRESS', 'PORT', 'MATCH', 'DESTINATION'];
+        const rows = [
+          ['0.0.0.0', '15006', 'Trans: raw_buffer; App: HTTP', 'Route: 80'],
+          ['0.0.0.0', '15001', 'ALL', 'PassthroughCluster']
+        ];
+        return { stdout: this._formatTable(headers, rows) + '\n', stderr: '', code: 0 };
+      }
+
+      if (configType === 'routes' || configType === 'r') {
+        const headers = ['NOTE', 'NAME', 'DOMAINS', 'MATCH', 'VIRTUAL SERVICE'];
+        const rows = [
+          ['*', '80', 'details.default.svc.cluster.local', '/*', 'details.default'],
+          ['*', '9080', 'ratings.default.svc.cluster.local', '/api/v1/ratings', 'ratings.default']
+        ];
+        return { stdout: this._formatTable(headers, rows) + '\n', stderr: '', code: 0 };
+      }
+
+      return { stdout: `Proxy configuration dump for ${podName} generated.\n`, stderr: '', code: 0 };
+    }
+
+    if (sub === 'dashboard') {
+      const tool = argv[2] || 'kiali';
+      const port = tool === 'kiali' ? 20001 : tool === 'jaeger' ? 16686 : 3000;
+      return {
+        stdout: `http://localhost:${port}/${tool}\nGenerated simulated port-forwarding to ${tool} dashboard.\n`,
+        stderr: '',
+        code: 0
+      };
+    }
+
     return { stdout: 'client version: 1.23.0\ncontrol plane version: 1.23.0\ndata plane version: 1.23.0 (2 proxies)\n', stderr: '', code: 0 };
   }
 
@@ -2956,31 +3718,166 @@ class MultiCliDispatcher {
   // 6. OPENTOFU / TERRAFORM HANDLER
   // -------------------------------------------------------------------------
 
-  handleTofu({ argv = [] }) {
+  handleTofu({ argv = [], cwd = '/home/learner', vfs = null }) {
+    const fs = vfs || this.vfs;
     const sub = argv[1];
+    const binName = argv[0] || 'tofu';
+
+    if (!sub || sub === 'version' || sub === '-v' || sub === '--version') {
+      return { stdout: `${binName === 'terraform' ? 'Terraform' : 'OpenTofu'} v1.8.2\non linux_amd64\n+ provider registry.opentofu.org/hashicorp/aws v5.80.0\n`, stderr: '', code: 0 };
+    }
+
     if (sub === 'init') {
-      return { stdout: 'Initializing the backend...\nInitializing provider plugins...\nOpenTofu has been successfully initialized!\n', stderr: '', code: 0 };
+      if (this.cluster && this.cluster.state && this.cluster.state.terraformState) {
+        this.cluster.state.terraformState.initialized = true;
+      }
+      return {
+        stdout: 'Initializing the backend...\nInitializing provider plugins...\n- Finding hashicorp/aws versions matching ">= 5.0"...\n- Installing hashicorp/aws v5.80.0...\n- Installed hashicorp/aws v5.80.0 (signed by HashiCorp)\n\nOpenTofu has been successfully initialized!\n',
+        stderr: '',
+        code: 0
+      };
     }
+
     if (sub === 'plan') {
-      return { stdout: 'Plan: 3 to add, 0 to change, 0 to destroy.\nChanges to Outputs:\n  + cluster_endpoint = "https://192.168.1.10:6443"\n', stderr: '', code: 0 };
+      return {
+        stdout: [
+          'OpenTofu used the selected providers to generate the following execution plan.',
+          'Resource actions are indicated with the following symbols:',
+          '  + create\n',
+          'OpenTofu will perform the following actions:\n',
+          '  # aws_vpc.main will be created',
+          '  + resource "aws_vpc" "main" {',
+          '      + cidr_block           = "10.0.0.0/16"',
+          '      + enable_dns_hostnames = true',
+          '      + enable_dns_support   = true',
+          '      + id                   = (known after apply)',
+          '    }\n',
+          '  # aws_eks_cluster.prod will be created',
+          '  + resource "aws_eks_cluster" "prod" {',
+          '      + arn      = (known after apply)',
+          '      + endpoint = (known after apply)',
+          '      + name     = "kubelabs-eks"',
+          '      + version  = "1.31"',
+          '    }\n',
+          'Plan: 2 to add, 0 to change, 0 to destroy.\n',
+          'Changes to Outputs:',
+          '  + cluster_endpoint = (known after apply)'
+        ].join('\n') + '\n',
+        stderr: '',
+        code: 0
+      };
     }
+
     if (sub === 'apply') {
       if (this.tofu && typeof this.tofu.applyResource === 'function') {
         this.tofu.applyResource('aws_vpc', 'main', 'aws', { cidr_block: '10.0.0.0/16' });
-        this.tofu.applyResource('aws_eks_cluster', 'primary', 'aws', { name: 'kubelabs-eks' }, ['aws_vpc.main']);
-        this.tofu.applyResource('aws_eks_node_group', 'workers', 'aws', { cluster_name: 'kubelabs-eks' }, ['aws_eks_cluster.primary']);
+        this.tofu.applyResource('aws_eks_cluster', 'prod', 'aws', { name: 'kubelabs-eks' }, ['aws_vpc.main']);
       }
-      return { stdout: 'Apply complete! Resources: 3 added, 0 changed, 0 destroyed.\n', stderr: '', code: 0 };
-    }
-    if (sub === 'state') {
-      if (this.tofu && typeof this.tofu.listResources === 'function') {
-        const list = this.tofu.listResources();
-        if (list.length > 0) {
-          return { stdout: list.map((r) => `${r.type}.${r.name}`).join('\n') + '\n', stderr: '', code: 0 };
+      for (const r of ['aws_vpc.main', 'aws_eks_cluster.prod', 'aws_s3_bucket.artifacts']) {
+        if (!this.tofuResources.includes(r)) this.tofuResources.push(r);
+        if (this.cluster && this.cluster.state) {
+          if (this.cluster.state.terraformState) {
+            this.cluster.state.terraformState.initialized = true;
+            if (!this.cluster.state.terraformState.resources.includes(r)) {
+              this.cluster.state.terraformState.resources.push(r);
+            }
+          }
+          if (Array.isArray(this.cluster.state.cloudResources) && !this.cluster.state.cloudResources.some((c) => c.id === r)) {
+            this.cluster.state.cloudResources.push({
+              id: r,
+              provider: 'aws',
+              type: r.split('.')[0],
+              name: r.split('.')[1],
+              status: 'ACTIVE'
+            });
+          }
         }
       }
-      return { stdout: 'module.vpc.aws_vpc.main\nmodule.eks.aws_eks_cluster.primary\nmodule.eks.aws_eks_node_group.workers\n', stderr: '', code: 0 };
+      if (fs) {
+        fs.writeFile(`${cwd}/terraform.tfstate`, JSON.stringify({
+          version: 4,
+          terraform_version: '1.8.2',
+          serial: 2,
+          resources: this.tofuResources.map((res) => ({ mode: 'managed', type: res.split('.')[0], name: res.split('.')[1] })),
+          outputs: this.tofuOutputs
+        }, null, 2));
+      }
+      return {
+        stdout: [
+          'aws_vpc.main: Creating...',
+          'aws_vpc.main: Creation complete after 2s [id=vpc-01a2b3c4d5e]',
+          'aws_eks_cluster.prod: Creating...',
+          'aws_eks_cluster.prod: Creation complete after 5s [id=kubelabs-eks]\n',
+          'Apply complete! Resources: 2 added, 0 changed, 0 destroyed.\n',
+          'Outputs:\n',
+          'cluster_endpoint = "https://78A9C12.gr7.us-east-1.eks.amazonaws.com"',
+          'vpc_id = "vpc-01a2b3c4d5e"'
+        ].join('\n') + '\n',
+        stderr: '',
+        code: 0
+      };
     }
+
+    if (sub === 'destroy') {
+      const count = this.tofuResources.length || 2;
+      this.tofuResources.length = 0;
+      if (this.cluster && this.cluster.state && this.cluster.state.terraformState) {
+        this.cluster.state.terraformState.resources.length = 0;
+      }
+      if (fs && fs.exists(`${cwd}/terraform.tfstate`)) {
+        fs.writeFile(`${cwd}/terraform.tfstate`, JSON.stringify({ version: 4, serial: 3, resources: [] }));
+      }
+      return {
+        stdout: `Destroy complete! Resources: ${count} destroyed.\n`,
+        stderr: '',
+        code: 0
+      };
+    }
+
+    if (sub === 'state') {
+      const action = argv[2] || 'list';
+      if (action === 'list') {
+        const list = this.tofuResources.length > 0 ? this.tofuResources : ['aws_vpc.main', 'aws_eks_cluster.prod'];
+        return { stdout: list.join('\n') + '\n', stderr: '', code: 0 };
+      }
+      if (action === 'show') {
+        const addr = argv[3] || 'aws_vpc.main';
+        const [type, name] = addr.split('.');
+        const hcl = [
+          `# ${addr}:`,
+          `resource "${type || 'aws_vpc'}" "${name || 'main'}" {`,
+          `    arn                  = "arn:aws:ec2:us-east-1:123456789012:vpc/vpc-01a2b3c4d5e"`,
+          `    cidr_block           = "10.0.0.0/16"`,
+          `    enable_dns_hostnames = true`,
+          `    enable_dns_support   = true`,
+          `    id                   = "vpc-01a2b3c4d5e"`,
+          `    instance_tenancy     = "default"`,
+          `}`
+        ].join('\n') + '\n';
+        return { stdout: hcl, stderr: '', code: 0 };
+      }
+      if (action === 'mv') {
+        const src = argv[3];
+        const dst = argv[4];
+        const sIdx = this.tofuResources.indexOf(src);
+        if (sIdx !== -1 && dst) this.tofuResources[sIdx] = dst;
+        return { stdout: `Move "${src}" to "${dst}"\nSuccessfully moved 1 object(s).\n`, stderr: '', code: 0 };
+      }
+    }
+
+    if (sub === 'output') {
+      const isJson = argv.includes('-json');
+      const targetName = argv.find((a, i) => i > 1 && !a.startsWith('-'));
+      if (isJson) {
+        return { stdout: JSON.stringify(this.tofuOutputs, null, 2) + '\n', stderr: '', code: 0 };
+      }
+      if (targetName && this.tofuOutputs[targetName]) {
+        return { stdout: `"${this.tofuOutputs[targetName]}"\n`, stderr: '', code: 0 };
+      }
+      const lines = Object.entries(this.tofuOutputs).map(([k, v]) => `${k} = "${v}"`);
+      return { stdout: lines.join('\n') + '\n', stderr: '', code: 0 };
+    }
+
     return { stdout: 'OpenTofu v1.8.2\n', stderr: '', code: 0 };
   }
 
@@ -3014,6 +3911,17 @@ class MultiCliDispatcher {
           else if (argv[i] === '--region') region = argv[++i];
         }
         const ctxArn = `arn:aws:eks:${region}:123456789012:cluster/${clusterName}`;
+        if (this.cluster && this.cluster.state && Array.isArray(this.cluster.state.cloudResources)) {
+          if (!this.cluster.state.cloudResources.some((c) => c.name === clusterName)) {
+            this.cluster.state.cloudResources.push({
+              id: `aws_eks_cluster.${clusterName}`,
+              provider: 'aws',
+              type: 'eks-cluster',
+              name: clusterName,
+              status: 'ACTIVE'
+            });
+          }
+        }
         if (vfs) {
           try {
             vfs.writeFile(
@@ -3037,6 +3945,17 @@ class MultiCliDispatcher {
           if (argv[i].startsWith('--name=')) clusterName = argv[i].split('=')[1];
           else if (argv[i] === '--name') clusterName = argv[++i];
         }
+        if (this.cluster && this.cluster.state && Array.isArray(this.cluster.state.cloudResources)) {
+          if (!this.cluster.state.cloudResources.some((c) => c.name === clusterName)) {
+            this.cluster.state.cloudResources.push({
+              id: `aws_eks_cluster.${clusterName}`,
+              provider: 'aws',
+              type: 'eks-cluster',
+              name: clusterName,
+              status: 'ACTIVE'
+            });
+          }
+        }
         return {
           stdout: JSON.stringify({
             cluster: {
@@ -3058,6 +3977,56 @@ class MultiCliDispatcher {
         stderr: '',
         code: 0
       };
+    }
+
+    if (svc === 's3') {
+      const action = argv[2];
+      if (action === 'ls') {
+        const target = argv[3];
+        if (!target || target === 's3://' || target === 's3') {
+          const rows = this.simulatedS3.buckets.map((b) => `2026-11-12 10:14:22 ${b}`);
+          return { stdout: rows.join('\n') + '\n', stderr: '', code: 0 };
+        }
+        const bucket = target.replace(/^s3:\/\//, '').split('/')[0];
+        const rows = [];
+        for (const [k, v] of this.simulatedS3.objects.entries()) {
+          if (k.startsWith(`${bucket}/`)) {
+            rows.push(`2026-11-13 12:00:00        ${v.length} ${k.slice(bucket.length + 1)}`);
+          }
+        }
+        if (rows.length === 0) {
+          rows.push(`2026-11-13 12:00:00       1024 state.json`);
+        }
+        return { stdout: rows.join('\n') + '\n', stderr: '', code: 0 };
+      }
+      if (action === 'mb') {
+        const bucket = (argv[3] || 'bucket').replace(/^s3:\/\//, '');
+        if (!this.simulatedS3.buckets.includes(bucket)) this.simulatedS3.buckets.push(bucket);
+        return { stdout: `make_bucket: s3://${bucket}\n`, stderr: '', code: 0 };
+      }
+      if (action === 'rb') {
+        const bucket = (argv[3] || 'bucket').replace(/^s3:\/\//, '');
+        this.simulatedS3.buckets = this.simulatedS3.buckets.filter((b) => b !== bucket);
+        return { stdout: `remove_bucket: s3://${bucket}\n`, stderr: '', code: 0 };
+      }
+      if (action === 'cp') {
+        const src = argv[3];
+        const dst = argv[4];
+        if (!src || !dst) return { stdout: '', stderr: 'Error: s3 cp requires src and dst\n', code: 1 };
+        if (src.startsWith('s3://')) {
+          const key = src.replace(/^s3:\/\//, '');
+          const data = this.simulatedS3.objects.get(key) || 'SIMULATED_S3_DATA';
+          const localPath = dst.startsWith('/') ? dst : `${cwd}/${dst}`.replace(/\/+/g, '/');
+          if (vfs) vfs.writeFile(localPath, data);
+          return { stdout: `download: ${src} to ${dst}\n`, stderr: '', code: 0 };
+        } else {
+          const localPath = src.startsWith('/') ? src : `${cwd}/${src}`.replace(/\/+/g, '/');
+          const data = vfs && vfs.exists(localPath) ? vfs.readFile(localPath) : 'UPLOADED_CONTENT';
+          const key = dst.replace(/^s3:\/\//, '');
+          this.simulatedS3.objects.set(key, data);
+          return { stdout: `upload: ${src} to ${dst}\n`, stderr: '', code: 0 };
+        }
+      }
     }
 
     if (svc === 'iam') {
@@ -3116,40 +4085,71 @@ class MultiCliDispatcher {
 
   handleFlux({ argv = [] }) {
     const sub = argv[1];
+    if (!sub || sub === 'version' || sub === '--version') {
+      return { stdout: 'flux: v2.3.0\n', stderr: '', code: 0 };
+    }
+
+    if (sub === 'check') {
+      const output = [
+        '► checking prerequisites',
+        '✔ Kubernetes 1.31.0 >=1.28.0-0',
+        '✔ prerequisites checks passed',
+        '► checking controllers',
+        '✔ helm-controller: deployment ready',
+        '✔ kustomize-controller: deployment ready',
+        '✔ notification-controller: deployment ready',
+        '✔ source-controller: deployment ready',
+        '✔ all checks passed'
+      ].join('\n') + '\n';
+      return { stdout: output, stderr: '', code: 0 };
+    }
+
     if (sub === 'get') {
-      const resType = argv[2] || 'kustomizations';
-      if (resType.startsWith('kustom')) {
+      const resType = argv[2] || 'all';
+      if (resType.startsWith('kustom') || resType === 'all') {
         const headers = ['NAME', 'REVISION', 'SUSPENDED', 'READY', 'MESSAGE'];
-        const rows = [
-          ['apps', 'main@sha1:e84f291', 'False', 'True', 'Applied revision: main@sha1:e84f291'],
-          ['infrastructure', 'main@sha1:e84f291', 'False', 'True', 'Applied revision: main@sha1:e84f291']
-        ];
-        return { stdout: this._formatTable(headers, rows) + '\n', stderr: '', code: 0 };
+        const rows = this.fluxKustomizations.map((k) => [k.name, k.revision, k.suspended, k.ready, k.message]);
+        if (resType.startsWith('kustom')) return { stdout: this._formatTable(headers, rows) + '\n', stderr: '', code: 0 };
       }
-      if (resType.startsWith('helm')) {
+      if (resType.startsWith('helm') || resType === 'all') {
         const headers = ['NAME', 'REVISION', 'SUSPENDED', 'READY', 'MESSAGE'];
-        const rows = [
-          ['redis-cluster', '6.2.14', 'False', 'True', 'Release reconciliation succeeded'],
-          ['ingress-nginx', '4.10.1', 'False', 'True', 'Release reconciliation succeeded']
-        ];
-        return { stdout: this._formatTable(headers, rows) + '\n', stderr: '', code: 0 };
+        const rows = this.fluxHelmReleases.map((h) => [h.name, h.version, h.suspended, h.ready, h.message]);
+        if (resType.startsWith('helm')) return { stdout: this._formatTable(headers, rows) + '\n', stderr: '', code: 0 };
       }
-      if (resType.startsWith('source')) {
+      if (resType.startsWith('source') || resType === 'all') {
         const headers = ['NAME', 'REVISION', 'SUSPENDED', 'READY', 'MESSAGE'];
-        const rows = [
-          ['podinfo', 'master@sha1:123abc4', 'False', 'True', 'stored artifact for revision']
-        ];
+        const rows = this.fluxSources.map((s) => [s.name, s.revision, 'False', s.ready, s.status]);
         return { stdout: this._formatTable(headers, rows) + '\n', stderr: '', code: 0 };
       }
     }
+
     if (sub === 'reconcile') {
-      const name = argv[3] || argv[2] || 'apps';
+      const kind = argv[2] || 'kustomization';
+      const name = argv[3] || 'apps';
       return {
-        stdout: `► annotating Kustomization ${name} in flux-system namespace\n✔ Kustomization reconciled successfully\n`,
+        stdout: `► annotating ${kind} ${name} in flux-system namespace\n✔ ${kind} reconciled successfully\n`,
         stderr: '',
         code: 0
       };
     }
+
+    if (sub === 'create') {
+      const entity = argv[2];
+      const name = argv[4] || argv[3] || 'app';
+      if (entity === 'source') {
+        this.fluxSources.push({ name, type: 'git', revision: 'main@sha1:e84f291', ready: 'True', status: 'stored artifact' });
+        return { stdout: `✔ GitRepository source created\n`, stderr: '', code: 0 };
+      }
+      if (entity === 'kustomization') {
+        this.fluxKustomizations.push({ name, path: `./k8s/${name}`, revision: 'main@sha1:e84f291', ready: 'True', suspended: 'False', message: 'Applied revision' });
+        return { stdout: `✔ Kustomization created\n`, stderr: '', code: 0 };
+      }
+      if (entity === 'helmrelease') {
+        this.fluxHelmReleases.push({ name, chart: name, version: '1.0.0', ready: 'True', suspended: 'False', message: 'Release reconciliation succeeded' });
+        return { stdout: `✔ HelmRelease created\n`, stderr: '', code: 0 };
+      }
+    }
+
     return { stdout: 'Flux GitOps CLI v2.3.0\n', stderr: '', code: 0 };
   }
 
@@ -3157,9 +4157,14 @@ class MultiCliDispatcher {
     this.veleroBackups = this.veleroBackups || [
       { name: 'daily-backup-2026-11-10', status: 'Completed', errors: 0, warnings: 0, created: '2026-11-10 02:00:00' }
     ];
+    this.veleroRestores = this.veleroRestores || [];
 
     const entity = argv[1];
     const action = argv[2];
+
+    if (!entity || entity === 'version' || entity === '--version') {
+      return { stdout: 'Velero Disaster Recovery CLI v1.14.0\n', stderr: '', code: 0 };
+    }
 
     if (entity === 'backup') {
       if (action === 'create') {
@@ -3200,14 +4205,33 @@ class MultiCliDispatcher {
           if (argv[i].startsWith('--from-backup=')) fromBackup = argv[i].split('=')[1];
           else if (argv[i] === '--from-backup') fromBackup = argv[++i];
         }
-        return { stdout: `Restore request "${fromBackup}-restore-${Math.random().toString(36).slice(2, 7)}" submitted successfully.\n`, stderr: '', code: 0 };
+        const rName = `${fromBackup}-restore-${Math.random().toString(36).slice(2, 7)}`;
+        this.veleroRestores.push({
+          name: rName,
+          backup: fromBackup,
+          status: 'Completed',
+          started: new Date().toISOString(),
+          completed: new Date().toISOString()
+        });
+        return { stdout: `Restore request "${rName}" submitted successfully.\n`, stderr: '', code: 0 };
       }
       if (action === 'get') {
         const headers = ['NAME', 'BACKUP', 'STATUS', 'STARTED', 'COMPLETED'];
-        const rows = [
-          ['daily-backup-restore-1', 'daily-backup-2026-11-10', 'Completed', '2026-11-12 04:00:00', '2026-11-12 04:02:15']
-        ];
+        const rows = this.veleroRestores.length > 0
+          ? this.veleroRestores.map((r) => [r.name, r.backup, r.status, r.started, r.completed])
+          : [['daily-backup-restore-1', 'daily-backup-2026-11-10', 'Completed', '2026-11-12 04:00:00', '2026-11-12 04:02:15']];
         return { stdout: this._formatTable(headers, rows) + '\n', stderr: '', code: 0 };
+      }
+      if (action === 'describe') {
+        const name = argv[3] || 'daily-backup-restore-1';
+        const lines = [
+          `Name:         ${name}`,
+          `Namespace:    velero`,
+          `Status:       Completed`,
+          `Backup:       daily-backup-2026-11-10`,
+          `Items Restored: 142 items`
+        ];
+        return { stdout: lines.join('\n') + '\n', stderr: '', code: 0 };
       }
     }
 
@@ -3255,43 +4279,382 @@ class MultiCliDispatcher {
     return { stdout: 'vcluster: Virtual Kubernetes Clusters CLI v0.19.5\n', stderr: '', code: 0 };
   }
 
-  handleAzure({ argv = [] }) {
+  handleAzure({ argv = [], vfs = null, cwd = '/home/learner' }) {
+    const fs = vfs || this.vfs;
+    const sub = argv[1];
+    if (!sub || sub === '--version' || sub === '-v') {
+      return { stdout: 'azure-cli 2.64.0\nPython 3.11.8\nLinux 6.8.0-generic\n', stderr: '', code: 0 };
+    }
+
+    if (sub === 'account') {
+      return {
+        stdout: JSON.stringify({
+          environmentName: 'AzureCloud',
+          id: 'sub-1234-abcd-5678-ef01',
+          name: 'Enterprise-DevOps-Prod',
+          state: 'Enabled',
+          user: { name: 'learner@kubelabs.local', type: 'user' }
+        }, null, 2) + '\n',
+        stderr: '',
+        code: 0
+      };
+    }
+
+    if (sub === 'group') {
+      return {
+        stdout: JSON.stringify([
+          {
+            id: '/subscriptions/sub-1234/resourceGroups/rg-kubelabs-prod',
+            location: 'eastus',
+            name: 'rg-kubelabs-prod',
+            properties: { provisioningState: 'Succeeded' }
+          }
+        ], null, 2) + '\n',
+        stderr: '',
+        code: 0
+      };
+    }
+
+    if (sub === 'aks') {
+      const action = argv[2];
+      if (action === 'get-credentials') {
+        let name = 'aks-production';
+        for (let i = 3; i < argv.length; i++) {
+          if (argv[i] === '-n' || argv[i] === '--name') name = argv[++i];
+          else if (argv[i].startsWith('--name=')) name = argv[i].split('=')[1];
+        }
+        if (this.cluster && this.cluster.state && Array.isArray(this.cluster.state.cloudResources)) {
+          if (!this.cluster.state.cloudResources.some((c) => c.name === name)) {
+            this.cluster.state.cloudResources.push({
+              id: `azurerm_kubernetes_cluster.${name}`,
+              provider: 'azure',
+              type: 'aks-cluster',
+              name,
+              status: 'Succeeded'
+            });
+          }
+        }
+        if (fs) {
+          try {
+            fs.writeFile('/home/learner/.kube/config', `apiVersion: v1\ncurrent-context: ${name}\nkind: Config\n`);
+          } catch {}
+        }
+        return { stdout: `Merged "${name}" as current context in /home/learner/.kube/config\n`, stderr: '', code: 0 };
+      }
+
+      if (action === 'show') {
+        let name = 'aks-production';
+        for (let i = 3; i < argv.length; i++) {
+          if (argv[i] === '-n' || argv[i] === '--name') name = argv[++i];
+        }
+        if (this.cluster && this.cluster.state && Array.isArray(this.cluster.state.cloudResources)) {
+          if (!this.cluster.state.cloudResources.some((c) => c.name === name)) {
+            this.cluster.state.cloudResources.push({
+              id: `azurerm_kubernetes_cluster.${name}`,
+              provider: 'azure',
+              type: 'aks-cluster',
+              name,
+              status: 'Succeeded'
+            });
+          }
+        }
+        return {
+          stdout: JSON.stringify({
+            name,
+            resourceGroup: 'rg-kubelabs-prod',
+            kubernetesVersion: '1.31.0',
+            powerState: { code: 'Running' },
+            dnsPrefix: `${name}-dns`,
+            fqdn: `${name}-dns-1234.hcp.eastus.azmk8s.io`,
+            provisioningState: 'Succeeded'
+          }, null, 2) + '\n',
+          stderr: '',
+          code: 0
+        };
+      }
+
+      return {
+        stdout: JSON.stringify([
+          {
+            name: 'aks-production',
+            resourceGroup: 'rg-kubelabs-prod',
+            kubernetesVersion: '1.31.0',
+            powerState: { code: 'Running' }
+          }
+        ], null, 2) + '\n',
+        stderr: '',
+        code: 0
+      };
+    }
+
+    if (sub === 'network') {
+      const entity = argv[2];
+      if (entity === 'vnet') {
+        return {
+          stdout: JSON.stringify([
+            {
+              name: 'vnet-kubelabs-eastus',
+              resourceGroup: 'rg-kubelabs-prod',
+              location: 'eastus',
+              addressSpace: { addressPrefixes: ['10.0.0.0/16'] },
+              subnets: [{ name: 'snet-aks-nodes', addressPrefix: '10.0.1.0/24' }]
+            }
+          ], null, 2) + '\n',
+          stderr: '',
+          code: 0
+        };
+      }
+      if (entity === 'nsg') {
+        return {
+          stdout: JSON.stringify([
+            {
+              name: 'nsg-aks-nodes',
+              resourceGroup: 'rg-kubelabs-prod',
+              securityRules: [
+                { name: 'AllowKubeApiServer', access: 'Allow', direction: 'Inbound', priority: 100, destinationPortRange: '6443' }
+              ]
+            }
+          ], null, 2) + '\n',
+          stderr: '',
+          code: 0
+        };
+      }
+    }
+
     return { stdout: 'Azure CLI (az) connected to subscription: Enterprise-DevOps-Prod\n', stderr: '', code: 0 };
   }
 
-  handleGcloud({ argv = [] }) {
+  handleGcloud({ argv = [], vfs = null, cwd = '/home/learner' }) {
+    const fs = vfs || this.vfs;
+    const sub = argv[1];
+    if (!sub || sub === '--version' || sub === '-v') {
+      return { stdout: 'Google Cloud SDK 490.0.0\nbq 2.1.8\ncore 2024.08.23\ngke-gcloud-auth-plugin 0.5.8\ngsutil 5.30\n', stderr: '', code: 0 };
+    }
+
+    if (sub === 'config') {
+      return { stdout: '[core]\naccount = learner@kubelabs.local\nproject = aetherlabs-gke-prod\n', stderr: '', code: 0 };
+    }
+
+    if (sub === 'container' && argv[2] === 'clusters') {
+      const action = argv[3];
+      if (action === 'get-credentials') {
+        const clusterName = argv[4] || 'gke-production';
+        if (this.cluster && this.cluster.state && Array.isArray(this.cluster.state.cloudResources)) {
+          if (!this.cluster.state.cloudResources.some((c) => c.name === clusterName)) {
+            this.cluster.state.cloudResources.push({
+              id: `google_container_cluster.${clusterName}`,
+              provider: 'gcp',
+              type: 'gke-cluster',
+              name: clusterName,
+              status: 'RUNNING'
+            });
+          }
+        }
+        if (fs) {
+          try {
+            fs.writeFile('/home/learner/.kube/config', `apiVersion: v1\ncurrent-context: gke_aetherlabs-gke-prod_us-central1-a_${clusterName}\nkind: Config\n`);
+          } catch {}
+        }
+        return { stdout: `Fetching cluster endpoint and auth data.\nkubeconfig entry generated for ${clusterName}.\n`, stderr: '', code: 0 };
+      }
+
+      if (action === 'describe') {
+        const clusterName = argv[4] || 'gke-production';
+        if (this.cluster && this.cluster.state && Array.isArray(this.cluster.state.cloudResources)) {
+          if (!this.cluster.state.cloudResources.some((c) => c.name === clusterName)) {
+            this.cluster.state.cloudResources.push({
+              id: `google_container_cluster.${clusterName}`,
+              provider: 'gcp',
+              type: 'gke-cluster',
+              name: clusterName,
+              status: 'RUNNING'
+            });
+          }
+        }
+        return {
+          stdout: [
+            `name: ${clusterName}`,
+            `location: us-central1-a`,
+            `status: RUNNING`,
+            `currentMasterVersion: 1.31.0-gke.1000`,
+            `currentNodeVersion: 1.31.0-gke.1000`,
+            `endpoint: 34.120.45.10`,
+            `currentNodeCount: 3`
+          ].join('\n') + '\n',
+          stderr: '',
+          code: 0
+        };
+      }
+
+      const headers = ['NAME', 'LOCATION', 'MASTER_VERSION', 'MASTER_IP', 'MACHINE_TYPE', 'NODE_VERSION', 'NUM_NODES', 'STATUS'];
+      const rows = [
+        ['gke-production', 'us-central1-a', '1.31.0-gke.1000', '34.120.45.10', 'e2-standard-4', '1.31.0-gke.1000', '3', 'RUNNING']
+      ];
+      return { stdout: this._formatTable(headers, rows) + '\n', stderr: '', code: 0 };
+    }
+
+    if (sub === 'compute' && argv[2] === 'instances') {
+      const headers = ['NAME', 'ZONE', 'MACHINE_TYPE', 'PREEMPTIBLE', 'INTERNAL_IP', 'EXTERNAL_IP', 'STATUS'];
+      const rows = [
+        ['gke-node-1', 'us-central1-a', 'e2-standard-4', 'false', '10.128.0.2', '34.68.10.12', 'RUNNING'],
+        ['gke-node-2', 'us-central1-a', 'e2-standard-4', 'false', '10.128.0.3', '34.68.10.13', 'RUNNING']
+      ];
+      return { stdout: this._formatTable(headers, rows) + '\n', stderr: '', code: 0 };
+    }
+
     return { stdout: 'Google Cloud SDK 490.0.0 (project: aetherlabs-gke-prod)\n', stderr: '', code: 0 };
   }
 
   // -------------------------------------------------------------------------
-  // 8. SECURITY & COMPLIANCE TOOLS (TRIVY, FALCO, COSIGN)
+  // 8. SECURITY & COMPLIANCE TOOLS (TRIVY, FALCO, COSIGN, K8SGPT)
   // -------------------------------------------------------------------------
 
-  handleTrivy({ argv = [] }) {
+  handleTrivy({ argv = [], cwd = '/home/learner', vfs = null }) {
+    const fs = vfs || this.vfs;
     const sub = argv[1];
-    const target = argv[2] || 'cluster';
-    const headers = ['LIBRARY', 'VULNERABILITY ID', 'SEVERITY', 'INSTALLED VERSION', 'FIXED VERSION', 'TITLE'];
-    const rows = [
-      ['libssl3', 'CVE-2024-5535', 'MEDIUM', '3.0.13-0ubuntu3.1', '3.0.13-0ubuntu3.4', 'SSL_select_next_proto buffer overflow'],
-      ['glibc', 'CVE-2024-33599', 'LOW', '2.39-0ubuntu8.1', '2.39-0ubuntu8.2', 'nscd netgroup cache crash']
-    ];
-    return {
-      stdout: `Scan Target: ${target}\nTotal: 2 (CRITICAL: 0, HIGH: 0, MEDIUM: 1, LOW: 1)\n\n` + this._formatTable(headers, rows) + '\n',
-      stderr: '',
-      code: 0
-    };
+    if (!sub || sub === '--help' || sub === '-h') {
+      return { stdout: 'Scanner for vulnerabilities in container images, file systems, and Git repositories\n\nUsage:\n  trivy [command]\n', stderr: '', code: 0 };
+    }
+
+    if (sub === 'image') {
+      const target = argv[2] || 'nginx:latest';
+      const isCritical = target.includes('node:14') || target.includes('vulnerable');
+      const headers = ['LIBRARY', 'VULNERABILITY ID', 'SEVERITY', 'INSTALLED VERSION', 'FIXED VERSION', 'TITLE'];
+      const rows = isCritical
+        ? [
+            ['openssl', 'CVE-2023-3817', 'HIGH', '1.1.1u', '1.1.1v', 'excessive time checking DH keys'],
+            ['libssl3', 'CVE-2024-5535', 'CRITICAL', '3.0.13-0ubuntu3.1', '3.0.13-0ubuntu3.4', 'SSL_select_next_proto buffer overflow']
+          ]
+        : [
+            ['libssl3', 'CVE-2024-5535', 'MEDIUM', '3.0.13-0ubuntu3.1', '3.0.13-0ubuntu3.4', 'SSL_select_next_proto buffer overflow'],
+            ['glibc', 'CVE-2024-33599', 'LOW', '2.39-0ubuntu8.1', '2.39-0ubuntu8.2', 'nscd netgroup cache crash']
+          ];
+      return {
+        stdout: `Scan Target: ${target}\nTotal: ${rows.length} (CRITICAL: ${isCritical ? 1 : 0}, HIGH: ${isCritical ? 1 : 0}, MEDIUM: 1, LOW: 1)\n\n` + this._formatTable(headers, rows) + '\n',
+        stderr: '',
+        code: 0
+      };
+    }
+
+    if (sub === 'fs') {
+      const path = argv[2] || '.';
+      const absPath = path.startsWith('/') ? path : `${cwd}/${path}`.replace(/\/+/g, '/');
+      return {
+        stdout: `Scan Target: ${absPath}\nTests: 24 (CRITICAL: 0, HIGH: 0, MEDIUM: 1, LOW: 0)\n\nMEDIUM: Misconfiguration detected in container configuration (runAsNonRoot not set)\n`,
+        stderr: '',
+        code: 0
+      };
+    }
+
+    if (sub === 'k8s') {
+      const target = argv[2] || 'all';
+      return {
+        stdout: `Kubernetes Security Scan: ${target}\n\nSummary:\n- Vulnerabilities: 0\n- Misconfigurations: 1 (HIGH: 0, MEDIUM: 1)\n- RBAC Assessment: 0 issues\n`,
+        stderr: '',
+        code: 0
+      };
+    }
+
+    if (sub === 'config') {
+      const path = argv[2] || '.';
+      return {
+        stdout: `Config Scan: ${path}\nSUCCESS: 0 high-severity policy violations found.\n`,
+        stderr: '',
+        code: 0
+      };
+    }
+
+    return { stdout: 'Trivy security scanner v0.55.0\n', stderr: '', code: 0 };
   }
 
-  handleFalco() {
+  handleFalco({ argv = [] }) {
     return {
-      stdout: 'Falco rule engine active. 0 security anomalies or syscall violations detected.\n',
+      stdout: [
+        'Falco version: 0.38.1 (x86_64)',
+        'Driver: Modern eBPF probe',
+        'Rules file(s): /etc/falco/falco_rules.yaml',
+        'Starting engine...',
+        '0 security violations detected. Cluster audit is clean.'
+      ].join('\n') + '\n',
       stderr: '',
       code: 0
     };
   }
 
   handleCosign({ argv = [] }) {
-    return { stdout: 'Verification for image successful. Signed by OIDC provider.\n', stderr: '', code: 0 };
+    const sub = argv[1];
+    if (sub === 'verify') {
+      const image = argv[argv.length - 1] || 'ghcr.io/kubelabs/app:v1.0.0';
+      return {
+        stdout: [
+          `Verification for [${image}] --`,
+          'The following checks were performed on each of these signatures:',
+          '  - The cosign signature was verified against the supplied public key',
+          '  - Certificate extensions were verified for OIDC issuer: https://accounts.google.com',
+          JSON.stringify([
+            {
+              critical: {
+                identity: { 'docker-reference': image },
+                image: { 'docker-manifest-digest': 'sha256:7b9c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e' },
+                type: 'cosign container image signature'
+              }
+            }
+          ], null, 2)
+        ].join('\n') + '\n',
+        stderr: '',
+        code: 0
+      };
+    }
+    if (sub === 'sign') {
+      const image = argv[argv.length - 1] || 'ghcr.io/kubelabs/app:v1.0.0';
+      return { stdout: `Generating signature for ${image}\nPushing signature to: ${image}.sig\n`, stderr: '', code: 0 };
+    }
+    return { stdout: 'cosign: container signing, verification, and storage v2.4.0\n', stderr: '', code: 0 };
+  }
+
+  handleK8sGPT({ argv = [] }) {
+    const sub = argv[1];
+    if (!sub || sub === 'analyze') {
+      let brokenPod = null;
+      if (this.graph) {
+        const pods = this.graph.list('Pod');
+        brokenPod = pods.find((p) => {
+          const ph = p.status?.phase;
+          const waitReason = p.status?.containerStatuses?.[0]?.state?.waiting?.reason;
+          return ph === 'Failed' || ph === 'CrashLoopBackOff' || waitReason === 'CrashLoopBackOff' || waitReason === 'ImagePullBackOff';
+        });
+      }
+
+      if (brokenPod) {
+        const name = brokenPod.metadata?.name;
+        const ns = brokenPod.metadata?.namespace || 'default';
+        const reason = brokenPod.status?.containerStatuses?.[0]?.state?.waiting?.reason || 'CrashLoopBackOff';
+        return {
+          stdout: [
+            'AI Provider: local (OpenAI/KubeLabs AIOps)',
+            '',
+            `0: Pod/${ns}/${name} (${reason})`,
+            `- Error: Container exited with non-zero exit code or failed to pull image`,
+            `- Explanation: The pod is unable to start properly because of an initialization failure or missing dependency.`,
+            `- Solution: Inspect container logs with \`kubectl logs ${name} -n ${ns}\` or check environment variables.`
+          ].join('\n') + '\n',
+          stderr: '',
+          code: 0
+        };
+      }
+
+      return {
+        stdout: [
+          'AI Provider: local (OpenAI/KubeLabs AIOps)',
+          '',
+          '0 problems detected in cluster. All resources healthy!'
+        ].join('\n') + '\n',
+        stderr: '',
+        code: 0
+      };
+    }
+
+    return { stdout: 'k8sgpt - Giving Kubernetes Superpowers to everyone v0.3.40\n', stderr: '', code: 0 };
   }
 
   // -------------------------------------------------------------------------
@@ -3604,24 +4967,74 @@ class MultiCliDispatcher {
   }
 
   handleLinkerd({ argv = [] }) {
-    return { stdout: 'linkerd-existence\n-----------------\n√ Control plane is running\n√ Data plane proxies are up\nStatus check succeeded\n', stderr: '', code: 0 };
+    const sub = argv[1];
+    if (!sub || sub === 'version' || sub === '--version') {
+      return { stdout: 'Client version: stable-2.15.2\nServer version: stable-2.15.2\n', stderr: '', code: 0 };
+    }
+
+    if (sub === 'check') {
+      const output = [
+        'kubernetes-api',
+        '--------------',
+        '√ can initialize the client',
+        '√ can query the Kubernetes API',
+        '',
+        'linkerd-existence',
+        '-----------------',
+        '√ "linkerd-config" config map exists',
+        '√ control plane controller pods are ready',
+        '√ linkerd-viz extension is ready',
+        '',
+        'Status check succeeded'
+      ].join('\n') + '\n';
+      return { stdout: output, stderr: '', code: 0 };
+    }
+
+    if (sub === 'viz') {
+      const action = argv[2];
+      if (action === 'stat') {
+        const headers = ['NAME', 'MESHED', 'SUCCESS', 'RPS', 'LATENCY_P50', 'LATENCY_P95', 'LATENCY_P99'];
+        const rows = [
+          ['web-frontend', '1/1', '100.00%', '24.2rps', '2ms', '5ms', '12ms'],
+          ['orders-api', '2/2', '99.98%', '112.5rps', '4ms', '10ms', '25ms'],
+          ['payment-vault', '1/1', '100.00%', '15.0rps', '3ms', '8ms', '18ms']
+        ];
+        return { stdout: this._formatTable(headers, rows) + '\n', stderr: '', code: 0 };
+      }
+
+      if (action === 'tap') {
+        const lines = [
+          'req id=0:1 proxy=in src=10.244.1.5:41234 dst=10.244.1.8:8080 :method=GET :authority=orders.prod :path=/api/v1/orders',
+          'rsp id=0:1 proxy=in src=10.244.1.5:41234 dst=10.244.1.8:8080 :status=200 latency=3120µs',
+          'end id=0:1 proxy=in src=10.244.1.5:41234 dst=10.244.1.8:8080 duration=15µs response-length=242B'
+        ];
+        return { stdout: lines.join('\n') + '\n', stderr: '', code: 0 };
+      }
+
+      if (action === 'top') {
+        const headers = ['ROUTE', 'SERVICE', 'SUCCESS', 'RPS', 'LATENCY_P50', 'LATENCY_P99'];
+        const rows = [
+          ['GET /api/v1/orders', 'orders-api', '100.00%', '82.4rps', '3ms', '18ms'],
+          ['POST /api/v1/checkout', 'orders-api', '99.95%', '30.1rps', '6ms', '24ms']
+        ];
+        return { stdout: this._formatTable(headers, rows) + '\n', stderr: '', code: 0 };
+      }
+
+      if (action === 'edges') {
+        const headers = ['SRC', 'DST', 'SRC_NS', 'DST_NS', 'SECURED'];
+        const rows = [
+          ['web-frontend', 'orders-api', 'production', 'production', '√'],
+          ['orders-api', 'payment-vault', 'production', 'production', '√']
+        ];
+        return { stdout: this._formatTable(headers, rows) + '\n', stderr: '', code: 0 };
+      }
+    }
+
+    return { stdout: 'linkerd: Service Mesh CLI v2.15.2\n', stderr: '', code: 0 };
   }
 
   handleAiOps({ argv = [] }) {
-    const sub = argv[1];
-    if (sub === 'analyze') {
-      return {
-        stdout: [
-          '=== AIOPS AUTONOMOUS SRE DIAGNOSIS ===',
-          'Analyzed: 12 metrics time-series, 24 logs, 8 controller loops',
-          'Root Cause: Normal baseline operating state. No OOM, DNS loop, or CrashLoop detected.',
-          'Confidence: 99.4%'
-        ].join('\n') + '\n',
-        stderr: '',
-        code: 0
-      };
-    }
-    return { stdout: 'AIOps Engine v3.0 ready.\n', stderr: '', code: 0 };
+    return this.handleK8sGPT({ argv: ['k8sgpt', ...argv.slice(1)] });
   }
 
   // -------------------------------------------------------------------------
@@ -3774,6 +5187,45 @@ class MultiCliDispatcher {
       stderr: '',
       code: 0
     };
+  }
+
+  handlePromql({ argv = [] }) {
+    let expr = argv.slice(1).join(' ').trim();
+    if (expr.startsWith('query ')) expr = expr.slice(6).trim();
+    else if (expr.startsWith('query_range ')) expr = expr.slice(12).trim();
+    expr = expr.replace(/^["']|["']$/g, '');
+    if (!expr) expr = 'up';
+
+    if (this.promql) {
+      const res = this.promql.query(expr);
+      if (res.status === 'success' && res.data?.result?.length > 0) {
+        const lines = res.data.result.map((r) => {
+          const labels = Object.entries(r.metric || {}).map(([k, v]) => `${k}="${v}"`).join(',');
+          return `{${labels}} => ${r.value[1]} @[${r.value[0]}]`;
+        });
+        return { stdout: lines.join('\n') + '\n', stderr: '', code: 0 };
+      }
+      return { stdout: `promql query result: 0 series matched.\n`, stderr: '', code: 0 };
+    }
+    return { stdout: `up{instance="192.168.1.10:9100",job="node-exporter"} => 1\n`, stderr: '', code: 0 };
+  }
+
+  handleLogql({ argv = [] }) {
+    let expr = argv.slice(1).join(' ').trim().replace(/^["']|["']$/g, '');
+    if (!expr) expr = '{app="default"}';
+    if (this.logql) {
+      const res = this.logql.query(expr);
+      if (res.status === 'success' && res.data?.result?.length > 0) {
+        const lines = [];
+        for (const item of res.data.result) {
+          for (const val of item.values || []) {
+            lines.push(`${new Date(Number(val[0]) / 1000000).toISOString()} ${val[1]}`);
+          }
+        }
+        return { stdout: lines.join('\n') + '\n', stderr: '', code: 0 };
+      }
+    }
+    return { stdout: `${new Date().toISOString()} [info] Application log event stream active\n`, stderr: '', code: 0 };
   }
 
   handleLogcli({ argv = [] }) {

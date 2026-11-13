@@ -264,7 +264,7 @@ function parseYamlDocument(docText) {
               i = nextIdx;
             } else {
               while (i < lines.length && lines[i].isEmpty) i++;
-              if (i < lines.length && lines[i].indent > seqIndent) {
+              if (i < lines.length && (lines[i].indent > seqIndent || (lines[i].indent === seqIndent && (lines[i].trimmed.startsWith('- ') || lines[i].trimmed === '-')))) {
                 const [nestedVal, nextIdx] = parseBlock(i, lines[i].indent);
                 itemMap[key] = nestedVal;
                 if (itemAnchor) anchors[itemAnchor] = nestedVal;
@@ -312,7 +312,7 @@ function parseYamlDocument(docText) {
                   i = nextIdx;
                 } else {
                   while (i < lines.length && lines[i].isEmpty) i++;
-                  if (i < lines.length && lines[i].indent > subLine.indent) {
+                  if (i < lines.length && (lines[i].indent > subLine.indent || (lines[i].indent === subLine.indent && (lines[i].trimmed.startsWith('- ') || lines[i].trimmed === '-')))) {
                     const [subNested, nextIdx] = parseBlock(i, lines[i].indent);
                     itemMap[subKey] = subNested;
                     if (subAnchor) anchors[subAnchor] = subNested;
@@ -395,7 +395,7 @@ function parseYamlDocument(docText) {
         } else {
           // Check next lines for nested block
           while (i < lines.length && lines[i].isEmpty) i++;
-          if (i < lines.length && lines[i].indent > mapIndent) {
+          if (i < lines.length && (lines[i].indent > mapIndent || (lines[i].indent === mapIndent && (lines[i].trimmed.startsWith('- ') || lines[i].trimmed === '-')))) {
             const [nestedVal, nextIdx] = parseBlock(i, lines[i].indent);
             map[key] = nestedVal;
             if (anchorName) anchors[anchorName] = nestedVal;

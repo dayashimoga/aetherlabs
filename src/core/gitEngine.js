@@ -992,3 +992,4 @@ if (typeof globalThis !== 'undefined') {
   globalThis.GitEngine = GitEngine;
   globalThis.sha1 = sha1;
 }
+

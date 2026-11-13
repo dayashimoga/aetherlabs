@@ -690,7 +690,8 @@ class TerminalEngine {
       if (MultiCliDispatcher) {
         this.multiCli = new MultiCliDispatcher({
           graph: this.graph,
-          vfs: this.vfs
+          vfs: this.vfs,
+          cluster: this.cluster
         });
         this.multiCli.registerTo(this.pipelineDriver);
       }
@@ -700,7 +701,8 @@ class TerminalEngine {
     if (!this.multiCli && MultiCliDispatcher) {
       this.multiCli = new MultiCliDispatcher({
         graph: this.graph,
-        vfs: this.vfs
+        vfs: this.vfs,
+        cluster: this.cluster
       });
     }
 
@@ -1064,6 +1066,8 @@ class TerminalEngine {
         return this.handleKubectl(args, options);
       case 'helm':
         return this.handleHelm(args);
+      case 'kustomize':
+        return this.handleKustomize(args);
       case 'docker':
       case 'crictl':
         return this.handleDocker(bin, args, options);
@@ -1086,6 +1090,7 @@ class TerminalEngine {
       case 'falco':
       case 'cosign':
         return this.handleSecurityTools(bin, args);
+      case 'k8sgpt':
       case 'aiops':
         return this.handleAiOps(args);
       case 'etcdctl':
@@ -1105,6 +1110,12 @@ class TerminalEngine {
       case 'linkerd':
       case 'consul':
         return this.handleServiceMeshCli(bin, args);
+      case 'promql':
+      case 'promtool':
+        return this.handlePromql(bin, args);
+      case 'logql':
+      case 'logcli':
+        return this.handleLogql(bin, args);
       case 'opa':
       case 'conftest':
         return this.handleOpa(bin, args);
@@ -2219,7 +2230,35 @@ class TerminalEngine {
     };
   }
 
+  handleKustomize(args) {
+    if (this.multiCli) {
+      const res = this.multiCli.handleKustomize({ argv: ['kustomize', ...args], cwd: this.cwd, vfs: this.vfs });
+      return {
+        exitCode: res.code !== undefined ? res.code : 0,
+        output: (res.stdout || res.stderr || '').replace(/\n$/, ''),
+        stdout: res.stdout || '',
+        stderr: res.stderr || '',
+        ...res
+      };
+    }
+    return { exitCode: 0, output: '{Version:kustomize/v5.4.3}' };
+  }
+
   handleHelm(args) {
+    if (this.multiCli) {
+      const res = this.multiCli.handleHelm({ argv: ['helm', ...args], cwd: this.cwd, vfs: this.vfs });
+      if (this.cluster && this.cluster.state && Array.isArray(this.multiCli.helmReleases)) {
+        this.cluster.state.helmReleases = this.multiCli.helmReleases;
+      }
+      return {
+        exitCode: res.code !== undefined ? res.code : 0,
+        output: (res.stdout || res.stderr || '').replace(/\n$/, ''),
+        stdout: res.stdout || '',
+        stderr: res.stderr || '',
+        ...res
+      };
+    }
+
     const sub = args[0];
     if (sub === 'list' || sub === 'ls') {
       const releases = this.cluster.state.helmReleases;
@@ -2364,6 +2403,20 @@ class TerminalEngine {
   }
 
   handleArgoCD(args) {
+    if (this.multiCli) {
+      const res = this.multiCli.handleArgoCD({ argv: ['argocd', ...args], cwd: this.cwd, vfs: this.vfs });
+      if (this.cluster && this.cluster.state && Array.isArray(this.multiCli.argocdApps)) {
+        this.cluster.state.argoApps = this.multiCli.argocdApps;
+      }
+      return {
+        exitCode: res.code !== undefined ? res.code : 0,
+        output: (res.stdout || res.stderr || '').replace(/\n$/, ''),
+        stdout: res.stdout || '',
+        stderr: res.stderr || '',
+        ...res
+      };
+    }
+
     const sub = args[0];
     const action = args[1];
     const appName = args[2] || 'payments-gitops';
@@ -2436,6 +2489,17 @@ class TerminalEngine {
   }
 
   handleIstioctl(args) {
+    if (this.multiCli) {
+      const res = this.multiCli.handleIstioctl({ argv: ['istioctl', ...args], cwd: this.cwd, vfs: this.vfs });
+      return {
+        exitCode: res.code !== undefined ? res.code : 0,
+        output: (res.stdout || res.stderr || '').replace(/\n$/, ''),
+        stdout: res.stdout || '',
+        stderr: res.stderr || '',
+        ...res
+      };
+    }
+
     const sub = args[0] || 'analyze';
     if (sub === 'analyze') {
       return {
@@ -2457,6 +2521,20 @@ class TerminalEngine {
   }
 
   handleTerraform(bin, args) {
+    if (this.multiCli) {
+      const res = this.multiCli.handleTofu({ argv: [bin, ...args], cwd: this.cwd, vfs: this.vfs });
+      if (this.cluster && this.cluster.state && this.cluster.state.terraformState) {
+        this.cluster.state.terraformState.resources = this.multiCli.tofuResources;
+      }
+      return {
+        exitCode: res.code !== undefined ? res.code : 0,
+        output: (res.stdout || res.stderr || '').replace(/\n$/, ''),
+        stdout: res.stdout || '',
+        stderr: res.stderr || '',
+        ...res
+      };
+    }
+
     const sub = args[0] || 'plan';
     if (sub === 'init') {
       this.cluster.state.terraformState.initialized = true;
@@ -2504,6 +2582,17 @@ class TerminalEngine {
   }
 
   handleAws(args) {
+    if (this.multiCli) {
+      const res = this.multiCli.handleAws({ argv: ['aws', ...args], cwd: this.cwd, vfs: this.vfs });
+      return {
+        exitCode: res.code !== undefined ? res.code : 0,
+        output: (res.stdout || res.stderr || '').replace(/\n$/, ''),
+        stdout: res.stdout || '',
+        stderr: res.stderr || '',
+        ...res
+      };
+    }
+
     const service = args[0];
     const action = args[1];
     if (service === 'eks') {
@@ -2541,6 +2630,17 @@ class TerminalEngine {
   }
 
   handleAzure(args) {
+    if (this.multiCli) {
+      const res = this.multiCli.handleAzure({ argv: ['az', ...args], cwd: this.cwd, vfs: this.vfs });
+      return {
+        exitCode: res.code !== undefined ? res.code : 0,
+        output: (res.stdout || res.stderr || '').replace(/\n$/, ''),
+        stdout: res.stdout || '',
+        stderr: res.stderr || '',
+        ...res
+      };
+    }
+
     const group = args[0];
     if (group === 'aks') {
       const nameIdx = args.indexOf('--name');
@@ -2563,6 +2663,17 @@ class TerminalEngine {
   }
 
   handleGcloud(args) {
+    if (this.multiCli) {
+      const res = this.multiCli.handleGcloud({ argv: ['gcloud', ...args], cwd: this.cwd, vfs: this.vfs });
+      return {
+        exitCode: res.code !== undefined ? res.code : 0,
+        output: (res.stdout || res.stderr || '').replace(/\n$/, ''),
+        stdout: res.stdout || '',
+        stderr: res.stderr || '',
+        ...res
+      };
+    }
+
     if (args[0] === 'container') {
       const name = args[3] || 'kubelabs-gke-autopilot';
       if (!this.cluster.state.cloudResources.some((c) => c.name === name)) {
@@ -2583,6 +2694,22 @@ class TerminalEngine {
   }
 
   handleSecurityTools(bin, args) {
+    if (this.multiCli) {
+      let res;
+      if (bin === 'trivy') res = this.multiCli.handleTrivy({ argv: ['trivy', ...args], cwd: this.cwd, vfs: this.vfs });
+      else if (bin === 'falco') res = this.multiCli.handleFalco({ argv: ['falco', ...args], cwd: this.cwd, vfs: this.vfs });
+      else if (bin === 'cosign') res = this.multiCli.handleCosign({ argv: ['cosign', ...args], cwd: this.cwd, vfs: this.vfs });
+      if (res) {
+        return {
+          exitCode: res.code !== undefined ? res.code : 0,
+          output: (res.stdout || res.stderr || '').replace(/\n$/, ''),
+          stdout: res.stdout || '',
+          stderr: res.stderr || '',
+          ...res
+        };
+      }
+    }
+
     if (bin === 'trivy') {
       const target = args[1] || 'nginx:1.27-alpine';
       return {
@@ -2611,6 +2738,17 @@ class TerminalEngine {
 
   handleAiOps(args) {
     const sub = args[0] || 'analyze';
+    if (sub !== 'remediate' && this.multiCli) {
+      const res = this.multiCli.handleK8sGPT({ argv: ['k8sgpt', ...args], cwd: this.cwd, vfs: this.vfs });
+      return {
+        exitCode: res.code !== undefined ? res.code : 0,
+        output: (res.stdout || res.stderr || '').replace(/\n$/, ''),
+        stdout: res.stdout || '',
+        stderr: res.stderr || '',
+        ...res
+      };
+    }
+
     const pods = this.cluster.getResources('Pod', 'all');
     const brokenPods = pods.filter((p) => p.status && p.status.reason !== 'Running');
     const svcs = this.cluster.getResources('Service', 'all');
@@ -3099,6 +3237,17 @@ class TerminalEngine {
   }
 
   handleVelero(args) {
+    if (this.multiCli) {
+      const res = this.multiCli.handleVelero({ argv: ['velero', ...args], cwd: this.cwd, vfs: this.vfs });
+      return {
+        exitCode: res.code !== undefined ? res.code : 0,
+        output: (res.stdout || res.stderr || '').replace(/\n$/, ''),
+        stdout: res.stdout || '',
+        stderr: res.stderr || '',
+        ...res
+      };
+    }
+
     const sub = args[0] || 'backup';
     if (sub === 'backup') {
       const action = args[1] || 'get';
@@ -3184,6 +3333,17 @@ class TerminalEngine {
   }
 
   handleFlux(args) {
+    if (this.multiCli) {
+      const res = this.multiCli.handleFlux({ argv: ['flux', ...args], cwd: this.cwd, vfs: this.vfs });
+      return {
+        exitCode: res.code !== undefined ? res.code : 0,
+        output: (res.stdout || res.stderr || '').replace(/\n$/, ''),
+        stdout: res.stdout || '',
+        stderr: res.stderr || '',
+        ...res
+      };
+    }
+
     const sub = args[0] || 'get';
     if (sub === 'reconcile') {
       const kind = args[1] || 'kustomization';
@@ -3224,6 +3384,17 @@ class TerminalEngine {
   }
 
   handleServiceMeshCli(bin, args) {
+    if (bin === 'linkerd' && this.multiCli) {
+      const res = this.multiCli.handleLinkerd({ argv: ['linkerd', ...args], cwd: this.cwd, vfs: this.vfs });
+      return {
+        exitCode: res.code !== undefined ? res.code : 0,
+        output: (res.stdout || res.stderr || '').replace(/\n$/, ''),
+        stdout: res.stdout || '',
+        stderr: res.stderr || '',
+        ...res
+      };
+    }
+
     if (bin === 'linkerd') {
       const sub = args[0] || 'check';
       if (sub === 'viz' || sub === 'stat') {
@@ -3258,6 +3429,38 @@ class TerminalEngine {
         'kubelabs-worker-01    10.244.1.10:8301 alive   client  1.19.2  2         dc1  default'
       ].join('\n')
     };
+  }
+
+  handlePromql(bin, args) {
+    if (this.multiCli) {
+      const res = bin === 'promql'
+        ? this.multiCli.handlePromql({ argv: [bin, ...args], cwd: this.cwd, vfs: this.vfs })
+        : this.multiCli.handlePromtool({ argv: [bin, ...args], cwd: this.cwd, vfs: this.vfs });
+      return {
+        exitCode: res.code !== undefined ? res.code : 0,
+        output: (res.stdout || res.stderr || '').replace(/\n$/, ''),
+        stdout: res.stdout || '',
+        stderr: res.stderr || '',
+        ...res
+      };
+    }
+    return { exitCode: 0, output: 'promql metric vector active' };
+  }
+
+  handleLogql(bin, args) {
+    if (this.multiCli) {
+      const res = bin === 'logql'
+        ? this.multiCli.handleLogql({ argv: [bin, ...args], cwd: this.cwd, vfs: this.vfs })
+        : this.multiCli.handleLogcli({ argv: [bin, ...args], cwd: this.cwd, vfs: this.vfs });
+      return {
+        exitCode: res.code !== undefined ? res.code : 0,
+        output: (res.stdout || res.stderr || '').replace(/\n$/, ''),
+        stdout: res.stdout || '',
+        stderr: res.stderr || '',
+        ...res
+      };
+    }
+    return { exitCode: 0, output: 'logql stream active' };
   }
 
   handleOpa(bin, args) {
