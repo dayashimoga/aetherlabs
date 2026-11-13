@@ -36,6 +36,14 @@ try {
   ResourceGraph = (typeof globalThis !== 'undefined' && globalThis.ResourceGraph);
 }
 
+let cliFormatterModule;
+try {
+  cliFormatterModule = require('./cliFormatter');
+} catch {
+  cliFormatterModule = (typeof globalThis !== 'undefined' && globalThis.cliFormatterModule) || {};
+}
+const formatResourceTable = cliFormatterModule.formatResourceTable || function () { return ''; };
+
 function unpackArgs(firstArg, ...rest) {
   if (firstArg && typeof firstArg === 'object' && !Array.isArray(firstArg) && firstArg.argv) {
     return {
@@ -449,6 +457,7 @@ function parseKubeFlags(tokens) {
   let allNamespaces = false;
   let output = 'table';
   let selector = null;
+  let showLabels = false;
   let replicas = null;
   let image = null;
   let port = null;
@@ -476,6 +485,8 @@ function parseKubeFlags(tokens) {
       selector = tokens[++i] || null;
     } else if (t.startsWith('-l=')) {
       selector = t.slice(3);
+    } else if (t === '--show-labels') {
+      showLabels = true;
     } else if (t.startsWith('--replicas=')) {
       replicas = Number(t.split('=')[1]);
     } else if (t === '--replicas') {
@@ -537,6 +548,7 @@ function parseKubeFlags(tokens) {
     allNamespaces,
     output,
     selector,
+    showLabels,
     replicas,
     image,
     port,
@@ -1258,117 +1270,16 @@ class TerminalEngine {
       return { exitCode: 0, output: JSON.stringify(payload, null, 2) };
     }
 
-    if (items.length === 0) {
-      return {
-        exitCode: 0,
-        output: flags.allNamespaces
-          ? 'No resources found'
-          : `No resources found in ${flags.namespace} namespace.`
-      };
-    }
-
-    if (kind === 'Node') {
-      const header = padRight('NAME', 26) + padRight('STATUS', 10) + padRight('ROLES', 16) + padRight('VERSION', 12) + 'INTERNAL-IP';
-      const rows = items.map((n) => {
-        const labels = n.metadata.labels || {};
-        const role = labels['node-role.kubernetes.io/control-plane'] ? 'control-plane' : 'worker';
-        return (
-          padRight(n.metadata.name, 26) +
-          padRight((n.status && n.status.phase) || 'Ready', 10) +
-          padRight(role, 16) +
-          padRight((n.status && n.status.kubeletVersion) || 'v1.32.0', 12) +
-          ((n.status && n.status.internalIP) || '192.168.10.10')
-        );
-      });
-      return { exitCode: 0, output: [header, ...rows].join('\n') };
-    }
-
-    if (kind === 'Pod') {
-      const header =
-        (flags.allNamespaces ? padRight('NAMESPACE', 16) : '') +
-        padRight('NAME', 34) +
-        padRight('READY', 9) +
-        padRight('STATUS', 22) +
-        padRight('RESTARTS', 10) +
-        padRight('IP', 16) +
-        'NODE';
-      const rows = items.map((p) => {
-        const st = p.status || {};
-        const statusDisplay = st.reason && st.reason !== 'Running' ? st.reason : st.phase || 'Running';
-        return (
-          (flags.allNamespaces ? padRight(p.metadata.namespace || 'default', 16) : '') +
-          padRight(p.metadata.name, 34) +
-          padRight(st.ready || '1/1', 9) +
-          padRight(statusDisplay, 22) +
-          padRight(st.restarts || 0, 10) +
-          padRight(st.podIP || '<none>', 16) +
-          (st.nodeName || 'kubelabs-worker-01')
-        );
-      });
-      return { exitCode: 0, output: [header, ...rows].join('\n') };
-    }
-
-    if (kind === 'Deployment' || kind === 'StatefulSet' || kind === 'Rollout') {
-      const header =
-        (flags.allNamespaces ? padRight('NAMESPACE', 16) : '') +
-        padRight('NAME', 28) +
-        padRight('READY', 12) +
-        padRight('UP-TO-DATE', 14) +
-        'AVAILABLE';
-      const rows = items.map((d) => {
-        const desired = d.spec && d.spec.replicas !== undefined ? d.spec.replicas : 1;
-        const ready = d.status && d.status.readyReplicas !== undefined ? d.status.readyReplicas : desired;
-        return (
-          (flags.allNamespaces ? padRight(d.metadata.namespace || 'default', 16) : '') +
-          padRight(d.metadata.name, 28) +
-          padRight(`${ready}/${desired}`, 12) +
-          padRight(desired, 14) +
-          ready
-        );
-      });
-      return { exitCode: 0, output: [header, ...rows].join('\n') };
-    }
-
-    if (kind === 'Service') {
-      const header =
-        (flags.allNamespaces ? padRight('NAMESPACE', 16) : '') +
-        padRight('NAME', 26) +
-        padRight('TYPE', 16) +
-        padRight('CLUSTER-IP', 18) +
-        padRight('PORT(S)', 16) +
-        'ENDPOINTS';
-      const rows = items.map((s) => {
-        const ports = ((s.spec && s.spec.ports) || [{ port: 80, targetPort: 80 }])
-          .map((p) => `${p.port}:${p.targetPort || p.port}/TCP`)
-          .join(',');
-        const eps = (s.status && s.status.endpoints) || [];
-        return (
-          (flags.allNamespaces ? padRight(s.metadata.namespace || 'default', 16) : '') +
-          padRight(s.metadata.name, 26) +
-          padRight((s.spec && s.spec.type) || 'ClusterIP', 16) +
-          padRight((s.status && s.status.clusterIP) || '10.96.0.10', 18) +
-          padRight(ports, 16) +
-          (eps.length > 0 ? eps.join(',') : '<none>')
-        );
-      });
-      return { exitCode: 0, output: [header, ...rows].join('\n') };
-    }
-
-    // Generic resource table
-    const header =
-      (flags.allNamespaces ? padRight('NAMESPACE', 16) : '') +
-      padRight('KIND', 24) +
-      padRight('NAME', 32) +
-      'STATUS';
-    const rows = items.map((r) => {
-      return (
-        (flags.allNamespaces ? padRight(r.metadata.namespace || '-', 16) : '') +
-        padRight(r.kind, 24) +
-        padRight(r.metadata.name, 32) +
-        'Active'
-      );
+    const output = formatResourceTable(kind, items, {
+      allNamespaces: flags.allNamespaces,
+      wide: flags.output === 'wide',
+      output: flags.output,
+      showLabels: flags.showLabels,
+      selector: flags.selector,
+      namespace: flags.namespace
     });
-    return { exitCode: 0, output: [header, ...rows].join('\n') };
+
+    return { exitCode: 0, output };
   }
 
   kubectlDescribe(subArgs, flags) {
