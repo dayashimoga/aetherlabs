@@ -34,6 +34,17 @@ try {
   NetworkingEngine = (typeof globalThis !== 'undefined' && globalThis.NetworkingEngine);
 }
 
+let StorageCSIEngine;
+let SecurityPolicyEngine;
+try {
+  const mod = require('./storageAndSecurityEngine');
+  StorageCSIEngine = mod.StorageCSIEngine;
+  SecurityPolicyEngine = mod.SecurityPolicyEngine;
+} catch {
+  StorageCSIEngine = (typeof globalThis !== 'undefined' && globalThis.StorageCSIEngine);
+  SecurityPolicyEngine = (typeof globalThis !== 'undefined' && globalThis.SecurityPolicyEngine);
+}
+
 let VirtualFileSystem;
 try {
   VirtualFileSystem = require('./virtualFileSystem').VirtualFileSystem;
@@ -157,6 +168,8 @@ class MultiCliDispatcher {
     this.vfs = options.vfs || (VirtualFileSystem ? new VirtualFileSystem() : null);
     this.scheduler = options.scheduler || (SchedulerEngine && this.graph ? new SchedulerEngine(this.graph) : null);
     this.networking = options.networking || (NetworkingEngine && this.graph ? new NetworkingEngine(this.graph) : null);
+    this.csi = options.csi || (StorageCSIEngine && this.graph ? new StorageCSIEngine(this.graph) : null);
+    this.security = options.security || (SecurityPolicyEngine && this.graph ? new SecurityPolicyEngine(this.graph) : null);
 
     // Initialize Cloud Extensions
     const HelmReleaseManager = cloudExtensions.HelmReleaseManager;
@@ -741,8 +754,10 @@ class MultiCliDispatcher {
     }
 
     // Trigger reconciliation
-    if (!dryRun && this.controllerManager) {
-      this.controllerManager.reconcile();
+    if (!dryRun) {
+      if (this.controllerManager) this.controllerManager.reconcile();
+      if (this.csi && typeof this.csi.reconcileStorage === 'function') this.csi.reconcileStorage();
+      if (this.networking && typeof this.networking.syncServicesAndEndpoints === 'function') this.networking.syncServicesAndEndpoints();
     }
 
     return { stdout: outputLines.join('\n') + '\n', stderr: '', code: 0 };
@@ -1049,16 +1064,47 @@ class MultiCliDispatcher {
 
   _kubectlAuth({ restArgs, namespace }) {
     if (restArgs[0] === 'can-i') {
-      const verb = restArgs[1];
-      const resource = restArgs[2];
+      let verb = null;
+      let resource = null;
+      let user = 'kubernetes-admin';
+      const groups = [];
+
+      for (let i = 1; i < restArgs.length; i++) {
+        const arg = restArgs[i];
+        if (arg.startsWith('--as=')) {
+          user = arg.slice(5);
+        } else if (arg === '--as' && i + 1 < restArgs.length) {
+          user = restArgs[++i];
+        } else if (arg.startsWith('--as-group=')) {
+          groups.push(arg.slice(11));
+        } else if (arg === '--as-group' && i + 1 < restArgs.length) {
+          groups.push(restArgs[++i]);
+        } else if (!arg.startsWith('-')) {
+          if (!verb) verb = arg;
+          else if (!resource) resource = arg;
+        }
+      }
+
+      if (this.security && typeof this.security.can === 'function') {
+        const authRes = this.security.can({
+          user,
+          groups,
+          verb: verb || 'get',
+          resource: resource || 'pods',
+          namespace: namespace || 'default'
+        });
+        return { stdout: authRes.allowed ? 'yes\n' : 'no\n', stderr: '', code: authRes.allowed ? 0 : 1 };
+      }
+
       if (this.controllerManager && typeof this.controllerManager.can === 'function') {
         const allowed = this.controllerManager.can({
-          verb,
-          resource,
-          namespace
+          verb: verb || 'get',
+          resource: resource || 'pods',
+          namespace: namespace || 'default'
         });
-        return { stdout: allowed ? 'yes\n' : 'no\n', stderr: '', code: 0 };
+        return { stdout: allowed ? 'yes\n' : 'no\n', stderr: '', code: allowed ? 0 : 1 };
       }
+
       return { stdout: 'yes\n', stderr: '', code: 0 };
     }
     return { stdout: '', stderr: 'error: unknown auth command\n', code: 1 };

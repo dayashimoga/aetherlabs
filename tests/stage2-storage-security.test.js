@@ -561,3 +561,98 @@ test('Subphase 2.2.3: SecurityPolicyEngine OPA Gatekeeper constraints and Kyvern
   assert.match(kyvernoFail.violations[0].message, /runAsNonRoot: true/);
 });
 
+test('Subphase 2.2.3: CLI kubectl auth can-i evaluation with --as and --as-group', () => {
+  const { MultiCliDispatcher } = require('../src/core/multiCliDispatcher');
+  const graph = new ResourceGraph();
+
+  // Create Role and RoleBinding for dev-alice in staging
+  graph.set({
+    apiVersion: 'rbac.authorization.k8s.io/v1',
+    kind: 'Role',
+    metadata: { name: 'secret-reader', namespace: 'staging' },
+    rules: [{ verbs: ['get', 'list'], resources: ['secrets'] }]
+  });
+  graph.set({
+    apiVersion: 'rbac.authorization.k8s.io/v1',
+    kind: 'RoleBinding',
+    metadata: { name: 'alice-secret-binding', namespace: 'staging' },
+    subjects: [{ kind: 'User', name: 'dev-alice' }],
+    roleRef: { kind: 'Role', name: 'secret-reader' }
+  });
+
+  // ClusterRole for ops-team
+  graph.set({
+    apiVersion: 'rbac.authorization.k8s.io/v1',
+    kind: 'ClusterRole',
+    metadata: { name: 'node-manager' },
+    rules: [{ verbs: ['get', 'list', 'update'], resources: ['nodes'] }]
+  });
+  graph.set({
+    apiVersion: 'rbac.authorization.k8s.io/v1',
+    kind: 'ClusterRoleBinding',
+    metadata: { name: 'ops-node-binding' },
+    subjects: [{ kind: 'Group', name: 'ops-admins' }],
+    roleRef: { kind: 'ClusterRole', name: 'node-manager' }
+  });
+
+  const dispatcher = new MultiCliDispatcher({ graph });
+
+  // 1. dev-alice can get secrets in staging
+  const res1 = dispatcher.handleKubectl({
+    argv: ['kubectl', 'auth', 'can-i', 'get', 'secrets', '--as=dev-alice', '-n', 'staging']
+  });
+  assert.equal(res1.code, 0);
+  assert.equal(res1.stdout.trim(), 'yes');
+
+  // 2. dev-alice cannot delete secrets in staging
+  const res2 = dispatcher.handleKubectl({
+    argv: ['kubectl', 'auth', 'can-i', 'delete', 'secrets', '--as=dev-alice', '-n', 'staging']
+  });
+  assert.equal(res2.code, 1);
+  assert.equal(res2.stdout.trim(), 'no');
+
+  // 3. User with ops-admins group can update nodes
+  const res3 = dispatcher.handleKubectl({
+    argv: ['kubectl', 'auth', 'can-i', 'update', 'nodes', '--as-group=ops-admins']
+  });
+  assert.equal(res3.code, 0);
+  assert.equal(res3.stdout.trim(), 'yes');
+});
+
+test('Subphase 2.2.3: Dynamic PVC reconciliation via kubectl apply in MultiCliDispatcher', () => {
+  const { MultiCliDispatcher } = require('../src/core/multiCliDispatcher');
+  const graph = new ResourceGraph();
+  const dispatcher = new MultiCliDispatcher({ graph });
+
+  const manifest = `apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: dynamic-claim
+  namespace: default
+spec:
+  storageClassName: gp3-immediate
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 30Gi`;
+
+  const applyRes = dispatcher.handleKubectl({
+    argv: ['kubectl', 'apply', '-f', '-'],
+    stdin: manifest
+  });
+  assert.equal(applyRes.code, 0);
+  assert.ok(applyRes.stdout.includes('persistentvolumeclaim/dynamic-claim created'));
+
+  // Verify StorageCSIEngine dynamically bound the claim
+  const pvc = graph.get('PersistentVolumeClaim', 'default', 'dynamic-claim');
+  assert.ok(pvc);
+  assert.equal(pvc.status?.phase, 'Bound');
+  assert.ok(pvc.spec?.volumeName);
+
+  const pv = graph.get('PersistentVolume', null, pvc.spec.volumeName);
+  assert.ok(pv);
+  assert.equal(pv.status?.phase, 'Bound');
+  assert.equal(pv.spec?.capacity?.storage, '30Gi');
+});
+
