@@ -593,28 +593,159 @@
     }
   }
 
-  function handleTabCompletion(input) {
-    const val = input.value;
-    const tokens = val.split(' ');
-    const lastToken = tokens[tokens.length - 1].toLowerCase();
-    if (!lastToken) return;
+  function computeTabCompletion(line, pos = line.length) {
+    if (state.offlineEngine && typeof state.offlineEngine.autocomplete === 'function') {
+      try {
+        const res = state.offlineEngine.autocomplete(line, pos);
+        if (res && res.completions && res.completions.length > 0) return res;
+      } catch {}
+    }
 
-    const suggestions = [
-      'kubectl', 'get', 'describe', 'apply', 'create', 'delete', 'scale', 'patch', 'label', 'annotate',
-      'pods', 'services', 'deployments', 'nodes', 'namespaces', 'configmaps', 'secrets', 'networkpolicies',
-      'vcluster', 'kyverno', 'velero', 'etcdctl', 'kubeadm', 'aiops', 'argocd', 'istioctl', 'helm'
-    ];
+    // Client-side context-sensitive autocompletion against state.lastClusterState
+    const textBefore = line.slice(0, pos);
+    const textAfter = line.slice(pos);
+    const isTrailingSpace = textBefore.endsWith(' ');
+    const rawTokens = textBefore.trimStart().split(/\s+/);
+    const currentToken = isTrailingSpace ? '' : (rawTokens[rawTokens.length - 1] || '');
 
-    if (state.lastClusterState && Array.isArray(state.lastClusterState.resources)) {
-      for (const r of state.lastClusterState.resources) {
-        if (r.metadata && r.metadata.name) suggestions.push(r.metadata.name);
+    const calcLCP = (arr) => {
+      if (!arr || arr.length === 0) return '';
+      if (arr.length === 1) return arr[0];
+      let p = arr[0];
+      for (let i = 1; i < arr.length; i++) {
+        while (!arr[i].startsWith(p)) {
+          p = p.slice(0, -1);
+          if (!p) return '';
+        }
+      }
+      return p;
+    };
+
+    const makeResult = (prefix, matches, isComplete = false) => {
+      const sorted = Array.from(new Set(matches)).sort();
+      let newLine = line;
+      let newCursor = pos;
+      if (sorted.length === 1) {
+        const match = sorted[0];
+        const tokenReplacement = match + (isComplete ? ' ' : '');
+        const beforeToken = textBefore.slice(0, textBefore.length - prefix.length);
+        newLine = beforeToken + tokenReplacement + textAfter;
+        newCursor = beforeToken.length + tokenReplacement.length;
+      } else if (sorted.length > 1) {
+        const common = calcLCP(sorted);
+        if (common.length > prefix.length) {
+          const beforeToken = textBefore.slice(0, textBefore.length - prefix.length);
+          newLine = beforeToken + common + textAfter;
+          newCursor = beforeToken.length + common.length;
+        }
+      }
+      return { prefix, completions: sorted, line: newLine, cursor: newCursor };
+    };
+
+    if (rawTokens.length <= 1 && !isTrailingSpace) {
+      const cmds = ['kubectl', 'k', 'helm', 'docker', 'argocd', 'istioctl', 'tofu', 'terraform', 'aws', 'az', 'gcloud', 'trivy', 'aiops', 'etcdctl', 'cat', 'ls', 'grep', 'clear'];
+      return makeResult(currentToken, cmds.filter(c => c.startsWith(currentToken)), true);
+    }
+
+    const bin = rawTokens[0];
+    let specifiedNs = null;
+    const positional = [];
+    const prevTok = rawTokens[rawTokens.length - (currentToken ? 2 : 1)] || '';
+
+    for (let i = 0; i < rawTokens.length; i++) {
+      const tok = rawTokens[i];
+      if (tok === '-n' || tok === '--namespace') {
+        if (i + 1 < rawTokens.length) { specifiedNs = rawTokens[i + 1]; i++; }
+      } else if (tok.startsWith('--namespace=')) {
+        specifiedNs = tok.slice(12);
+      } else if (!tok.startsWith('-') || tok === '--') {
+        positional.push(tok);
       }
     }
 
-    const match = suggestions.find((s) => s.toLowerCase().startsWith(lastToken) && s.toLowerCase() !== lastToken);
-    if (match) {
-      tokens[tokens.length - 1] = match;
-      input.value = tokens.join(' ') + ' ';
+    // Flags
+    if (currentToken.startsWith('-') && !currentToken.startsWith('--namespace=') && !currentToken.startsWith('--output=')) {
+      const flags = ['-n', '--namespace', '-A', '--all-namespaces', '-o', '--output', '-l', '--selector', '-f', '--filename', '-w', '--watch'];
+      return makeResult(currentToken, flags.filter(f => f.startsWith(currentToken)), true);
+    }
+
+    // Namespaces
+    if (prevTok === '-n' || prevTok === '--namespace' || currentToken.startsWith('--namespace=')) {
+      const prefix = currentToken.startsWith('--namespace=') ? currentToken.slice(12) : currentToken;
+      const namespaces = new Set(['default', 'kube-system', 'production', 'monitoring', 'argocd', 'istio-system', 'security']);
+      if (state.lastClusterState && Array.isArray(state.lastClusterState.resources)) {
+        for (const r of state.lastClusterState.resources) {
+          if (r.kind === 'Namespace' && r.metadata && r.metadata.name) namespaces.add(r.metadata.name);
+          if (r.metadata && r.metadata.namespace) namespaces.add(r.metadata.namespace);
+        }
+      }
+      let matches = Array.from(namespaces).filter(n => n.startsWith(prefix));
+      if (currentToken.startsWith('--namespace=')) {
+        matches = matches.map(m => `--namespace=${m}`);
+      }
+      return makeResult(currentToken, matches, true);
+    }
+
+    if (bin === 'kubectl' || bin === 'k') {
+      const verb = positional[1];
+      if (!verb || (positional.length === 2 && !isTrailingSpace)) {
+        const verbs = ['get', 'describe', 'apply', 'create', 'delete', 'edit', 'patch', 'scale', 'rollout', 'logs', 'exec', 'top', 'cordon', 'uncordon', 'drain', 'taint', 'run'];
+        return makeResult(currentToken, verbs.filter(v => v.startsWith(currentToken)), true);
+      }
+
+      // Kinds vs Dynamic Resources
+      const isCompletingKind = (positional.length === 2 && isTrailingSpace) || (positional.length === 3 && !isTrailingSpace);
+      if (['get', 'describe', 'delete', 'edit'].includes(verb) && isCompletingKind && !currentToken.includes('/')) {
+        const kinds = ['pods', 'deployments', 'services', 'nodes', 'namespaces', 'configmaps', 'secrets', 'networkpolicies', 'ingresses', 'statefulsets', 'daemonsets', 'jobs', 'cronjobs'];
+        return makeResult(currentToken, kinds.filter(k => k.startsWith(currentToken)), true);
+      }
+
+      // Resource introspection from state.lastClusterState
+      if (state.lastClusterState && Array.isArray(state.lastClusterState.resources)) {
+        let targetKind = null;
+        let namePrefix = currentToken;
+
+        if (currentToken.includes('/')) {
+          const slash = currentToken.indexOf('/');
+          targetKind = currentToken.slice(0, slash);
+          namePrefix = currentToken.slice(slash + 1);
+        } else if (verb === 'logs' || verb === 'exec') {
+          targetKind = 'pod';
+        } else if (verb === 'cordon' || verb === 'uncordon' || verb === 'drain') {
+          targetKind = 'node';
+        } else if (positional.length >= 3) {
+          targetKind = positional[2];
+        }
+
+        if (targetKind) {
+          const normTarget = (targetKind.charAt(0).toUpperCase() + targetKind.slice(1).toLowerCase()).replace(/s$/, '');
+          const matches = [];
+          for (const r of state.lastClusterState.resources) {
+            if (!r || !r.metadata || !r.metadata.name) continue;
+            const rKind = (r.kind || '').toLowerCase().replace(/s$/, '');
+            if (rKind !== normTarget.toLowerCase()) continue;
+            if (specifiedNs && r.metadata.namespace && r.metadata.namespace !== specifiedNs) continue;
+            if (r.metadata.name.startsWith(namePrefix)) {
+              matches.push(currentToken.includes('/') ? `${targetKind}/${r.metadata.name}` : r.metadata.name);
+            }
+          }
+          if (matches.length > 0) {
+            return makeResult(currentToken, matches, true);
+          }
+        }
+      }
+    }
+
+    return makeResult(currentToken, []);
+  }
+
+  function handleTabCompletion(input) {
+    const res = computeTabCompletion(input.value, input.selectionStart || input.value.length);
+    if (res && res.line) {
+      input.value = res.line;
+      if (typeof res.cursor === 'number' && typeof input.setSelectionRange === 'function') {
+        input.setSelectionRange(res.cursor, res.cursor);
+      }
     }
   }
 
@@ -1240,9 +1371,7 @@
           renderClusterTopology(clusterState);
         },
         onTabComplete: (line, pos) => {
-          const inputProxy = { value: line };
-          handleTabCompletion(inputProxy);
-          return inputProxy.value;
+          return computeTabCompletion(line, pos);
         }
       });
 

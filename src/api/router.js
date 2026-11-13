@@ -549,6 +549,14 @@ class ApiRouter {
       });
     }
 
+    if (method === 'POST' && pathname === '/api/terminal/autocomplete') {
+      const body = await readJsonBody(req);
+      const line = String(body.line || '');
+      const cursor = typeof body.cursor === 'number' ? body.cursor : line.length;
+      const result = session.terminal.autocomplete(line, cursor);
+      return sendJson(res, 200, result);
+    }
+
     if (method === 'GET' && pathname === '/api/cluster/state') {
       return sendJson(res, 200, { clusterState: session.cluster.exportSnapshot() });
     }

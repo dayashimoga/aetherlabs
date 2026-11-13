@@ -617,6 +617,17 @@ class TerminalEngine {
       } catch {}
     }
 
+    // Sync initial cluster resources into graph if graph is active
+    if (this.cluster && this.cluster.state && Array.isArray(this.cluster.state.resources) && this.graph) {
+      for (const res of this.cluster.state.resources) {
+        try {
+          if (typeof this.graph.set === 'function') {
+            this.graph.set(res, { skipReconcileNotification: true });
+          }
+        } catch {}
+      }
+    }
+
     this.cwd = '/home/learner';
     this.env = {
       PATH: '/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin',
@@ -3061,80 +3072,454 @@ class TerminalEngine {
   }
 
   // -------------------------------------------------------------------------
-  // AUTOCOMPLETE ENGINE
+  // AUTOCOMPLETE ENGINE & RESOURCE INTROSPECTION HELPERS
   // -------------------------------------------------------------------------
+
+  _getResourcesForKind(kind, namespace = null) {
+    const norm = normalizeKind(kind);
+    const names = new Set();
+    const results = [];
+
+    const addResource = (r) => {
+      if (!r || !r.metadata || !r.metadata.name) return;
+      const rKind = r.kind ? normalizeKind(r.kind) : norm;
+      if (norm && rKind !== norm) return;
+      if (namespace && namespace !== '*' && r.metadata.namespace && r.metadata.namespace !== namespace) {
+        return;
+      }
+      if (!names.has(r.metadata.name)) {
+        names.add(r.metadata.name);
+        results.push(r);
+      }
+    };
+
+    if (this.graph && typeof this.graph.list === 'function') {
+      try {
+        const query = { kind: norm };
+        if (namespace && namespace !== '*') query.namespace = namespace;
+        const list = this.graph.list(query);
+        for (const item of (list || [])) addResource(item);
+      } catch {}
+    }
+
+    if (this.cluster) {
+      if (typeof this.cluster.getResources === 'function') {
+        try {
+          const nsQuery = (!namespace || namespace === '*') ? 'all' : namespace;
+          const list = this.cluster.getResources(norm, nsQuery);
+          for (const item of (list || [])) addResource(item);
+        } catch {}
+      }
+      if (this.cluster.state && Array.isArray(this.cluster.state.resources)) {
+        for (const item of this.cluster.state.resources) {
+          if (item && item.kind && normalizeKind(item.kind) === norm) {
+            addResource(item);
+          }
+        }
+      }
+    }
+
+    return results;
+  }
+
+  _getNamespaces() {
+    const list = this._getResourcesForKind('Namespace');
+    const names = new Set(list.map((n) => n.metadata.name));
+    for (const d of ['default', 'kube-system', 'production', 'monitoring', 'argocd', 'istio-system', 'security']) {
+      names.add(d);
+    }
+    return Array.from(names).sort();
+  }
+
+  _isKindSlashSyntax(token) {
+    if (!token || !token.includes('/')) return false;
+    const part = token.split('/')[0].toLowerCase();
+    const knownKinds = new Set([
+      'pod', 'pods', 'po', 'deploy', 'deployment', 'deployments',
+      'svc', 'service', 'services', 'node', 'nodes', 'no',
+      'ns', 'namespace', 'namespaces', 'cm', 'configmap', 'configmaps',
+      'sec', 'secret', 'secrets', 'netpol', 'networkpolicy', 'networkpolicies',
+      'ing', 'ingress', 'ingresses', 'pvc', 'pv', 'sts', 'ds', 'job', 'cronjob',
+      'sa', 'serviceaccount', 'serviceaccounts'
+    ]);
+    return knownKinds.has(part);
+  }
+
+  _completeKindSlash(token, targetNs, makeResult) {
+    const slashIdx = token.indexOf('/');
+    const kindPart = token.slice(0, slashIdx);
+    const namePrefix = token.slice(slashIdx + 1);
+    const resources = this._getResourcesForKind(kindPart, targetNs);
+    const names = resources.map((r) => r.metadata.name).filter((n) => n.startsWith(namePrefix));
+    const completions = names.map((n) => `${kindPart}/${n}`);
+    return makeResult(token, completions, true);
+  }
+
+  _getContainerNames() {
+    const names = new Set();
+    if (this.cluster && this.cluster.state && Array.isArray(this.cluster.state.containers)) {
+      for (const c of this.cluster.state.containers) {
+        if (c.name) names.add(c.name);
+      }
+    }
+    const pods = this._getResourcesForKind('Pod');
+    for (const p of pods) {
+      const containers = p.spec && Array.isArray(p.spec.containers) ? p.spec.containers : [];
+      for (const c of containers) {
+        if (c.name) names.add(c.name);
+      }
+    }
+    return Array.from(names).sort();
+  }
+
+  _getHelmReleaseNames() {
+    if (this.cluster && this.cluster.state && Array.isArray(this.cluster.state.helmReleases)) {
+      return this.cluster.state.helmReleases.map((r) => r.name).filter(Boolean);
+    }
+    return [];
+  }
+
+  _getArgoAppNames() {
+    if (this.cluster && this.cluster.state && Array.isArray(this.cluster.state.argoApps)) {
+      return this.cluster.state.argoApps.map((a) => a.name).filter(Boolean);
+    }
+    return [];
+  }
 
   /**
    * Intelligently autocompletes the user's input line
+   * Introspects live ResourceGraph and VirtualCluster for dynamic pod names, namespaces, deployments, services, nodes.
    * @param {string} line Current line buffer
    * @param {number} cursor Optional cursor index
-   * @returns {{ prefix: string, completions: string[], replacement: string }}
+   * @returns {{ prefix: string, completions: string[], replacement?: string, line: string, cursor: number }}
    */
   autocomplete(line, cursor = line.length) {
     const textBeforeCursor = line.slice(0, cursor);
-    const tokens = textBeforeCursor.trimStart().split(/\s+/);
-    const currentToken = textBeforeCursor.endsWith(' ') ? '' : (tokens[tokens.length - 1] || '');
+    const textAfterCursor = line.slice(cursor);
+    const rawTokens = textBeforeCursor.trimStart().split(/\s+/);
+    const isTrailingSpace = textBeforeCursor.endsWith(' ');
+    const currentToken = isTrailingSpace ? '' : (rawTokens[rawTokens.length - 1] || '');
+
+    const calcLCP = (arr) => {
+      if (!arr || arr.length === 0) return '';
+      if (arr.length === 1) return arr[0];
+      let p = arr[0];
+      for (let i = 1; i < arr.length; i++) {
+        while (!arr[i].startsWith(p)) {
+          p = p.slice(0, -1);
+          if (!p) return '';
+        }
+      }
+      return p;
+    };
+
+    const makeResult = (prefix, matches, isComplete = false) => {
+      const sorted = Array.from(new Set(matches)).sort();
+      let newLine = line;
+      let newCursor = cursor;
+
+      if (sorted.length === 1) {
+        const match = sorted[0];
+        const tokenReplacement = match + (isComplete ? ' ' : '');
+        const beforeToken = textBeforeCursor.slice(0, textBeforeCursor.length - prefix.length);
+        newLine = beforeToken + tokenReplacement + textAfterCursor;
+        newCursor = beforeToken.length + tokenReplacement.length;
+      } else if (sorted.length > 1) {
+        const common = calcLCP(sorted);
+        if (common.length > prefix.length) {
+          const beforeToken = textBeforeCursor.slice(0, textBeforeCursor.length - prefix.length);
+          newLine = beforeToken + common + textAfterCursor;
+          newCursor = beforeToken.length + common.length;
+        }
+      }
+
+      return {
+        prefix,
+        completions: sorted,
+        line: newLine,
+        cursor: newCursor
+      };
+    };
 
     // 1. Completing First Command Token
-    if (tokens.length <= 1 && !textBeforeCursor.endsWith(' ')) {
-      const allCommands = Array.from(this.pipelineDriver.commands.keys());
+    if (rawTokens.length <= 1 && !isTrailingSpace) {
+      const allCommands = this.pipelineDriver && this.pipelineDriver.commands
+        ? Array.from(this.pipelineDriver.commands.keys())
+        : [
+            'kubectl', 'k', 'helm', 'docker', 'argocd', 'istioctl', 'tofu', 'terraform',
+            'aws', 'az', 'gcloud', 'trivy', 'aiops', 'etcdctl', 'systemctl', 'journalctl',
+            'cat', 'ls', 'grep', 'awk', 'sed', 'jq', 'curl', 'export', 'alias', 'echo', 'clear'
+          ];
       const matches = allCommands.filter((cmd) => cmd.startsWith(currentToken)).sort();
-      return { prefix: currentToken, completions: matches };
+      return makeResult(currentToken, matches, true);
     }
 
-    const bin = tokens[0];
+    const bin = rawTokens[0];
 
-    // 2. Completing Flags (- or --)
-    if (currentToken.startsWith('-')) {
-      const commonFlags = [
+    // 2. Parse Flags and Positional Arguments
+    let specifiedNamespace = null;
+    let allNamespaces = false;
+    const positional = [];
+    const prevRawToken = rawTokens[rawTokens.length - (currentToken ? 2 : 1)] || '';
+
+    for (let i = 0; i < rawTokens.length; i++) {
+      const tok = rawTokens[i];
+      if (tok === '-n' || tok === '--namespace') {
+        if (i + 1 < rawTokens.length) {
+          specifiedNamespace = rawTokens[i + 1];
+          i++;
+        }
+      } else if (tok.startsWith('--namespace=')) {
+        specifiedNamespace = tok.slice(12);
+      } else if (tok === '-A' || tok === '--all-namespaces') {
+        allNamespaces = true;
+      } else if (!tok.startsWith('-') || tok === '--') {
+        positional.push(tok);
+      }
+    }
+
+    // 3. Completing Flags (- or --)
+    if (currentToken.startsWith('-') && !currentToken.startsWith('--namespace=') && !currentToken.startsWith('--output=')) {
+      const verb = positional[1] || '';
+      const flagMap = {
+        get: ['-n', '--namespace', '-A', '--all-namespaces', '-o', '--output', '-l', '--selector', '-w', '--watch', '--show-labels', '--sort-by'],
+        describe: ['-n', '--namespace', '-A', '-l', '--selector'],
+        delete: ['-n', '--namespace', '-A', '-f', '--filename', '--force', '--grace-period', '--all'],
+        edit: ['-n', '--namespace', '-o', '--output'],
+        logs: ['-n', '--namespace', '-f', '--follow', '-c', '--container', '--tail', '--previous', '--all-containers'],
+        exec: ['-n', '--namespace', '-i', '-t', '-it', '-c', '--container', '--'],
+        apply: ['-f', '--filename', '-k', '--kustomize', '-R', '--recursive', '--dry-run=client', '--prune'],
+        scale: ['-n', '--namespace', '--replicas', '--current-replicas'],
+        rollout: ['-n', '--namespace']
+      };
+      const candidateFlags = flagMap[verb] || [
         '-n', '--namespace', '-A', '--all-namespaces',
         '-o', '--output', '-l', '--selector',
         '-f', '--filename', '--replicas', '--image',
         '--dry-run', '--raw-output', '--compact-output'
       ];
-      const matches = commonFlags.filter((f) => f.startsWith(currentToken));
-      return { prefix: currentToken, completions: matches };
+      const matches = candidateFlags.filter((f) => f.startsWith(currentToken));
+      return makeResult(currentToken, matches, !currentToken.endsWith('='));
     }
 
-    // 3. Completing Namespaces (after -n or --namespace)
-    const prevToken = tokens[tokens.length - (currentToken ? 2 : 1)];
-    if (prevToken === '-n' || prevToken === '--namespace') {
-      const nsList = this.graph ? this.graph.list({ kind: 'Namespace' }).map((ns) => ns.metadata.name) : ['default', 'kube-system', 'prod', 'staging'];
-      const matches = nsList.filter((n) => n.startsWith(currentToken));
-      return { prefix: currentToken, completions: matches };
+    // 4. Completing Namespaces (after -n or --namespace)
+    if (prevRawToken === '-n' || prevRawToken === '--namespace' || currentToken.startsWith('--namespace=')) {
+      const prefix = currentToken.startsWith('--namespace=') ? currentToken.slice(12) : currentToken;
+      const nsList = this._getNamespaces();
+      let matches = nsList.filter((n) => n.startsWith(prefix));
+      if (currentToken.startsWith('--namespace=')) {
+        matches = matches.map((m) => `--namespace=${m}`);
+        return makeResult(currentToken, matches, true);
+      }
+      return makeResult(currentToken, matches, true);
     }
 
-    // 4. Completing Kubernetes Subcommands
-    if ((bin === 'kubectl' || bin === 'k') && (tokens.length === 2 || (tokens.length === 1 && textBeforeCursor.endsWith(' ')))) {
-      const kubeSubcommands = [
-        'get', 'describe', 'apply', 'create', 'delete', 'edit',
-        'patch', 'scale', 'rollout', 'logs', 'exec', 'top',
-        'cordon', 'uncordon', 'drain', 'taint', 'label', 'annotate',
-        'auth', 'cluster-info', 'version', 'diff', 'wait', 'config'
-      ];
-      const matches = kubeSubcommands.filter((sc) => sc.startsWith(currentToken));
-      return { prefix: currentToken, completions: matches };
-    }
-
-    // 5. Completing Kubernetes Resource Kinds
-    if ((bin === 'kubectl' || bin === 'k') && (tokens[1] === 'get' || tokens[1] === 'describe' || tokens[1] === 'delete' || tokens[1] === 'edit')) {
-      const kinds = [
-        'pods', 'deployments', 'services', 'configmaps', 'secrets',
-        'persistentvolumeclaims', 'persistentvolumes', 'nodes', 'namespaces',
-        'ingress', 'statefulsets', 'daemonsets', 'jobs', 'cronjobs',
-        'storageclasses', 'networkpolicies', 'endpoints', 'endpointslices'
-      ];
-      const matches = kinds.filter((k) => k.startsWith(currentToken));
-      return { prefix: currentToken, completions: matches };
+    // 5. Completing Output Formats (after -o or --output)
+    if (prevRawToken === '-o' || prevRawToken === '--output' || currentToken.startsWith('--output=')) {
+      const prefix = currentToken.startsWith('--output=') ? currentToken.slice(9) : currentToken;
+      const formats = ['json', 'yaml', 'wide', 'name', 'jsonpath='];
+      let matches = formats.filter((f) => f.startsWith(prefix));
+      if (currentToken.startsWith('--output=')) {
+        matches = matches.map((m) => `--output=${m}`);
+        return makeResult(currentToken, matches, !matches[0]?.endsWith('='));
+      }
+      return makeResult(currentToken, matches, true);
     }
 
     // 6. Completing File Paths in VFS
-    if (currentToken.startsWith('/') || currentToken.startsWith('./') || currentToken.startsWith('../') || prevToken === '-f' || prevToken === 'cat' || prevToken === 'ls' || prevToken === 'cd' || currentToken.includes('/')) {
+    const isVfsCandidate = currentToken.startsWith('/') || currentToken.startsWith('./') || currentToken.startsWith('../')
+      || prevRawToken === '-f' || prevRawToken === '--filename' || prevRawToken === 'cat' || prevRawToken === 'ls'
+      || prevRawToken === 'cd' || prevRawToken === 'vi' || prevRawToken === 'vim' || prevRawToken === 'nano';
+
+    if (isVfsCandidate && !this._isKindSlashSyntax(currentToken)) {
       const matches = this._completeVfsPath(currentToken);
-      return { prefix: currentToken, completions: matches };
+      return makeResult(currentToken, matches, true);
     }
 
-    return { prefix: currentToken, completions: [] };
+    // 7. Kubernetes Command Logic (kubectl / k)
+    if (bin === 'kubectl' || bin === 'k') {
+      const verb = positional[1];
+
+      // 7a. Completing Subcommands (verbs)
+      if (!verb || (positional.length === 2 && !isTrailingSpace)) {
+        const kubeSubcommands = [
+          'get', 'describe', 'apply', 'create', 'delete', 'edit',
+          'patch', 'scale', 'rollout', 'logs', 'exec', 'top',
+          'cordon', 'uncordon', 'drain', 'taint', 'label', 'annotate',
+          'auth', 'cluster-info', 'version', 'diff', 'wait', 'config',
+          'explain', 'run'
+        ];
+        const matches = kubeSubcommands.filter((sc) => sc.startsWith(currentToken));
+        return makeResult(currentToken, matches, true);
+      }
+
+      const targetNs = allNamespaces ? null : (specifiedNamespace || (this.cluster ? this.cluster.currentNamespace : 'default'));
+
+      // 7b. Verbs targeting Nodes directly (cordon, uncordon, drain)
+      if (verb === 'cordon' || verb === 'uncordon' || verb === 'drain') {
+        const nodes = this._getResourcesForKind('Node');
+        const nodeNames = nodes.map((n) => n.metadata.name);
+        const matches = nodeNames.filter((name) => name.startsWith(currentToken));
+        return makeResult(currentToken, matches, true);
+      }
+
+      // 7c. Verb: taint
+      if (verb === 'taint') {
+        if (positional.length === 2 && isTrailingSpace) {
+          return makeResult(currentToken, ['node', 'nodes'].filter((k) => k.startsWith(currentToken)), true);
+        }
+        if (positional.length === 3 && (positional[2] === 'node' || positional[2] === 'nodes')) {
+          const nodes = this._getResourcesForKind('Node');
+          const nodeNames = nodes.map((n) => n.metadata.name);
+          const matches = nodeNames.filter((name) => name.startsWith(currentToken));
+          return makeResult(currentToken, matches, true);
+        }
+      }
+
+      // 7d. Verb: logs (targets Pod or Deployment)
+      if (verb === 'logs') {
+        if (this._isKindSlashSyntax(currentToken)) {
+          return this._completeKindSlash(currentToken, targetNs, makeResult);
+        }
+        const pods = this._getResourcesForKind('Pod', targetNs);
+        let names = pods.map((p) => p.metadata.name);
+        if (names.length === 0) {
+          const deploys = this._getResourcesForKind('Deployment', targetNs);
+          names = deploys.map((d) => d.metadata.name);
+        }
+        const matches = names.filter((name) => name.startsWith(currentToken));
+        return makeResult(currentToken, matches, true);
+      }
+
+      // 7e. Verb: exec (targets Pod)
+      if (verb === 'exec') {
+        const pods = this._getResourcesForKind('Pod', targetNs);
+        const names = pods.map((p) => p.metadata.name);
+        const matches = names.filter((name) => name.startsWith(currentToken));
+        return makeResult(currentToken, matches, true);
+      }
+
+      // 7f. Verb: scale or rollout
+      if (verb === 'scale' || verb === 'rollout') {
+        if (positional.length === 2 && isTrailingSpace) {
+          const sub = verb === 'scale' ? ['deployment', 'statefulset'] : ['status', 'restart', 'history', 'undo'];
+          return makeResult(currentToken, sub.filter((s) => s.startsWith(currentToken)), true);
+        }
+        const kindToken = positional[2];
+        if (kindToken === 'restart' || kindToken === 'status' || kindToken === 'history') {
+          if (positional.length === 3 && isTrailingSpace) {
+            return makeResult(currentToken, ['deployment', 'daemonset', 'statefulset'].filter((k) => k.startsWith(currentToken)), true);
+          }
+          const actualKind = positional[3] || 'deployment';
+          const resources = this._getResourcesForKind(actualKind, targetNs);
+          const names = resources.map((r) => r.metadata.name);
+          const matches = names.filter((n) => n.startsWith(currentToken));
+          return makeResult(currentToken, matches, true);
+        }
+        if (kindToken) {
+          const resources = this._getResourcesForKind(kindToken, targetNs);
+          const names = resources.map((r) => r.metadata.name);
+          const matches = names.filter((n) => n.startsWith(currentToken));
+          return makeResult(currentToken, matches, true);
+        }
+      }
+
+      // 7g. Verb: top (pod / node)
+      if (verb === 'top') {
+        if (positional.length === 2 && isTrailingSpace) {
+          return makeResult(currentToken, ['pods', 'nodes'].filter((k) => k.startsWith(currentToken)), true);
+        }
+        if (positional.length >= 3) {
+          const kindToken = positional[2];
+          const resources = this._getResourcesForKind(kindToken, targetNs);
+          const names = resources.map((r) => r.metadata.name);
+          const matches = names.filter((n) => n.startsWith(currentToken));
+          return makeResult(currentToken, matches, true);
+        }
+      }
+
+      // 7h. General CRUD verbs: get, describe, delete, edit, explain
+      if (['get', 'describe', 'delete', 'edit', 'explain'].includes(verb)) {
+        if (this._isKindSlashSyntax(currentToken)) {
+          return this._completeKindSlash(currentToken, targetNs, makeResult);
+        }
+
+        const isCompletingKind = (positional.length === 2 && isTrailingSpace)
+          || (positional.length === 3 && !isTrailingSpace);
+
+        if (isCompletingKind) {
+          const kinds = [
+            'pods', 'deployments', 'services', 'nodes', 'namespaces',
+            'configmaps', 'secrets', 'networkpolicies', 'ingresses',
+            'statefulsets', 'daemonsets', 'jobs', 'cronjobs',
+            'persistentvolumeclaims', 'persistentvolumes', 'serviceaccounts',
+            'roles', 'rolebindings', 'clusterroles', 'clusterrolebindings',
+            'endpoints', 'storageclasses'
+          ];
+          const matches = kinds.filter((k) => k.startsWith(currentToken));
+          return makeResult(currentToken, matches, true);
+        }
+
+        if (positional.length >= 3) {
+          const kindToken = positional[2];
+          let resources = this._getResourcesForKind(kindToken, targetNs);
+          if (resources.length === 0 && targetNs && !CLUSTER_SCOPED_KINDS.has(normalizeKind(kindToken))) {
+            resources = this._getResourcesForKind(kindToken, null);
+          }
+          const names = resources.map((r) => r.metadata.name);
+          const matches = names.filter((name) => name.startsWith(currentToken));
+          return makeResult(currentToken, matches, true);
+        }
+      }
+    }
+
+    // 8. Other CLI Tools (docker, helm, argocd, istioctl)
+    if (bin === 'docker') {
+      const verb = positional[1];
+      if (!verb || (positional.length === 2 && !isTrailingSpace)) {
+        return makeResult(currentToken, ['ps', 'logs', 'exec', 'stop', 'rm', 'build', 'run', 'images', 'inspect'].filter((v) => v.startsWith(currentToken)), true);
+      }
+      if (['logs', 'stop', 'rm', 'inspect'].includes(verb)) {
+        const containers = this._getContainerNames();
+        return makeResult(currentToken, containers.filter((c) => c.startsWith(currentToken)), true);
+      }
+    }
+
+    if (bin === 'helm') {
+      const verb = positional[1];
+      if (!verb || (positional.length === 2 && !isTrailingSpace)) {
+        return makeResult(currentToken, ['list', 'install', 'upgrade', 'uninstall', 'status', 'repo', 'template'].filter((v) => v.startsWith(currentToken)), true);
+      }
+      if (['status', 'upgrade', 'uninstall'].includes(verb)) {
+        const releases = this._getHelmReleaseNames();
+        return makeResult(currentToken, releases.filter((r) => r.startsWith(currentToken)), true);
+      }
+    }
+
+    if (bin === 'argocd') {
+      const verb = positional[1];
+      if (verb === 'app') {
+        const appVerb = positional[2];
+        if (!appVerb || (positional.length === 3 && !isTrailingSpace)) {
+          return makeResult(currentToken, ['get', 'sync', 'diff', 'list', 'history', 'rollback'].filter((v) => v.startsWith(currentToken)), true);
+        }
+        const apps = this._getArgoAppNames();
+        return makeResult(currentToken, apps.filter((a) => a.startsWith(currentToken)), true);
+      }
+    }
+
+    if (bin === 'istioctl') {
+      const verb = positional[1];
+      if (verb === 'proxy-config') {
+        if (positional.length === 2 && isTrailingSpace) {
+          return makeResult(currentToken, ['endpoints', 'cluster', 'routes', 'listener', 'secret'].filter((s) => s.startsWith(currentToken)), true);
+        }
+        const pods = this._getResourcesForKind('Pod');
+        return makeResult(currentToken, pods.map((p) => p.metadata.name).filter((n) => n.startsWith(currentToken)), true);
+      }
+    }
+
+    return makeResult(currentToken, []);
   }
 
   _completeVfsPath(prefix) {

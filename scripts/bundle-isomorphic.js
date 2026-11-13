@@ -956,6 +956,9 @@ const bundleHeader = `/**
     executeCommand: function(cmd) {
       return terminal.execute(cmd);
     },
+    autocomplete: function(line, cursor) {
+      return terminal.autocomplete(line, cursor);
+    },
     getClusterState: function() {
       return {
         resources: Array.from(cluster.resources.values())

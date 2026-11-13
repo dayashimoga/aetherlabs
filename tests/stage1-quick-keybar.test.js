@@ -90,3 +90,4 @@ test('Subphase 1.2.2: ContextAwareQuickKeyEngine pipe and grep filter wrapping',
   const res4 = ContextAwareQuickKeyEngine.insertToken('kubectl get pods | grep ', 25, 'grep');
   assert.equal(res4.line, 'kubectl get pods | grep ');
 });
+

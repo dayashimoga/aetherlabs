@@ -354,9 +354,24 @@
 
     handleTabCompletion() {
       if (typeof this.onTabComplete === 'function') {
-        const completed = this.onTabComplete(this.lineBuffer, this.cursorPos);
-        if (completed && typeof completed === 'string') {
-          this.setCommand(completed);
+        const res = this.onTabComplete(this.lineBuffer, this.cursorPos);
+        if (typeof res === 'string') {
+          this.setCommand(res);
+        } else if (res && typeof res === 'object') {
+          if (res.line !== undefined) {
+            const nextPos = typeof res.cursor === 'number' ? res.cursor : (res.cursorPos ?? res.line.length);
+            this.setLineAndCursor(res.line, nextPos);
+          }
+          if (Array.isArray(res.completions) && res.completions.length > 1) {
+            const now = Date.now();
+            if (this._lastTabTime && now - this._lastTabTime < 800) {
+              this.appendScrollback(`${this.prompt}${this.lineBuffer}`, 'command');
+              this.appendScrollback(res.completions.join('  '), 'system');
+              this.render();
+              this.scrollToBottom();
+            }
+            this._lastTabTime = now;
+          }
         }
       }
     }
