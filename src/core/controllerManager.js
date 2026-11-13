@@ -8,6 +8,13 @@
 
 const { normalizeKind, isClusterScoped } = require('./resourceGraph');
 
+let yamlParser;
+try {
+  yamlParser = require('./yamlParser');
+} catch {
+  yamlParser = (typeof globalThis !== 'undefined' && globalThis.yamlParser) || {};
+}
+
 // Simple isomorphic hash generator for pod templates
 function hashTemplate(template) {
   const str = JSON.stringify(template || {});
@@ -31,11 +38,18 @@ function generateUID() {
 }
 
 class ControllerManager {
-  constructor(resourceGraph) {
+  constructor(resourceGraph, vfsOrOptions = null) {
     if (!resourceGraph) {
       throw new TypeError('ControllerManager requires a valid ResourceGraph instance');
     }
     this.graph = resourceGraph;
+    if (vfsOrOptions && typeof vfsOrOptions.readFile === 'function') {
+      this.vfs = vfsOrOptions;
+    } else if (vfsOrOptions && vfsOrOptions.vfs) {
+      this.vfs = vfsOrOptions.vfs;
+    } else {
+      this.vfs = null;
+    }
     this.ipCounter = 10;
     this.clusterIpCounter = 100;
     this.nodePortCounter = 30000;
@@ -45,12 +59,28 @@ class ControllerManager {
     this._unsubAdded = this.graph.on('Added', () => this.scheduleReconcile());
     this._unsubModified = this.graph.on('Modified', () => this.scheduleReconcile());
     this._unsubDeleted = this.graph.on('Deleted', () => this.scheduleReconcile());
+
+    if (this.vfs) {
+      this.attachVFS(this.vfs);
+    }
+  }
+
+  attachVFS(vfs) {
+    this.vfs = vfs;
+    if (this._unsubVfs) this._unsubVfs();
+    if (this.vfs && typeof this.vfs.watch === 'function') {
+      this._unsubVfs = this.vfs.watch('/etc/kubernetes/manifests', () => {
+        this.reconcileStaticPods();
+      });
+    }
+    this.reconcileStaticPods();
   }
 
   destroy() {
     if (this._unsubAdded) this._unsubAdded();
     if (this._unsubModified) this._unsubModified();
     if (this._unsubDeleted) this._unsubDeleted();
+    if (this._unsubVfs) this._unsubVfs();
   }
 
   nextPodIP() {
@@ -93,6 +123,7 @@ class ControllerManager {
         const versionBefore = this.graph.versionCounter;
 
         this.reconcileNodes();
+        this.reconcileStaticPods();
         this.reconcileStorage();
         this.reconcileDeployments();
         this.reconcileReplicaSets();
@@ -131,6 +162,127 @@ class ControllerManager {
           { type: 'DiskPressure', status: 'False', reason: 'KubeletHasNoDiskPressure' },
           { type: 'PIDPressure', status: 'False', reason: 'KubeletHasSufficientPIDs' }
         ];
+      }
+    }
+  }
+
+  // -------------------------------------------------------------
+  // 1b. Static Pod Controller (Kubelet /etc/kubernetes/manifests Watcher)
+  // -------------------------------------------------------------
+  reconcileStaticPods() {
+    if (!this.vfs) return;
+    const manifestDir = '/etc/kubernetes/manifests';
+    let files = [];
+    try {
+      files = this.vfs.listDir(manifestDir);
+    } catch {
+      return;
+    }
+
+    const nodes = this.graph.list({ kind: 'Node' });
+    const cpNode = nodes.find((n) => {
+      const labels = n.metadata?.labels || {};
+      return labels['node-role.kubernetes.io/control-plane'] || labels['node-role.kubernetes.io/master'] || n.metadata?.name?.includes('control-plane');
+    }) || nodes[0] || { metadata: { name: 'control-plane-node' } };
+    const nodeName = cpNode.metadata.name;
+
+    const currentStaticPodNames = new Set();
+
+    for (const file of files) {
+      if (!file.endsWith('.yaml') && !file.endsWith('.yml')) continue;
+      const filePath = `${manifestDir}/${file}`;
+      let content = '';
+      try {
+        content = this.vfs.readFile(filePath);
+      } catch {
+        continue;
+      }
+
+      if (!content || !content.trim()) continue;
+
+      let docs = [];
+      try {
+        if (yamlParser && typeof yamlParser.parseAllYaml === 'function') {
+          docs = yamlParser.parseAllYaml(content);
+        } else if (yamlParser && typeof yamlParser.parseYaml === 'function') {
+          docs = [yamlParser.parseYaml(content)];
+        } else {
+          docs = [JSON.parse(content)];
+        }
+      } catch (err) {
+        continue;
+      }
+      docs = Array.isArray(docs) ? docs : (docs ? [docs] : []);
+
+      for (const doc of docs) {
+        if (!doc || doc.kind !== 'Pod' || !doc.metadata?.name) continue;
+        const baseName = doc.metadata.name;
+        const mirrorName = `${baseName}-${nodeName}`;
+        const ns = doc.metadata.namespace || 'kube-system';
+        currentStaticPodNames.add(`${ns}/${mirrorName}`);
+
+        const mirrorPod = structuredClone ? structuredClone(doc) : JSON.parse(JSON.stringify(doc));
+        mirrorPod.apiVersion = mirrorPod.apiVersion || 'v1';
+        mirrorPod.kind = 'Pod';
+        mirrorPod.metadata = mirrorPod.metadata || {};
+        mirrorPod.metadata.name = mirrorName;
+        mirrorPod.metadata.namespace = ns;
+        mirrorPod.metadata.annotations = mirrorPod.metadata.annotations || {};
+        mirrorPod.metadata.annotations['kubernetes.io/config.source'] = 'file';
+        mirrorPod.metadata.annotations['kubernetes.io/config.mirror'] = hashTemplate(doc);
+        mirrorPod.metadata.annotations['kubernetes.io/config.path'] = filePath;
+        mirrorPod.metadata.labels = mirrorPod.metadata.labels || {};
+        mirrorPod.metadata.labels['component'] = baseName;
+        mirrorPod.metadata.labels['tier'] = 'control-plane';
+
+        mirrorPod.spec = mirrorPod.spec || {};
+        mirrorPod.spec.nodeName = nodeName;
+
+        const firstContainer = (mirrorPod.spec.containers || [])[0] || {};
+        const cmd = Array.isArray(firstContainer.command)
+          ? firstContainer.command.join(' ')
+          : String(firstContainer.command || '');
+        const args = Array.isArray(firstContainer.args)
+          ? firstContainer.args.join(' ')
+          : String(firstContainer.args || '');
+        const fullCmd = `${cmd} ${args}`;
+
+        let phase = 'Running';
+        let ready = '1/1';
+        let restarts = 0;
+        let message = 'Static pod running';
+
+        if (baseName.includes('etcd')) {
+          if (fullCmd.includes('etcd-corrupt') || fullCmd.includes('--data-dir=/var/lib/etcd-corrupt') || mirrorPod.metadata.labels['etcd-unhealthy'] === 'true') {
+            phase = 'CrashLoopBackOff';
+            ready = '0/1';
+            restarts = 8;
+            message = 'etcdserver: corrupt database snapshot / member quorum loss';
+          }
+        }
+
+        mirrorPod.status = mirrorPod.status || {};
+        mirrorPod.status.phase = phase;
+        mirrorPod.status.ready = ready;
+        mirrorPod.status.restarts = restarts;
+        mirrorPod.status.podIP = mirrorPod.status.podIP || this.nextPodIP();
+        mirrorPod.status.message = message;
+        mirrorPod.status.conditions = [
+          { type: 'Ready', status: phase === 'Running' ? 'True' : 'False', lastTransitionTime: new Date().toISOString() },
+          { type: 'ContainersReady', status: phase === 'Running' ? 'True' : 'False', lastTransitionTime: new Date().toISOString() }
+        ];
+
+        this.graph.set(mirrorPod, { skipReconcileNotification: true });
+      }
+    }
+
+    const allPods = this.graph.list({ kind: 'Pod' });
+    for (const pod of allPods) {
+      if (pod.metadata?.annotations?.['kubernetes.io/config.source'] === 'file') {
+        const key = `${pod.metadata.namespace || 'default'}/${pod.metadata.name}`;
+        if (!currentStaticPodNames.has(key)) {
+          this.graph.delete('Pod', pod.metadata.namespace || 'default', pod.metadata.name);
+        }
       }
     }
   }

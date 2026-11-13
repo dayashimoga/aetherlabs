@@ -2115,20 +2115,52 @@ class MultiCliDispatcher {
     }
     if (sub === 'snapshot') {
       const action = argv[2];
-      const target = argv[3] || '/var/lib/etcd/backup.db';
+      let target = '/var/lib/etcd/backup.db';
+      let dataDir = '/var/lib/etcd';
+
+      for (let i = 3; i < argv.length; i++) {
+        const arg = argv[i];
+        if (arg.startsWith('--data-dir=')) {
+          dataDir = arg.slice(11);
+        } else if (arg === '--data-dir' && i + 1 < argv.length) {
+          dataDir = argv[++i];
+        } else if (!arg.startsWith('-')) {
+          target = arg;
+        }
+      }
+
       if (action === 'restore') {
+        if (this.vfs) {
+          this.vfs.mkdir(dataDir);
+          this.vfs.mkdir(`${dataDir}/member/snap`);
+          this.vfs.writeFile(`${dataDir}/member/snap/db`, 'ETCD_RESTORED_DATABASE_V3\n', { overwrite: true });
+        }
+
         if (this.graph) {
-          const etcdPods = this.graph.findByKind('Pod').filter(
-            (p) => p.metadata && p.metadata.namespace === 'kube-system' && p.metadata.labels && p.metadata.labels.component === 'etcd'
+          const etcdPods = this.graph.list({ kind: 'Pod' }).filter(
+            (p) => (p.metadata?.namespace === 'kube-system' || p.metadata?.namespace === 'default') &&
+              (p.metadata?.name?.includes('etcd') || p.metadata?.labels?.component === 'etcd')
           );
           for (const p of etcdPods) {
-            if (p.metadata && p.metadata.labels) {
+            if (p.metadata?.labels) {
               delete p.metadata.labels['etcd-unhealthy'];
             }
+            if (p.status) {
+              p.status.phase = 'Running';
+              p.status.ready = '1/1';
+              p.status.restarts = 0;
+              p.status.message = 'Snapshot restored; quorum established';
+            }
+            this.graph.set(p, { skipReconcileNotification: true });
           }
         }
+
+        if (this.controllerManager && typeof this.controllerManager.reconcileStaticPods === 'function') {
+          this.controllerManager.reconcileStaticPods();
+        }
+
         return {
-          stdout: `2026-11-12 06:00:00.000000 I | etcdmain: restored snapshot ${target} to /var/lib/etcd/default.etcd\nQuorum restored across all etcd members.\n`,
+          stdout: `2026-11-13 06:00:00.000000 I | etcdmain: restored snapshot ${target} to ${dataDir}\nQuorum restored across all etcd members.\n`,
           stderr: '',
           code: 0
         };
@@ -2140,14 +2172,50 @@ class MultiCliDispatcher {
 
   handleKubeadm({ argv = [] }) {
     const sub = argv[1];
-    if (sub === 'certs' && argv[2] === 'check-expiration') {
-      const headers = ['CERTIFICATE', 'EXPIRES', 'RESIDUAL TIME', 'CERTIFICATE AUTHORITY'];
-      const rows = [
-        ['admin.conf', 'Nov 12, 2027 16:00 UTC', '364d', 'ca'],
-        ['apiserver', 'Nov 12, 2027 16:00 UTC', '364d', 'ca'],
-        ['etcd-server', 'Nov 12, 2027 16:00 UTC', '364d', 'etcd-ca']
-      ];
-      return { stdout: this._formatTable(headers, rows) + '\n', stderr: '', code: 0 };
+    if (sub === 'certs') {
+      const action = argv[2];
+      if (action === 'check-expiration') {
+        const headers = ['CERTIFICATE', 'EXPIRES', 'RESIDUAL TIME', 'CERTIFICATE AUTHORITY'];
+        const rows = [
+          ['admin.conf', 'Nov 12, 2027 16:00 UTC', '364d', 'ca'],
+          ['apiserver', 'Nov 12, 2027 16:00 UTC', '364d', 'ca'],
+          ['apiserver-etcd-client', 'Nov 12, 2027 16:00 UTC', '364d', 'etcd-ca'],
+          ['apiserver-kubelet-client', 'Nov 12, 2027 16:00 UTC', '364d', 'ca'],
+          ['controller-manager.conf', 'Nov 12, 2027 16:00 UTC', '364d', 'ca'],
+          ['etcd-healthcheck-client', 'Nov 12, 2027 16:00 UTC', '364d', 'etcd-ca'],
+          ['etcd-peer', 'Nov 12, 2027 16:00 UTC', '364d', 'etcd-ca'],
+          ['etcd-server', 'Nov 12, 2027 16:00 UTC', '364d', 'etcd-ca'],
+          ['front-proxy-client', 'Nov 12, 2027 16:00 UTC', '364d', 'front-proxy-ca'],
+          ['scheduler.conf', 'Nov 12, 2027 16:00 UTC', '364d', 'ca']
+        ];
+        return { stdout: this._formatTable(headers, rows) + '\n', stderr: '', code: 0 };
+      }
+      if (action === 'renew') {
+        const target = argv[3] || 'all';
+        const certList = [
+          'admin.conf',
+          'apiserver',
+          'apiserver-etcd-client',
+          'apiserver-kubelet-client',
+          'controller-manager.conf',
+          'etcd-healthcheck-client',
+          'etcd-peer',
+          'etcd-server',
+          'front-proxy-client',
+          'scheduler.conf'
+        ];
+        const renewed = target === 'all' ? certList : [target];
+        const lines = renewed.map((c) => `[certs] Certificate '${c}' renewed`);
+        lines.push('Done renewing certificates. You must restart the control-plane pods to use the new certs.');
+
+        if (this.vfs) {
+          this.vfs.mkdir('/etc/kubernetes/pki');
+          for (const c of renewed) {
+            this.vfs.writeFile(`/etc/kubernetes/pki/${c}.crt`, `-----BEGIN CERTIFICATE-----\nRENEWED_${c.toUpperCase()}_CERT\n-----END CERTIFICATE-----\n`, { overwrite: true });
+          }
+        }
+        return { stdout: lines.join('\n') + '\n', stderr: '', code: 0 };
+      }
     }
     return { stdout: 'kubeadm cluster administration utility v1.31.0\n', stderr: '', code: 0 };
   }
