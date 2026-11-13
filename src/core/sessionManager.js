@@ -195,6 +195,7 @@ class SessionManager {
 
     if (session.cluster && typeof session.cluster.reset === 'function') {
       session.cluster.reset(incident.initialClusterState || null);
+      session.cluster.vfs = session.vfs;
     }
 
     if (session.vfs && typeof session.vfs.reset === 'function') {
@@ -202,7 +203,7 @@ class SessionManager {
     }
 
     if (incidentEngine && typeof incidentEngine.injectIncident === 'function') {
-      incidentEngine.injectIncident(incident.id, session.cluster);
+      incidentEngine.injectIncident(incident.id, session.cluster, session.vfs);
     }
 
     session.lastAccessedAt = new Date();
@@ -239,6 +240,7 @@ class SessionManager {
 
     if (session.cluster && typeof session.cluster.reset === 'function') {
       session.cluster.reset();
+      session.cluster.vfs = session.vfs;
     }
 
     if (session.vfs && typeof session.vfs.reset === 'function') {

@@ -18,10 +18,11 @@ const {
   INCIDENT_CATEGORY_METADATA
 } = require('../src/core/incidentEngine');
 
-const { VirtualCluster } = require('../src/engine/virtualCluster');
-const { TerminalEngine } = require('../src/engine/terminalEngine');
+const { VirtualCluster } = require('../src/core/virtualCluster');
+const { TerminalEngine } = require('../src/core/terminalEngine');
 const { VirtualFileSystem } = require('../src/core/virtualFileSystem');
 const { ValidationEngine } = require('../src/core/validationEngine');
+const { SessionManager } = require('../src/core/sessionManager');
 
 test('Subphase 4.2.1: IncidentEngine imports and 8 Outage Category Constants', () => {
   assert.equal(typeof IncidentEngine, 'function');
@@ -149,40 +150,79 @@ test('Subphase 4.2.1: Authentic etcd Quorum Loss remediation (inc-09-etcd-quorum
   assert.equal(finalCheck.stopwatch.achievedMttr, true);
 });
 
-test('Subphase 4.2.1: Outage resolution proof across all 8 incident categories', () => {
+test('Subphase 4.1.2: Deterministic Outage Resolution Proof across ALL 15 Production Incidents', () => {
   const validationEngine = new ValidationEngine();
   const engine = new IncidentEngine(validationEngine);
 
-  // One representative scenario for each of the 8 outage categories
-  const testMatrix = [
-    { category: CATEGORY_WEBSITE_DOWN, id: 'inc-01-selector-blackhole' },
-    { category: CATEGORY_POD_RESTARTING, id: 'inc-02-bad-image-rollout' },
-    { category: CATEGORY_SLOW_APP, id: 'inc-13-slow-app-cpu-throttling' },
-    { category: CATEGORY_DNS_OUTAGE, id: 'inc-11-coredns-loop-crash' },
-    { category: CATEGORY_IAM_OUTAGE, id: 'inc-14-iam-irsa-access-denied' },
-    { category: CATEGORY_STORAGE_OUTAGE, id: 'inc-12-pvc-storageclass-pending' },
-    { category: CATEGORY_NETWORKING_OUTAGE, id: 'inc-08-zero-trust-db-exposure' },
-    { category: CATEGORY_NODE_OUTAGE, id: 'inc-15-node-notready-kubelet-down' }
-  ];
+  assert.equal(engine.scenarios.length, 15);
 
-  for (const { category, id } of testMatrix) {
+  for (const inc of engine.scenarios) {
     const cluster = new VirtualCluster();
-    const inc = engine.injectIncident(id, cluster);
-    assert.equal(inc.category, category, `Incident ${id} should be category ${category}`);
+    const vfs = new VirtualFileSystem();
+    cluster.vfs = vfs;
 
-    const terminal = new TerminalEngine(cluster);
+    // Inject incident fault into cluster & VFS
+    engine.injectIncident(inc.id, cluster, vfs);
+    const terminal = new TerminalEngine(cluster, vfs);
 
-    const before = engine.verifyIncidentResolution(id, cluster, []);
-    assert.equal(before.passed, false, `Incident ${id} (${category}) should fail before remediation`);
+    // Initial check: MUST fail
+    const before = engine.verifyIncidentResolution(inc.id, cluster, [], vfs);
+    assert.equal(
+      before.passed,
+      false,
+      `Incident ${inc.id} (${inc.category}) should fail validation before remediation`
+    );
 
+    // Execute canonical remediation commands
     for (const cmd of inc.solutionCommands) {
       const res = terminal.execute(cmd);
-      assert.equal(res.exitCode, 0, `Command "${cmd}" for incident ${id} failed: ${res.output}`);
+      assert.equal(
+        res.exitCode,
+        0,
+        `Remediation command "${cmd}" for incident ${inc.id} failed: ${res.output}`
+      );
     }
 
-    const after = engine.verifyIncidentResolution(id, cluster, terminal.commandHistory);
-    assert.equal(after.passed, true, `Incident ${id} (${category}) failed recovery verification: ${JSON.stringify(after.results)}`);
+    // Post-remediation check: MUST pass 100%
+    const after = engine.verifyIncidentResolution(inc.id, cluster, terminal.commandHistory, vfs);
+    assert.equal(
+      after.passed,
+      true,
+      `Incident ${inc.id} failed recovery verification: ${JSON.stringify(after.results)}`
+    );
+    assert.equal(after.score, 100);
     assert.ok(after.xpReward > 0);
+    assert.ok(after.stopwatch);
+    assert.equal(after.stopwatch.achievedMttr, true);
+    assert.ok(typeof after.stopwatch.elapsedFormatted === 'string');
   }
+});
+
+test('Subphase 4.1.2: SessionManager.bindIncident integration with VFS injection and cluster isolation', () => {
+  const sessionManager = new SessionManager();
+  const session = sessionManager.getSession('incident-test-session');
+  const engine = new IncidentEngine();
+
+  const incident = engine.getIncident('inc-09-etcd-quorum-loss');
+  assert.ok(incident);
+
+  const bound = sessionManager.bindIncident(session.sessionId, incident, engine);
+  assert.equal(bound.activeIncidentId, 'inc-09-etcd-quorum-loss');
+  assert.equal(session.activeIncidentId, 'inc-09-etcd-quorum-loss');
+  assert.equal(session.activeContextType, 'incident');
+
+  // Verify that session.vfs was populated with snapshot and static pod manifests
+  assert.equal(session.vfs.exists('/backup/etcd-snapshot.db'), true);
+  assert.equal(session.vfs.exists('/etc/kubernetes/manifests/etcd.yaml'), true);
+
+  // Execute remediation in session terminal
+  for (const cmd of incident.solutionCommands) {
+    const res = session.terminal.execute(cmd);
+    assert.equal(res.exitCode, 0);
+  }
+
+  // Verify resolution
+  const res = engine.verifyIncidentResolution(incident.id, session.cluster, session.terminal.commandHistory, session.vfs);
+  assert.equal(res.passed, true);
 });
 
