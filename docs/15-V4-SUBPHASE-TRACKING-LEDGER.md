@@ -27,7 +27,7 @@
 ### STAGE 2: Futuristic UI/UX Overhaul & Core Workspace Architecture
 | ID | Phase | Subphase Title | Status | Verification & Deliverables |
 | :--- | :--- | :--- | :---: | :--- |
-| **2.1.1** | Phase 2.1 | Design Tokens, Glassmorphism & Typography | `[PENDING]` | `#090D16` canvas, `#111827` surface, `#38BDF8` cyan, `#10B981` emerald, Dark/Light/High-Contrast themes. |
+| **2.1.1** | Phase 2.1 | Design Tokens, Glassmorphism & Typography | `[COMPLETED]` | Dark-first `#090D16` canvas, `#111827` surface, `#38BDF8` cyan, `#10B981` emerald, glassmorphism blur tokens (`--bg-glass: rgba(17, 24, 39, 0.78)`), subtle 1px borders, Google Fonts `Inter` & `JetBrains Mono` with OS fallbacks, dark-first default on `<html>` (`data-theme="dark"`), dark scrollbars, light and high-contrast theme overrides, `code`/`kbd`/`pre`/`samp` typography and status badge glows. Verified via `tests/stage2-design-system.test.js` (8/8 PASS), `npm run test:stage1` (72/72 PASS), `npm test` (8/8 PASS), `npm run audit:self` (53/53 PASS). |
 | **2.1.2** | Phase 2.1 | 64px Left Icon Rail & Top Command Header | `[PENDING]` | 64px Left Icon Rail, 52px Top Header with `Ctrl+K` Command Palette and cluster health. |
 | **2.1.3** | Phase 2.1 | Modal & Responsive Layout Defect Remediation | `[PENDING]` | Fix `Ctrl+Shift+D` Diagnostics modal header overlap, responsive grid cards, breakpoints. |
 | **2.2.1** | Phase 2.2 | "Continue Learning" Personalized Hero Banner | `[PENDING]` | Active track, recommended lab, domain mastery ring, streak/XP, primary CTA button. |
