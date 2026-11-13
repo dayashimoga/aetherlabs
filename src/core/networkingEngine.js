@@ -184,7 +184,8 @@ class NetworkingEngine {
       const readyPods = matchingPods.filter((p) => {
         const isRunning = p.status?.phase === 'Running';
         const readyCond = (p.status?.conditions || []).find((c) => c.type === 'Ready');
-        return isRunning && (!readyCond || readyCond.status === 'True') && p.status?.podIP && p.status.podIP !== '<none>';
+        const notReadyString = p.status?.ready && p.status.ready.startsWith('0/');
+        return isRunning && (!readyCond || readyCond.status === 'True') && !notReadyString && p.status?.podIP && p.status.podIP !== '<none>';
       });
 
       // Construct Endpoints resource (legacy)
@@ -192,6 +193,7 @@ class NetworkingEngine {
       if (readyPods.length > 0) {
         const addresses = readyPods.map((p) => ({
           ip: p.status.podIP,
+          hostname: p.spec?.hostname || p.metadata.name,
           nodeName: p.spec?.nodeName,
           targetRef: { kind: 'Pod', namespace: ns, name: p.metadata.name }
         }));
@@ -288,18 +290,48 @@ class NetworkingEngine {
     }
 
     // 3. Service Lookup: <svc>.<ns>.svc.cluster.local or <svc>.<ns> or <svc>
+    // or StatefulSet Pod Lookup: <pod>.<svc>.<ns>.svc.cluster.local
     const svcSuffix = `.svc.${this.clusterDomain}`;
     let targetSvcName = cleanQuery;
     let targetSvcNs = ns;
+    let targetPodName = null;
 
     if (cleanQuery.endsWith(svcSuffix)) {
       const parts = cleanQuery.slice(0, -svcSuffix.length).split('.');
-      targetSvcName = parts[0];
-      targetSvcNs = parts[1] || ns;
+      if (parts.length === 3) {
+        targetPodName = parts[0];
+        targetSvcName = parts[1];
+        targetSvcNs = parts[2];
+      } else {
+        targetSvcName = parts[0];
+        targetSvcNs = parts[1] || ns;
+      }
     } else if (cleanQuery.includes('.')) {
       const parts = cleanQuery.split('.');
-      targetSvcName = parts[0];
-      targetSvcNs = parts[1] || ns;
+      if (parts.length === 3) {
+        const maybePod = this.graph.get('Pod', parts[2], parts[0]);
+        if (maybePod) {
+          targetPodName = parts[0];
+          targetSvcName = parts[1];
+          targetSvcNs = parts[2];
+        } else {
+          targetSvcName = parts[0];
+          targetSvcNs = parts[1];
+        }
+      } else {
+        targetSvcName = parts[0];
+        targetSvcNs = parts[1] || ns;
+      }
+    }
+
+    if (targetPodName) {
+      const pod = this.graph.get('Pod', targetSvcNs, targetPodName);
+      if (pod && pod.status?.podIP && pod.status.podIP !== '<none>') {
+        return {
+          records: [{ ip: pod.status.podIP, type: 'A' }],
+          rcode: 'NOERROR'
+        };
+      }
     }
 
     const svc = this.graph.get('Service', targetSvcNs, targetSvcName);
@@ -316,7 +348,17 @@ class NetworkingEngine {
       // Headless service: return all matching Pod IPs
       if (svc.spec?.clusterIP === 'None') {
         const slice = this.graph.get('EndpointSlice', targetSvcNs, `${targetSvcName}-slice-1`);
-        const ips = (slice?.endpoints || []).map((e) => e.addresses?.[0]).filter(Boolean);
+        let ips = (slice?.endpoints || []).map((e) => e.addresses?.[0]).filter(Boolean);
+        if (ips.length === 0) {
+          const ep = this.graph.get('Endpoints', targetSvcNs, targetSvcName);
+          if (ep && ep.subsets) {
+            for (const sub of ep.subsets) {
+              for (const addr of (sub.addresses || [])) {
+                if (addr.ip) ips.push(addr.ip);
+              }
+            }
+          }
+        }
         if (ips.length > 0) {
           return {
             records: ips.map((ip) => ({ ip, type: 'A' })),

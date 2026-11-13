@@ -183,3 +183,4 @@ test('Subphase 3.1.1: kubeadm certs check-expiration and renew all integration',
   const certContent = vfs.readFile('/etc/kubernetes/pki/apiserver.crt');
   assert.ok(certContent.includes('BEGIN CERTIFICATE'));
 });
+

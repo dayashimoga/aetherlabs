@@ -582,6 +582,10 @@ class ControllerManager {
               name: podName,
               namespace: ns,
               labels: podLabels,
+              annotations: {
+                ...((template.metadata && template.metadata.annotations) || {}),
+                'apps.kubernetes.io/pod-index': String(i)
+              },
               ownerReferences: [
                 {
                   apiVersion: 'apps/v1',
@@ -592,7 +596,11 @@ class ControllerManager {
                 }
               ]
             },
-            spec: JSON.parse(JSON.stringify(template.spec || {})),
+            spec: {
+              ...(JSON.parse(JSON.stringify(template.spec || {}))),
+              hostname: podName,
+              subdomain: sts.spec?.serviceName || sts.metadata.name
+            },
             status: { phase: 'Pending', podIP: '<none>' }
           };
           this.graph.set(newPod, { skipReconcileNotification: true });
@@ -607,14 +615,16 @@ class ControllerManager {
       }
 
       const currentPods = this.graph.getChildren(sts.metadata.uid).filter((c) => c.kind === 'Pod');
-      const readyPods = currentPods.filter((p) => p.status && p.status.phase === 'Running');
+      const readyPods = currentPods.filter((p) => p.status && p.status.phase === 'Running' && (!p.status.ready || !p.status.ready.startsWith('0/')));
 
       sts.status = {
-        observedGeneration: sts.metadata.generation,
+        observedGeneration: sts.metadata.generation || 1,
         replicas: currentPods.length,
         readyReplicas: readyPods.length,
         currentReplicas: currentPods.length,
-        updatedReplicas: currentPods.length
+        updatedReplicas: currentPods.length,
+        currentRevision: `${sts.metadata.name}-${hashTemplate(template)}`,
+        updateRevision: `${sts.metadata.name}-${hashTemplate(template)}`
       };
       this.graph.set(sts, { skipReconcileNotification: true });
     }
@@ -736,9 +746,71 @@ class ControllerManager {
     for (const cj of cronJobs) {
       if (cj.metadata.deletionTimestamp) continue;
       const ns = cj.metadata.namespace || 'default';
-      const jobName = `${cj.metadata.name}-run-1`;
+      const suspend = cj.spec && cj.spec.suspend === true;
+      const concurrencyPolicy = (cj.spec && cj.spec.concurrencyPolicy) || 'Allow';
+      const successfulLimit = (cj.spec && cj.spec.successfulJobsHistoryLimit !== undefined) ? Number(cj.spec.successfulJobsHistoryLimit) : 3;
+      const failedLimit = (cj.spec && cj.spec.failedJobsHistoryLimit !== undefined) ? Number(cj.spec.failedJobsHistoryLimit) : 1;
 
-      if (!this.graph.get('Job', ns, jobName)) {
+      // Find all jobs owned by this CronJob
+      const ownedJobs = this.graph.list({ kind: 'Job', namespace: ns }).filter((j) => {
+        return (j.metadata?.ownerReferences || []).some((o) => o.kind === 'CronJob' && o.name === cj.metadata.name);
+      });
+
+      const activeJobs = ownedJobs.filter((j) => {
+        const isComplete = (j.status?.conditions || []).some((c) => c.type === 'Complete' && c.status === 'True');
+        const isFailed = (j.status?.conditions || []).some((c) => c.type === 'Failed' && c.status === 'True');
+        return !isComplete && !isFailed;
+      });
+
+      const successfulJobs = ownedJobs.filter((j) => (j.status?.conditions || []).some((c) => c.type === 'Complete' && c.status === 'True'));
+      const failedJobs = ownedJobs.filter((j) => (j.status?.conditions || []).some((c) => c.type === 'Failed' && c.status === 'True'));
+
+      // History limits cleanup
+      if (successfulJobs.length > successfulLimit) {
+        const excess = successfulJobs.slice(0, successfulJobs.length - successfulLimit);
+        for (const j of excess) {
+          const pods = this.graph.getChildren(j.metadata.uid);
+          for (const p of pods) this.graph.delete(p.metadata.uid);
+          this.graph.delete(j.metadata.uid);
+        }
+      }
+
+      if (failedJobs.length > failedLimit) {
+        const excess = failedJobs.slice(0, failedJobs.length - failedLimit);
+        for (const j of excess) {
+          const pods = this.graph.getChildren(j.metadata.uid);
+          for (const p of pods) this.graph.delete(p.metadata.uid);
+          this.graph.delete(j.metadata.uid);
+        }
+      }
+
+      if (suspend) {
+        cj.status = {
+          active: activeJobs.map((j) => ({ kind: 'Job', name: j.metadata.name, namespace: ns, uid: j.metadata.uid })),
+          lastScheduleTime: cj.status?.lastScheduleTime || null
+        };
+        this.graph.set(cj, { skipReconcileNotification: true });
+        continue;
+      }
+
+      // Concurrency policy check
+      let shouldSpawn = true;
+      if (activeJobs.length > 0) {
+        if (concurrencyPolicy === 'Forbid') {
+          shouldSpawn = false;
+        } else if (concurrencyPolicy === 'Replace') {
+          for (const j of activeJobs) {
+            const pods = this.graph.getChildren(j.metadata.uid);
+            for (const p of pods) this.graph.delete(p.metadata.uid);
+            this.graph.delete(j.metadata.uid);
+          }
+        }
+      }
+
+      const currentJobIndex = ownedJobs.length + 1;
+      const jobName = `${cj.metadata.name}-run-${currentJobIndex}`;
+
+      if (shouldSpawn && !this.graph.get('Job', ns, jobName) && ownedJobs.length === 0) {
         const jobTpl = (cj.spec && cj.spec.jobTemplate && cj.spec.jobTemplate.spec) || {};
         const job = {
           apiVersion: 'batch/v1',
@@ -762,9 +834,19 @@ class ControllerManager {
         this.graph.set(job, { skipReconcileNotification: true });
       }
 
+      // Re-query active jobs after potential mutations
+      const updatedActive = this.graph.list({ kind: 'Job', namespace: ns }).filter((j) => {
+        const owned = (j.metadata?.ownerReferences || []).some((o) => o.kind === 'CronJob' && o.name === cj.metadata.name);
+        if (!owned) return false;
+        const isComplete = (j.status?.conditions || []).some((c) => c.type === 'Complete' && c.status === 'True');
+        const isFailed = (j.status?.conditions || []).some((c) => c.type === 'Failed' && c.status === 'True');
+        return !isComplete && !isFailed;
+      });
+
       cj.status = {
-        active: 1,
-        lastScheduleTime: new Date().toISOString()
+        active: updatedActive.map((j) => ({ kind: 'Job', name: j.metadata.name, namespace: ns, uid: j.metadata.uid })),
+        lastScheduleTime: cj.status?.lastScheduleTime || new Date().toISOString(),
+        lastSuccessfulTime: successfulJobs.length > 0 ? (cj.status?.lastSuccessfulTime || new Date().toISOString()) : undefined
       };
       this.graph.set(cj, { skipReconcileNotification: true });
     }
@@ -774,15 +856,39 @@ class ControllerManager {
     for (const job of jobs) {
       if (job.metadata.deletionTimestamp) continue;
       const ns = job.metadata.namespace || 'default';
-      const completions = (job.spec && job.spec.completions) || 1;
+      const completions = (job.spec && job.spec.completions !== undefined) ? Number(job.spec.completions) : 1;
+      const parallelism = (job.spec && job.spec.parallelism !== undefined) ? Number(job.spec.parallelism) : 1;
+      const backoffLimit = (job.spec && job.spec.backoffLimit !== undefined) ? Number(job.spec.backoffLimit) : 6;
+      const activeDeadlineSeconds = (job.spec && job.spec.activeDeadlineSeconds !== undefined) ? Number(job.spec.activeDeadlineSeconds) : null;
       const template = (job.spec && job.spec.template) || {
         spec: { containers: [{ name: job.metadata.name, image: 'busybox:1.36' }] }
       };
 
-      const childPods = this.graph.getChildren(job.metadata.uid).filter((c) => c.kind === 'Pod');
-      if (childPods.length < completions) {
-        for (let i = childPods.length; i < completions; i++) {
-          const podName = `${job.metadata.name}-pod-${i + 1}`;
+      const c = template.spec?.containers?.[0] || {};
+      const cmdStr = Array.isArray(c.command) ? c.command.join(' ') : String(c.command || '');
+      const envList = Array.isArray(c.env) ? c.env : [];
+      const isFailing = cmdStr.includes('exit 1') || cmdStr.includes('/bin/false') || envList.some((e) => e.name === 'FAIL_JOB' && String(e.value) === 'true');
+      const isDeadlineExceeded = activeDeadlineSeconds !== null && activeDeadlineSeconds <= 0;
+
+      if (isDeadlineExceeded) {
+        job.status = {
+          failed: 1,
+          succeeded: 0,
+          active: 0,
+          conditions: [
+            { type: 'Failed', status: 'True', reason: 'DeadlineExceeded', message: 'Job was active longer than specified deadline' }
+          ]
+        };
+        this.graph.set(job, { skipReconcileNotification: true });
+        continue;
+      }
+
+      if (isFailing) {
+        const failedPods = this.graph.getChildren(job.metadata.uid).filter((c) => c.kind === 'Pod');
+        const attempts = Math.min(failedPods.length + 1, backoffLimit);
+
+        if (failedPods.length < attempts) {
+          const podName = `${job.metadata.name}-failed-${attempts}`;
           const newPod = {
             apiVersion: 'v1',
             kind: 'Pod',
@@ -801,16 +907,86 @@ class ControllerManager {
               ]
             },
             spec: JSON.parse(JSON.stringify(template.spec || {})),
-            status: { phase: 'Running', ready: '1/1' }
+            status: {
+              phase: 'Failed',
+              ready: '0/1',
+              message: 'Error: container failed with exit status 1'
+            }
+          };
+          this.graph.set(newPod, { skipReconcileNotification: true });
+        }
+
+        job.status = {
+          failed: attempts,
+          succeeded: 0,
+          active: 0,
+          conditions: [
+            {
+              type: 'Failed',
+              status: attempts >= backoffLimit ? 'True' : 'False',
+              reason: 'BackoffLimitExceeded',
+              message: `Job has reached the specified backoff limit (${backoffLimit})`
+            }
+          ]
+        };
+        this.graph.set(job, { skipReconcileNotification: true });
+        continue;
+      }
+
+      // Successful job execution respecting completions and parallelism
+      const childPods = this.graph.getChildren(job.metadata.uid).filter((c) => c.kind === 'Pod');
+      const succeededPods = childPods.filter((p) => p.status?.phase === 'Succeeded');
+      const activePods = childPods.filter((p) => p.status?.phase === 'Running' || p.status?.phase === 'Pending');
+
+      const totalSpawned = childPods.length;
+      if (succeededPods.length < completions) {
+        const remainingToSpawn = completions - totalSpawned;
+        const currentActive = activePods.length;
+        const canSpawn = Math.min(parallelism - currentActive, remainingToSpawn);
+
+        for (let i = 0; i < canSpawn; i++) {
+          const podIndex = totalSpawned + i + 1;
+          const podName = `${job.metadata.name}-pod-${podIndex}`;
+          const newPod = {
+            apiVersion: 'v1',
+            kind: 'Pod',
+            metadata: {
+              name: podName,
+              namespace: ns,
+              labels: { 'job-name': job.metadata.name },
+              ownerReferences: [
+                {
+                  apiVersion: 'batch/v1',
+                  kind: 'Job',
+                  name: job.metadata.name,
+                  uid: job.metadata.uid,
+                  controller: true
+                }
+              ]
+            },
+            spec: JSON.parse(JSON.stringify(template.spec || {})),
+            status: { phase: 'Succeeded', ready: '0/1', reason: 'Completed', message: 'Job container completed successfully' }
           };
           this.graph.set(newPod, { skipReconcileNotification: true });
         }
       }
 
+      const updatedChildPods = this.graph.getChildren(job.metadata.uid).filter((c) => c.kind === 'Pod');
+      const updatedSucceeded = updatedChildPods.filter((p) => p.status?.phase === 'Succeeded').length;
+
       job.status = {
-        succeeded: completions,
+        succeeded: updatedSucceeded,
         active: 0,
-        conditions: [{ type: 'Complete', status: 'True' }]
+        failed: 0,
+        completionTime: updatedSucceeded >= completions ? new Date().toISOString() : undefined,
+        conditions: [
+          {
+            type: 'Complete',
+            status: updatedSucceeded >= completions ? 'True' : 'False',
+            reason: updatedSucceeded >= completions ? 'Completed' : 'Running',
+            message: updatedSucceeded >= completions ? 'Job completed successfully' : 'Job is progressing'
+          }
+        ]
       };
       this.graph.set(job, { skipReconcileNotification: true });
     }
@@ -836,6 +1012,48 @@ class ControllerManager {
       pod.status.message = health.message;
       if (health.nodeName) pod.status.nodeName = health.nodeName;
 
+      const spec = pod.spec || {};
+      const containers = spec.containers || [{ name: 'app', image: 'nginx:1.27-alpine' }];
+      const isReady = health.isReady !== false && health.phase === 'Running' && (health.reason === 'Running' || !health.reason);
+      const initPassed = !health.reason?.startsWith('Init:');
+
+      pod.status.conditions = [
+        { type: 'PodScheduled', status: 'True', lastTransitionTime: new Date().toISOString() },
+        { type: 'Initialized', status: initPassed ? 'True' : 'False', reason: initPassed ? 'PodInitialized' : 'InitContainersPending', lastTransitionTime: new Date().toISOString() },
+        { type: 'ContainersReady', status: isReady ? 'True' : 'False', reason: isReady ? 'ContainersReady' : 'ContainersNotReady', lastTransitionTime: new Date().toISOString() },
+        { type: 'Ready', status: isReady ? 'True' : 'False', reason: isReady ? 'PodReady' : 'ContainersNotReady', lastTransitionTime: new Date().toISOString() }
+      ];
+
+      if (health.initContainerStatuses) {
+        pod.status.initContainerStatuses = health.initContainerStatuses;
+      } else if (spec.initContainers && Array.isArray(spec.initContainers)) {
+        pod.status.initContainerStatuses = spec.initContainers.map((ic) => ({
+          name: ic.name,
+          image: ic.image || 'busybox:1.36',
+          ready: true,
+          state: { terminated: { exitCode: 0, reason: 'Completed' } }
+        }));
+      }
+
+      pod.status.containerStatuses = containers.map((c) => ({
+        name: c.name,
+        ready: isReady,
+        restartCount: health.restarts || 0,
+        image: c.image || 'nginx:1.27-alpine',
+        state: health.phase === 'Running'
+          ? { running: { startedAt: '2026-11-13T06:00:00Z' } }
+          : { waiting: { reason: health.reason, message: health.message } }
+      }));
+
+      if (spec.ephemeralContainers && Array.isArray(spec.ephemeralContainers)) {
+        pod.status.ephemeralContainerStatuses = spec.ephemeralContainers.map((ec) => ({
+          name: ec.name,
+          image: ec.image || 'busybox:latest',
+          ready: true,
+          state: { running: { startedAt: '2026-11-13T06:00:00Z' } }
+        }));
+      }
+
       if (health.phase === 'Running') {
         if (!pod.status.podIP || pod.status.podIP === '<none>') {
           pod.status.podIP = this.nextPodIP();
@@ -849,11 +1067,86 @@ class ControllerManager {
   }
 
   _evaluatePodHealth(pod, nodes) {
+    if (pod.status?.phase === 'Succeeded') {
+      return {
+        phase: 'Succeeded',
+        reason: pod.status.reason || 'Completed',
+        ready: pod.status.ready || '0/1',
+        restarts: pod.status.restarts || 0,
+        message: pod.status.message || 'Job completed'
+      };
+    }
+    if (pod.status?.phase === 'Failed' && (pod.metadata?.labels?.['job-name'] || pod.status?.reason === 'Error')) {
+      return {
+        phase: 'Failed',
+        reason: pod.status.reason || 'Error',
+        ready: pod.status.ready || '0/1',
+        restarts: pod.status.restarts || 0,
+        message: pod.status.message || 'Container failed'
+      };
+    }
+
     const spec = pod.spec || {};
     const containers = spec.containers || [{ name: 'app', image: 'nginx:1.27-alpine' }];
     const firstContainer = containers[0] || { name: 'app', image: 'nginx:1.27-alpine' };
     const image = String(firstContainer.image || '');
     const ns = (pod.metadata && pod.metadata.namespace) || 'default';
+
+    // 0. initContainers sequential execution
+    if (spec.initContainers && Array.isArray(spec.initContainers) && spec.initContainers.length > 0) {
+      const initStatuses = [];
+      for (let i = 0; i < spec.initContainers.length; i++) {
+        const ic = spec.initContainers[i];
+        const icImage = String(ic.image || '');
+        const icCmd = Array.isArray(ic.command) ? ic.command.join(' ') : String(ic.command || '');
+        const icEnv = Array.isArray(ic.env) ? ic.env : [];
+        const hasIcCrash = icEnv.some((e) => (e.name === 'CRASH_ON_START' || e.name === 'FAIL_INIT') && String(e.value) === 'true');
+
+        if (icImage.includes('broken') || icImage.includes('invalid') || icImage.includes('missing') || icImage.includes('nonexistent')) {
+          initStatuses.push({
+            name: ic.name,
+            image: icImage,
+            ready: false,
+            restartCount: 0,
+            state: { waiting: { reason: 'ImagePullBackOff', message: `Back-off pulling image "${icImage}"` } }
+          });
+          return {
+            phase: 'Pending',
+            reason: 'Init:ImagePullBackOff',
+            ready: `0/${containers.length}`,
+            restarts: 0,
+            initContainerStatuses: initStatuses,
+            message: `Init container "${ic.name}" failed to pull image "${icImage}"`
+          };
+        }
+
+        if (icCmd.includes('exit 1') || icCmd.includes('/bin/false') || hasIcCrash) {
+          initStatuses.push({
+            name: ic.name,
+            image: icImage,
+            ready: false,
+            restartCount: 3,
+            state: { waiting: { reason: 'CrashLoopBackOff', message: 'Error: exit status 1' } }
+          });
+          return {
+            phase: 'Pending',
+            reason: 'Init:CrashLoopBackOff',
+            ready: `0/${containers.length}`,
+            restarts: 3,
+            initContainerStatuses: initStatuses,
+            message: `Init container "${ic.name}" exited with error code 1`
+          };
+        }
+
+        initStatuses.push({
+          name: ic.name,
+          image: icImage,
+          ready: true,
+          restartCount: 0,
+          state: { terminated: { exitCode: 0, reason: 'Completed' } }
+        });
+      }
+    }
 
     // 1. Resource capacity / CPU overflow
     const requests = (firstContainer.resources && firstContainer.resources.requests) || {};
@@ -1026,6 +1319,63 @@ class ControllerManager {
       }
     }
 
+    // 11. Container Probes: startupProbe, livenessProbe, readinessProbe
+    const startupProbe = firstContainer.startupProbe;
+    if (startupProbe) {
+      const probeCmd = Array.isArray(startupProbe.exec?.command) ? startupProbe.exec.command.join(' ') : String(startupProbe.exec?.command || '');
+      const probeHttp = startupProbe.httpGet?.path || '';
+      const hasFailEnv = envList.some((e) => e.name === 'FAIL_STARTUP_PROBE' && String(e.value) === 'true');
+      if (probeCmd.includes('exit 1') || probeHttp.includes('fail') || hasFailEnv) {
+        return {
+          phase: 'Running',
+          reason: 'CrashLoopBackOff',
+          ready: `0/${containers.length}`,
+          restarts: 4,
+          message: 'Startup probe failed: HTTP probe failed with statuscode: 500'
+        };
+      }
+    }
+
+    const livenessProbe = firstContainer.livenessProbe;
+    if (livenessProbe) {
+      const probeCmd = Array.isArray(livenessProbe.exec?.command) ? livenessProbe.exec.command.join(' ') : String(livenessProbe.exec?.command || '');
+      const probeHttp = livenessProbe.httpGet?.path || '';
+      const hasFailEnv = envList.some((e) => e.name === 'FAIL_LIVENESS_PROBE' && String(e.value) === 'true');
+      if (probeCmd.includes('exit 1') || probeHttp.includes('fail') || hasFailEnv) {
+        return {
+          phase: 'Running',
+          reason: 'CrashLoopBackOff',
+          ready: `0/${containers.length}`,
+          restarts: 5,
+          message: 'Liveness probe failed: HTTP probe failed with statuscode: 500'
+        };
+      }
+    }
+
+    let isReady = true;
+    const readinessProbe = firstContainer.readinessProbe;
+    if (readinessProbe) {
+      const probeCmd = Array.isArray(readinessProbe.exec?.command) ? readinessProbe.exec.command.join(' ') : String(readinessProbe.exec?.command || '');
+      const probeHttp = readinessProbe.httpGet?.path || '';
+      const hasFailEnv = envList.some((e) => e.name === 'FAIL_READINESS_PROBE' && String(e.value) === 'true');
+      const hasUnreadyAnnotation = pod.metadata?.annotations?.['kubelabs.io/readiness'] === 'false';
+      if (probeCmd.includes('exit 1') || probeHttp.includes('fail') || hasFailEnv || hasUnreadyAnnotation) {
+        isReady = false;
+      }
+    }
+
+    if (!isReady) {
+      return {
+        phase: 'Running',
+        reason: 'ContainersNotReady',
+        ready: `0/${containers.length}`,
+        isReady: false,
+        restarts: 0,
+        nodeName: gpuReq > 0 ? 'kubelabs-worker-gpu-02' : 'kubelabs-worker-01',
+        message: 'Readiness probe failed: HTTP probe failed with statuscode: 500'
+      };
+    }
+
     return {
       phase: 'Running',
       reason: 'Running',
@@ -1063,16 +1413,39 @@ class ControllerManager {
         }
       }
 
-      // Find ready matching pods
+      // Find ready matching pods vs unready matching pods
       const matchingPods = this.graph.list({ kind: 'Pod', namespace: ns }).filter((p) => {
-        if (!p.status || p.status.phase !== 'Running' || p.status.reason !== 'Running') return false;
+        if (!p.status || p.status.phase !== 'Running') return false;
         if (selectorKeys.length === 0) return false;
         const pLabels = (p.metadata && p.metadata.labels) || {};
         return selectorKeys.every((k) => pLabels[k] === selector[k]);
       });
 
-      const endpointAddresses = matchingPods.map((p) => ({
+      const readyPods = [];
+      const notReadyPods = [];
+
+      for (const p of matchingPods) {
+        const isReasonRunning = !p.status.reason || p.status.reason === 'Running';
+        const readyCond = (p.status.conditions || []).find((c) => c.type === 'Ready');
+        const isReadyCondTrue = !readyCond || readyCond.status === 'True';
+        const isReadyStringTrue = !p.status.ready || (!p.status.ready.startsWith('0/') && p.status.ready !== '0/0');
+
+        if (isReasonRunning && isReadyCondTrue && isReadyStringTrue && p.status.podIP && p.status.podIP !== '<none>') {
+          readyPods.push(p);
+        } else {
+          notReadyPods.push(p);
+        }
+      }
+
+      const endpointAddresses = readyPods.map((p) => ({
         ip: p.status.podIP,
+        hostname: p.spec?.hostname || p.metadata.name,
+        targetRef: { kind: 'Pod', name: p.metadata.name, namespace: ns, uid: p.metadata.uid }
+      }));
+
+      const notReadyEndpointAddresses = notReadyPods.map((p) => ({
+        ip: p.status.podIP || '<none>',
+        hostname: p.spec?.hostname || p.metadata.name,
         targetRef: { kind: 'Pod', name: p.metadata.name, namespace: ns, uid: p.metadata.uid }
       }));
 
@@ -1099,6 +1472,7 @@ class ControllerManager {
           subsets: [
             {
               addresses: endpointAddresses,
+              notReadyAddresses: notReadyEndpointAddresses,
               ports: ports.map((p) => ({ port: p.port, name: p.name || 'http', protocol: p.protocol || 'TCP' }))
             }
           ]
@@ -1108,6 +1482,7 @@ class ControllerManager {
         ep.subsets = [
           {
             addresses: endpointAddresses,
+            notReadyAddresses: notReadyEndpointAddresses,
             ports: ports.map((p) => ({ port: p.port, name: p.name || 'http', protocol: p.protocol || 'TCP' }))
           }
         ];
