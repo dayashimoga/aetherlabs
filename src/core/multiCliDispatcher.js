@@ -27,6 +27,13 @@ try {
   SchedulerEngine = (typeof globalThis !== 'undefined' && globalThis.SchedulerEngine);
 }
 
+let NetworkingEngine;
+try {
+  NetworkingEngine = require('./networkingEngine').NetworkingEngine;
+} catch {
+  NetworkingEngine = (typeof globalThis !== 'undefined' && globalThis.NetworkingEngine);
+}
+
 let VirtualFileSystem;
 try {
   VirtualFileSystem = require('./virtualFileSystem').VirtualFileSystem;
@@ -149,6 +156,7 @@ class MultiCliDispatcher {
     this.controllerManager = options.controllerManager || (ControllerManager && this.graph ? new ControllerManager(this.graph) : null);
     this.vfs = options.vfs || (VirtualFileSystem ? new VirtualFileSystem() : null);
     this.scheduler = options.scheduler || (SchedulerEngine && this.graph ? new SchedulerEngine(this.graph) : null);
+    this.networking = options.networking || (NetworkingEngine && this.graph ? new NetworkingEngine(this.graph) : null);
 
     // Initialize Cloud Extensions
     const HelmReleaseManager = cloudExtensions.HelmReleaseManager;
@@ -343,6 +351,7 @@ class MultiCliDispatcher {
     pipelineDriver.registerCommand('curl', this.handleCurl.bind(this));
     pipelineDriver.registerCommand('dig', this.handleDig.bind(this));
     pipelineDriver.registerCommand('nslookup', this.handleNslookup.bind(this));
+    pipelineDriver.registerCommand('traceroute', this.handleTraceroute.bind(this));
     pipelineDriver.registerCommand('ip', this.handleIp.bind(this));
     pipelineDriver.registerCommand('ss', this.handleSs.bind(this));
     pipelineDriver.registerCommand('ping', this.handlePing.bind(this));
@@ -2098,6 +2107,32 @@ class MultiCliDispatcher {
   }
 
   handleCilium({ argv = [] }) {
+    const sub = argv[1];
+    if (sub === 'connectivity' && argv[2] === 'test') {
+      if (this.networking) {
+        const pods = this.graph.list({ kind: 'Pod' }).filter((p) => p.status?.phase === 'Running');
+        const srcPod = pods[0] || { metadata: { name: 'client-pod', namespace: 'default' }, status: { podIP: '10.244.1.10' } };
+        const dstPod = pods[1] || { metadata: { name: 'server-pod', namespace: 'prod' }, status: { podIP: '10.244.2.20' } };
+        const trace = this.networking.tracePacket(srcPod, dstPod, 80, 'TCP');
+
+        const lines = [
+          `[.] Connectivity test using src: ${srcPod.metadata.namespace}/${srcPod.metadata.name} -> dst: ${dstPod.metadata.namespace}/${dstPod.metadata.name}`,
+          '--------------------------------------------------------------------------------'
+        ];
+        trace.hops.forEach((h, i) => {
+          lines.push(`[${i + 1}/${trace.hops.length}] ${h.name}: ${h.status} (${h.details})`);
+        });
+        lines.push('--------------------------------------------------------------------------------');
+        if (trace.allowed) {
+          lines.push('All connectivity checks successful (0 drops)');
+          return { stdout: lines.join('\n') + '\n', stderr: '', code: 0 };
+        } else {
+          lines.push(`Connectivity test failed: ${trace.dropReason}`);
+          return { stdout: lines.join('\n') + '\n', stderr: `drop: ${trace.dropReason}\n`, code: 1 };
+        }
+      }
+      return { stdout: 'Cilium connectivity test passed: all 1/1 flows allowed\n', stderr: '', code: 0 };
+    }
     return { stdout: '    /¯¯\\\n/¯¯\\__/¯¯\\    Cilium:             OK\n\\__/¯¯\\__/    Operator:           OK\n    \\__/      Datapath:           eBPF (Kernel 6.8)\n', stderr: '', code: 0 };
   }
 
@@ -2141,7 +2176,42 @@ class MultiCliDispatcher {
   }
 
   handleDig({ argv = [] }) {
-    const host = argv.find((a) => !a.startsWith('-')) || 'kubernetes.default.svc.cluster.local';
+    const host = argv.find((a, i) => i > 0 && !a.startsWith('-')) || 'kubernetes.default.svc.cluster.local';
+    let resolvedIp = '10.96.0.1';
+    let status = 'NOERROR';
+    let errorMsg = '';
+
+    if (this.networking) {
+      const corednsCm = this.graph.get('ConfigMap', 'kube-system', 'coredns');
+      if (corednsCm && corednsCm.data && corednsCm.data.Corefile && corednsCm.data.Corefile.includes('127.0.0.1')) {
+        this.networking.upstreamDns = '127.0.0.1';
+      }
+      const dnsRes = this.networking.resolveDNS(host);
+      status = dnsRes.rcode;
+      if (dnsRes.records && dnsRes.records.length > 0) {
+        resolvedIp = dnsRes.records[0].ip;
+      } else {
+        errorMsg = dnsRes.error || '';
+      }
+    }
+
+    if (status !== 'NOERROR') {
+      return {
+        stdout: [
+          `; <<>> DiG 9.18.28 <<>> ${host}`,
+          ';; Got answer:',
+          `;; ->>HEADER<<- opcode: QUERY, status: ${status}, id: 41285`,
+          errorMsg ? `;; WARNING: ${errorMsg}` : '',
+          ';; QUESTION SECTION:',
+          `;${host}.\t\tIN\tA`,
+          '',
+          ';; SERVER: 10.96.0.10#53(10.96.0.10)'
+        ].filter(Boolean).join('\n') + '\n',
+        stderr: '',
+        code: status === 'SERVFAIL' ? 1 : 0
+      };
+    }
+
     return {
       stdout: [
         `; <<>> DiG 9.18.28 <<>> ${host}`,
@@ -2151,7 +2221,7 @@ class MultiCliDispatcher {
         `;${host}.\t\tIN\tA`,
         '',
         ';; ANSWER SECTION:',
-        `${host}.\t30\tIN\tA\t10.96.0.1`,
+        `${host}.\t30\tIN\tA\t${resolvedIp}`,
         '',
         ';; SERVER: 10.96.0.10#53(10.96.0.10)',
         ';; WHEN: ' + new Date().toUTCString(),
@@ -2163,9 +2233,55 @@ class MultiCliDispatcher {
   }
 
   handleNslookup({ argv = [] }) {
-    const host = argv[1] || 'kubernetes.default.svc';
+    const host = argv.find((a, i) => i > 0 && !a.startsWith('-')) || 'kubernetes.default.svc';
+    let resolvedIp = '10.96.0.1';
+    let status = 'NOERROR';
+    let errorMsg = '';
+
+    if (this.networking) {
+      const corednsCm = this.graph.get('ConfigMap', 'kube-system', 'coredns');
+      if (corednsCm && corednsCm.data && corednsCm.data.Corefile && corednsCm.data.Corefile.includes('127.0.0.1')) {
+        this.networking.upstreamDns = '127.0.0.1';
+      }
+      const dnsRes = this.networking.resolveDNS(host);
+      status = dnsRes.rcode;
+      if (dnsRes.records && dnsRes.records.length > 0) {
+        resolvedIp = dnsRes.records[0].ip;
+      } else {
+        errorMsg = dnsRes.error || '';
+      }
+    }
+
+    if (status !== 'NOERROR') {
+      return {
+        stdout: `Server:\t\t10.96.0.10\nAddress:\t10.96.0.10#53\n\n** server can't find ${host}: ${status}${errorMsg ? ' - ' + errorMsg : ''}\n`,
+        stderr: '',
+        code: 1
+      };
+    }
+
     return {
-      stdout: `Server:\t\t10.96.0.10\nAddress:\t10.96.0.10#53\n\nName:\t${host}\nAddress: 10.96.0.1\n`,
+      stdout: `Server:\t\t10.96.0.10\nAddress:\t10.96.0.10#53\n\nName:\t${host}\nAddress: ${resolvedIp}\n`,
+      stderr: '',
+      code: 0
+    };
+  }
+
+  handleTraceroute({ argv = [] }) {
+    const target = argv.find((a, i) => i > 0 && !a.startsWith('-')) || '10.96.0.1';
+    if (this.networking) {
+      const pods = this.graph.list({ kind: 'Pod' }).filter((p) => p.status?.phase === 'Running');
+      const srcPod = pods[0] || { metadata: { name: 'tracer-pod', namespace: 'default' }, status: { podIP: '10.244.1.10' } };
+      const trace = this.networking.tracePacket(srcPod, target, 80, 'TCP');
+
+      const lines = [`traceroute to ${target}, 30 hops max, 60 byte packets`];
+      trace.hops.forEach((h, i) => {
+        lines.push(` ${i + 1}  ${h.name} (${h.status}): ${h.details}`);
+      });
+      return { stdout: lines.join('\n') + '\n', stderr: '', code: trace.allowed ? 0 : 1 };
+    }
+    return {
+      stdout: `traceroute to ${target}, 30 hops max\n 1  10.244.0.1 (cbr0)  0.214 ms\n 2  ${target}  0.412 ms\n`,
       stderr: '',
       code: 0
     };

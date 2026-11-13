@@ -218,3 +218,72 @@ test('Subphase 2.2.2: Deterministic 7-Stage Packet Tracer with NetworkPolicy and
   assert.ok(traceBlocked.hops.some((h) => h.name === 'Ingress NetworkPolicy' && h.status === 'DROP'));
 });
 
+test('Subphase 2.2.2: CLI dig, nslookup and CoreDNS resolution integration', () => {
+  const { MultiCliDispatcher } = require('../src/core/multiCliDispatcher');
+  const graph = new ResourceGraph();
+  bootstrapNetworkCluster(graph);
+
+  // Setup service
+  graph.set({
+    apiVersion: 'v1',
+    kind: 'Service',
+    metadata: { name: 'auth-svc', namespace: 'default' },
+    spec: {
+      type: 'ClusterIP',
+      clusterIP: '10.96.2.88',
+      ports: [{ port: 80 }]
+    }
+  });
+
+  const dispatcher = new MultiCliDispatcher({ graph });
+
+  // 1. dig resolves auth-svc
+  const digRes = dispatcher.handleDig({ argv: ['dig', 'auth-svc.default.svc.cluster.local'] });
+  assert.equal(digRes.code, 0);
+  assert.ok(digRes.stdout.includes('10.96.2.88'));
+  assert.ok(digRes.stdout.includes('status: NOERROR'));
+
+  // 2. nslookup resolves auth-svc
+  const nsRes = dispatcher.handleNslookup({ argv: ['nslookup', 'auth-svc.default'] });
+  assert.equal(nsRes.code, 0);
+  assert.ok(nsRes.stdout.includes('Address: 10.96.2.88'));
+
+  // 3. Loop detection produces SERVFAIL
+  graph.set({
+    apiVersion: 'v1',
+    kind: 'ConfigMap',
+    metadata: { name: 'coredns', namespace: 'kube-system' },
+    data: {
+      Corefile: '.:53 {\n  forward . 127.0.0.1:53\n  loop\n}'
+    }
+  });
+
+  const loopDig = dispatcher.handleDig({ argv: ['dig', 'auth-svc.default'] });
+  assert.equal(loopDig.code, 1);
+  assert.ok(loopDig.stdout.includes('SERVFAIL'));
+
+  const loopNs = dispatcher.handleNslookup({ argv: ['nslookup', 'auth-svc.default'] });
+  assert.equal(loopNs.code, 1);
+  assert.ok(loopNs.stdout.includes('SERVFAIL'));
+});
+
+test('Subphase 2.2.2: CLI cilium connectivity test and traceroute packet tracing', () => {
+  const { MultiCliDispatcher } = require('../src/core/multiCliDispatcher');
+  const graph = new ResourceGraph();
+  bootstrapNetworkCluster(graph);
+
+  const dispatcher = new MultiCliDispatcher({ graph });
+
+  // 1. cilium connectivity test allows traffic
+  const connRes = dispatcher.handleCilium({ argv: ['cilium', 'connectivity', 'test'] });
+  assert.equal(connRes.code, 0);
+  assert.ok(connRes.stdout.includes('Connectivity test using src:'));
+  assert.ok(connRes.stdout.includes('All connectivity checks successful'));
+
+  // 2. traceroute CLI command
+  const traceRes = dispatcher.handleTraceroute({ argv: ['traceroute', 'backend-pod'] });
+  assert.equal(traceRes.code, 0);
+  assert.ok(traceRes.stdout.includes('traceroute to backend-pod'));
+  assert.ok(traceRes.stdout.includes('Source Netns'));
+});
+

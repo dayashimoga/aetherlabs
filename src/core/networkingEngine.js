@@ -641,13 +641,21 @@ class NetworkingEngine {
     // 2. DNS Resolution if Destination is Hostname
     let resolvedDstIp = typeof dst === 'string' ? dst : dst?.status?.podIP || dst?.spec?.clusterIP;
     if (typeof dst === 'string' && !/^\d+\.\d+\.\d+\.\d+$/.test(dst)) {
-      const dnsRes = this.resolveDNS(dst, { namespace: srcPod.metadata.namespace });
-      if (dnsRes.rcode !== 'NOERROR' || dnsRes.records.length === 0) {
-        recordHop(2, 'CoreDNS Resolution', 'DROP', `DNS query failed for "${dst}": ${dnsRes.error || dnsRes.rcode}`);
-        return { allowed: false, dropReason: `CoreDNS NXDOMAIN/SERVFAIL for ${dst}`, hops };
+      const directPod = this.graph.list({ kind: 'Pod' }).find(
+        (p) => p.metadata.name === dst || `${p.metadata.namespace}/${p.metadata.name}` === dst
+      );
+      if (directPod && directPod.status?.podIP) {
+        resolvedDstIp = directPod.status.podIP;
+        recordHop(2, 'Name Resolution', 'PASS', `Resolved pod "${dst}" -> ${resolvedDstIp}`);
+      } else {
+        const dnsRes = this.resolveDNS(dst, { namespace: srcPod.metadata.namespace });
+        if (dnsRes.rcode !== 'NOERROR' || dnsRes.records.length === 0) {
+          recordHop(2, 'CoreDNS Resolution', 'DROP', `DNS query failed for "${dst}": ${dnsRes.error || dnsRes.rcode}`);
+          return { allowed: false, dropReason: `CoreDNS NXDOMAIN/SERVFAIL for ${dst}`, hops };
+        }
+        resolvedDstIp = dnsRes.records[0].ip;
+        recordHop(2, 'CoreDNS Resolution', 'PASS', `Resolved "${dst}" -> ${resolvedDstIp} (${dnsRes.records[0].type})`);
       }
-      resolvedDstIp = dnsRes.records[0].ip;
-      recordHop(2, 'CoreDNS Resolution', 'PASS', `Resolved "${dst}" -> ${resolvedDstIp} (${dnsRes.records[0].type})`);
     }
 
     // 3. Egress NetworkPolicy Evaluation
