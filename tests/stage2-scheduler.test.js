@@ -417,3 +417,142 @@ test('Subphase 2.2.1: PodDisruptionBudget (PDB) and node drain simulation', () =
   assert.ok(forceDrain.evicted.includes('payment-2'));
 });
 
+test('Subphase 2.2.1: PreferNoSchedule taint soft scoring and toleration', () => {
+  const graph = new ResourceGraph();
+  bootstrapNodes(graph);
+
+  // Add PreferNoSchedule taint to node-zone-a
+  const nodeA = graph.get('Node', null, 'node-zone-a');
+  nodeA.spec = { taints: [{ key: 'workload', value: 'special', effect: 'PreferNoSchedule' }] };
+  graph.set(nodeA);
+
+  const scheduler = new SchedulerEngine(graph);
+
+  // Pod without toleration should prefer node-zone-b
+  const regularPod = {
+    apiVersion: 'v1',
+    kind: 'Pod',
+    metadata: { name: 'regular-web', namespace: 'default' },
+    spec: {
+      nodeSelector: { 'node-role': 'worker' },
+      containers: [{ name: 'web', image: 'nginx' }]
+    }
+  };
+  const res = scheduler.schedulePod(regularPod);
+  assert.equal(res.scheduled, true);
+  assert.equal(res.nodeName, 'node-zone-b');
+
+  // Pod with toleration for PreferNoSchedule can schedule on either; if preferred nodeAffinity points to zone-a, it chooses zone-a
+  const toleratedPod = {
+    apiVersion: 'v1',
+    kind: 'Pod',
+    metadata: { name: 'tolerated-web', namespace: 'default' },
+    spec: {
+      tolerations: [{ key: 'workload', operator: 'Equal', value: 'special', effect: 'PreferNoSchedule' }],
+      affinity: {
+        nodeAffinity: {
+          preferredDuringSchedulingIgnoredDuringExecution: [{
+            weight: 50,
+            preference: {
+              matchExpressions: [{ key: 'topology.kubernetes.io/zone', operator: 'In', values: ['us-east-1a'] }]
+            }
+          }]
+        }
+      },
+      containers: [{ name: 'web', image: 'nginx' }]
+    }
+  };
+  const resTolerated = scheduler.schedulePod(toleratedPod);
+  assert.equal(resTolerated.scheduled, true);
+  assert.equal(resTolerated.nodeName, 'node-zone-a');
+});
+
+test('Subphase 2.2.1: Preferred podAffinity and podAntiAffinity co-location scoring', () => {
+  const graph = new ResourceGraph();
+  bootstrapNodes(graph);
+  const scheduler = new SchedulerEngine(graph);
+
+  // Place a redis cache pod on node-zone-b
+  const cachePod = {
+    apiVersion: 'v1',
+    kind: 'Pod',
+    metadata: { name: 'redis-cache', namespace: 'default', labels: { app: 'redis' } },
+    spec: { nodeName: 'node-zone-b', containers: [{ name: 'redis', image: 'redis' }] },
+    status: { phase: 'Running' }
+  };
+  graph.set(cachePod);
+
+  // Web pod has preferred podAffinity to be co-located with app=redis
+  const webPod = {
+    apiVersion: 'v1',
+    kind: 'Pod',
+    metadata: { name: 'web-frontend', namespace: 'default' },
+    spec: {
+      nodeSelector: { 'node-role': 'worker' },
+      affinity: {
+        podAffinity: {
+          preferredDuringSchedulingIgnoredDuringExecution: [{
+            weight: 40,
+            podAffinityTerm: {
+              topologyKey: 'kubernetes.io/hostname',
+              labelSelector: 'app=redis'
+            }
+          }]
+        }
+      },
+      containers: [{ name: 'web', image: 'nginx' }]
+    }
+  };
+
+  const res = scheduler.schedulePod(webPod);
+  assert.equal(res.scheduled, true);
+  assert.equal(res.nodeName, 'node-zone-b');
+});
+
+test('Subphase 2.2.1: PodDisruptionBudget maxUnavailable evaluation and kubectl drain CLI integration', async () => {
+  const { VirtualCluster } = require('../src/core/virtualCluster');
+  const { TerminalEngine } = require('../src/core/terminalEngine');
+
+  const cluster = new VirtualCluster();
+  cluster.reset();
+
+  // Create PDB with minAvailable: 2
+  cluster.applyResource({
+    apiVersion: 'policy/v1',
+    kind: 'PodDisruptionBudget',
+    metadata: { name: 'api-pdb', namespace: 'production' },
+    spec: {
+      minAvailable: 2,
+      selector: 'app=api'
+    }
+  });
+
+  // Create 2 api pods running on kubelabs-worker-01
+  cluster.applyResource({
+    apiVersion: 'v1',
+    kind: 'Pod',
+    metadata: { name: 'api-1', namespace: 'production', labels: { app: 'api' } },
+    spec: { nodeName: 'kubelabs-worker-01', containers: [{ name: 'api', image: 'api:v1' }] },
+    status: { phase: 'Running', nodeName: 'kubelabs-worker-01' }
+  });
+  cluster.applyResource({
+    apiVersion: 'v1',
+    kind: 'Pod',
+    metadata: { name: 'api-2', namespace: 'production', labels: { app: 'api' } },
+    spec: { nodeName: 'kubelabs-worker-01', containers: [{ name: 'api', image: 'api:v1' }] },
+    status: { phase: 'Running', nodeName: 'kubelabs-worker-01' }
+  });
+
+  const terminal = new TerminalEngine({ cluster });
+
+  // 1. Drain without force fails due to PDB
+  const drainRes = await terminal.execute('kubectl drain kubelabs-worker-01');
+  assert.equal(drainRes.exitCode, 1);
+  assert.ok(drainRes.output.includes('PodDisruptionBudget'));
+
+  // 2. Drain with --force succeeds
+  const forceRes = await terminal.execute('kubectl drain kubelabs-worker-01 --force');
+  assert.equal(forceRes.exitCode, 0);
+  assert.ok(forceRes.output.includes('drained'));
+});
+

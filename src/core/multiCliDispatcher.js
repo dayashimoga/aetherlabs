@@ -20,6 +20,13 @@ try {
   ControllerManager = (typeof globalThis !== 'undefined' && globalThis.ControllerManager);
 }
 
+let SchedulerEngine;
+try {
+  SchedulerEngine = require('./schedulerEngine').SchedulerEngine;
+} catch {
+  SchedulerEngine = (typeof globalThis !== 'undefined' && globalThis.SchedulerEngine);
+}
+
 let VirtualFileSystem;
 try {
   VirtualFileSystem = require('./virtualFileSystem').VirtualFileSystem;
@@ -141,6 +148,7 @@ class MultiCliDispatcher {
     this.graph = options.graph || (ResourceGraph ? new ResourceGraph() : null);
     this.controllerManager = options.controllerManager || (ControllerManager && this.graph ? new ControllerManager(this.graph) : null);
     this.vfs = options.vfs || (VirtualFileSystem ? new VirtualFileSystem() : null);
+    this.scheduler = options.scheduler || (SchedulerEngine && this.graph ? new SchedulerEngine(this.graph) : null);
 
     // Initialize Cloud Extensions
     const HelmReleaseManager = cloudExtensions.HelmReleaseManager;
@@ -995,10 +1003,35 @@ class MultiCliDispatcher {
   }
 
   _kubectlDrain(restArgs) {
-    const nodeName = restArgs[0];
+    let nodeName = null;
+    let force = false;
+    let ignoreDaemonSets = false;
+
+    for (const arg of restArgs) {
+      if (arg === '--force') {
+        force = true;
+      } else if (arg === '--ignore-daemonsets' || arg === '--ignore-daemonsets=true') {
+        ignoreDaemonSets = true;
+      } else if (!arg.startsWith('-') && !nodeName) {
+        nodeName = arg;
+      }
+    }
+
     if (!nodeName) return { stdout: '', stderr: 'error: node name required\n', code: 1 };
     const node = this.graph.get('Node', null, nodeName);
     if (!node) return { stdout: '', stderr: `Error: node "${nodeName}" not found\n`, code: 1 };
+
+    if (this.scheduler && typeof this.scheduler.drainNode === 'function') {
+      const res = this.scheduler.drainNode(nodeName, { force, ignoreDaemonSets });
+      if (!res.success) {
+        return { stdout: `node/${nodeName} cordoned\n`, stderr: `error: ${res.error}\n`, code: 1 };
+      }
+      const evictMsg = (res.evicted && res.evicted.length > 0)
+        ? `evicting pods on node "${nodeName}"\n`
+        : '';
+      return { stdout: `node/${nodeName} cordoned\n${evictMsg}node/${nodeName} drained\n`, stderr: '', code: 0 };
+    }
+
     node.spec = node.spec || {};
     node.spec.unschedulable = true;
     this.graph.update(node);

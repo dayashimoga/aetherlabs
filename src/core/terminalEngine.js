@@ -1178,10 +1178,22 @@ class TerminalEngine {
       return { exitCode: 0, output: `node/${nodeName} uncordoned` };
     }
     if (sub === 'drain') {
-      const nodeName = subArgs[0];
-      if (!nodeName) throw new Error('Usage: kubectl drain <node-name>');
-      this.cluster.drainNode(nodeName);
-      return { exitCode: 0, output: `node/${nodeName} cordoned\nevicting pods...\nnode/${nodeName} drained` };
+      const rest = subArgs;
+      let nodeName = null;
+      let force = false;
+      let ignoreDaemonSets = false;
+      for (const a of rest) {
+        if (a === '--force') force = true;
+        else if (a.startsWith('--ignore-daemonsets')) ignoreDaemonSets = true;
+        else if (!a.startsWith('-') && !nodeName) nodeName = a;
+      }
+      if (!nodeName) throw new Error('Usage: kubectl drain <node-name> [--force] [--ignore-daemonsets]');
+      try {
+        this.cluster.drainNode(nodeName, { force, ignoreDaemonSets });
+        return { exitCode: 0, output: `node/${nodeName} cordoned\nevicting pods on node "${nodeName}"\nnode/${nodeName} drained` };
+      } catch (err) {
+        return { exitCode: 1, output: `node/${nodeName} cordoned\nerror: ${err.message}` };
+      }
     }
     if (sub === 'taint') {
       const nodeIdx = subArgs[0] === 'nodes' || subArgs[0] === 'node' ? 1 : 0;

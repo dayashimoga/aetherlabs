@@ -673,7 +673,61 @@ class SchedulerEngine {
       if (matched) score += weight;
     }
 
-    // 2. Topology Spread Soft Scoring (ScheduleAnyway)
+    // 2. Preferred Pod Affinity & Pod Anti-Affinity
+    const preferredPodAffinity = pod.spec?.affinity?.podAffinity?.preferredDuringSchedulingIgnoredDuringExecution || [];
+    for (const weightedTerm of preferredPodAffinity) {
+      const weight = weightedTerm.weight || 10;
+      const term = weightedTerm.podAffinityTerm || weightedTerm;
+      const topKey = term.topologyKey || 'kubernetes.io/hostname';
+      const nodeDomainVal = nodeLabels[topKey];
+      if (nodeDomainVal) {
+        const hasCoLocated = allScheduledPods.some((p) => {
+          const pNode = this.graph.get('Node', null, p.spec?.nodeName);
+          return pNode?.metadata?.labels?.[topKey] === nodeDomainVal &&
+            this._matchesPodSelector(p, term.labelSelector, term.namespaces, pod.metadata?.namespace);
+        });
+        if (hasCoLocated) score += weight;
+      }
+    }
+
+    const preferredPodAntiAffinity = pod.spec?.affinity?.podAntiAffinity?.preferredDuringSchedulingIgnoredDuringExecution || [];
+    for (const weightedTerm of preferredPodAntiAffinity) {
+      const weight = weightedTerm.weight || 10;
+      const term = weightedTerm.podAffinityTerm || weightedTerm;
+      const topKey = term.topologyKey || 'kubernetes.io/hostname';
+      const nodeDomainVal = nodeLabels[topKey];
+      if (nodeDomainVal) {
+        const hasColliding = allScheduledPods.some((p) => {
+          const pNode = this.graph.get('Node', null, p.spec?.nodeName);
+          return pNode?.metadata?.labels?.[topKey] === nodeDomainVal &&
+            this._matchesPodSelector(p, term.labelSelector, term.namespaces, pod.metadata?.namespace);
+        });
+        if (hasColliding) score -= weight;
+      }
+    }
+
+    // 3. Taint Scoring (Penalize untolerated PreferNoSchedule taints)
+    const taints = node.spec?.taints || [];
+    const tolerations = pod.spec?.tolerations || [];
+    for (const taint of taints) {
+      if (taint.effect === 'PreferNoSchedule') {
+        const tolerated = tolerations.some((tol) => {
+          if (!tol.key && tol.operator === 'Exists') return true;
+          if (tol.key === taint.key) {
+            const op = tol.operator || 'Equal';
+            const effMatch = !tol.effect || tol.effect === 'PreferNoSchedule';
+            if (op === 'Exists' && effMatch) return true;
+            if (op === 'Equal' && tol.value === taint.value && effMatch) return true;
+          }
+          return false;
+        });
+        if (!tolerated) {
+          score -= 30; // Penalize node with untolerated PreferNoSchedule taint
+        }
+      }
+    }
+
+    // 4. Topology Spread Soft Scoring (ScheduleAnyway)
     const softTopologyConstraints = (pod.spec?.topologySpreadConstraints || []).filter(
       (c) => c.whenUnsatisfiable === 'ScheduleAnyway' || !c.whenUnsatisfiable
     );
@@ -689,7 +743,7 @@ class SchedulerEngine {
       }
     }
 
-    // 3. Balanced Resource Utilization
+    // 5. Balanced Resource Utilization
     const alloc = node.status?.allocatable || {};
     const totalCpu = parseCpu(alloc.cpu) || this.defaultNodeAllocatable.cpu;
     const totalMem = parseMemory(alloc.memory) || this.defaultNodeAllocatable.memory;

@@ -1394,8 +1394,60 @@ class VirtualCluster {
     return node;
   }
 
-  drainNode(nodeName) {
+  drainNode(nodeName, options = {}) {
     const node = this.cordonNode(nodeName);
+    const pdbs = this.state.resources.filter((r) => r.kind === 'PodDisruptionBudget');
+    const podsOnNode = this.state.resources.filter(
+      (r) => r.kind === 'Pod' && r.status && r.status.nodeName === nodeName && !r.metadata?.ownerDaemonSet
+    );
+
+    if (pdbs.length > 0 && !options.force) {
+      for (const pod of podsOnNode) {
+        const ns = (pod.metadata && pod.metadata.namespace) || 'default';
+        for (const pdb of pdbs) {
+          if (((pdb.metadata && pdb.metadata.namespace) || 'default') !== ns) continue;
+          const selector = pdb.spec?.selector;
+          const podLabels = (pod.metadata && pod.metadata.labels) || {};
+          let matches = true;
+          if (typeof selector === 'string') {
+            for (const pair of selector.split(',')) {
+              const [k, v] = pair.split('=').map((s) => s.trim());
+              if (k && podLabels[k] !== v) { matches = false; break; }
+            }
+          } else if (selector && selector.matchLabels) {
+            for (const [k, v] of Object.entries(selector.matchLabels)) {
+              if (podLabels[k] !== String(v)) { matches = false; break; }
+            }
+          }
+          if (!matches) continue;
+
+          // Count healthy matching pods
+          const matchingHealthy = this.state.resources.filter((r) => {
+            if (r.kind !== 'Pod' || ((r.metadata && r.metadata.namespace) || 'default') !== ns || r.status?.phase !== 'Running') return false;
+            const rLabels = (r.metadata && r.metadata.labels) || {};
+            if (typeof selector === 'string') {
+              for (const pair of selector.split(',')) {
+                const [k, v] = pair.split('=').map((s) => s.trim());
+                if (k && rLabels[k] !== v) return false;
+              }
+            } else if (selector && selector.matchLabels) {
+              for (const [k, v] of Object.entries(selector.matchLabels)) {
+                if (rLabels[k] !== String(v)) return false;
+              }
+            }
+            return true;
+          }).length;
+
+          if (pdb.spec?.minAvailable !== undefined) {
+            const minAvail = parseInt(pdb.spec.minAvailable, 10);
+            if ((matchingHealthy - 1) < minAvail) {
+              throw new Error(`Cannot evict pod: would violate PodDisruptionBudget "${pdb.metadata.name}" (minAvailable: ${minAvail}, healthy: ${matchingHealthy})`);
+            }
+          }
+        }
+      }
+    }
+
     this.state.resources = this.state.resources.filter((r) => {
       if (r.kind !== 'Pod') return true;
       if (r.status && r.status.nodeName === nodeName && !r.metadata.ownerDaemonSet) {
