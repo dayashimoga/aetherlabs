@@ -419,7 +419,30 @@ function getFieldByPath(obj, fieldPath) {
 class VirtualCluster {
   constructor(initialState) {
     this.ipCounter = 10;
+    this.listeners = new Map();
     this.reset(initialState);
+  }
+
+  on(event, callback) {
+    if (typeof callback !== 'function') return () => {};
+    if (!this.listeners) this.listeners = new Map();
+    if (!this.listeners.has(event)) {
+      this.listeners.set(event, new Set());
+    }
+    const bucket = this.listeners.get(event);
+    bucket.add(callback);
+    return () => bucket.delete(callback);
+  }
+
+  emit(event, ...args) {
+    if (!this.listeners || !this.listeners.has(event)) return;
+    for (const cb of this.listeners.get(event)) {
+      try {
+        cb(...args);
+      } catch (err) {
+        console.error(`Error in VirtualCluster listener for '${event}':`, err);
+      }
+    }
   }
 
   createBaseClusterState() {
@@ -555,6 +578,8 @@ class VirtualCluster {
     }
 
     this.reconcile();
+    this.emit('reset', this.state);
+    this.emit('change', { type: 'reset', state: this.state });
     return this.state;
   }
 
@@ -564,6 +589,8 @@ class VirtualCluster {
     if (data && Array.isArray(data.resources)) {
       this.state = data;
       this.reconcile();
+      this.emit('snapshot:load', this.state);
+      this.emit('change', { type: 'snapshot:load', state: this.state });
     }
   }
 
@@ -689,7 +716,11 @@ class VirtualCluster {
       this.reconcile();
     }
 
-    return { resource: this.getResource(kind, resourceObj.metadata.name, resourceObj.metadata.namespace), action };
+    const applied = this.getResource(kind, resourceObj.metadata.name, resourceObj.metadata.namespace);
+    this.emit('resource:apply', applied || resourceObj);
+    this.emit('change', { type: action, resource: applied || resourceObj, state: this.state });
+
+    return { resource: applied, action };
   }
 
   applyManifest(manifestText) {
@@ -703,6 +734,8 @@ class VirtualCluster {
       results.push(res);
     }
     this.reconcile();
+    this.emit('manifest:apply', { results, state: this.state });
+    this.emit('change', { type: 'manifest:apply', results, state: this.state });
     return results;
   }
 
@@ -726,6 +759,10 @@ class VirtualCluster {
 
     const deleted = this.state.resources.length < before;
     this.reconcile();
+    if (deleted) {
+      this.emit('resource:delete', { kind: normKind, name, namespace });
+      this.emit('change', { type: 'delete', resource: { kind: normKind, name, namespace }, state: this.state });
+    }
     return deleted;
   }
 

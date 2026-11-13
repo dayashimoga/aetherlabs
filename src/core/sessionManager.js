@@ -3,6 +3,7 @@
 const { VirtualCluster } = require('./virtualCluster');
 const { VirtualFileSystem } = require('./virtualFileSystem');
 const { TerminalEngine } = require('./terminalEngine');
+const SyncCoordinator = require('./syncCoordinator');
 
 class SessionManager {
   constructor({ database = null, maxSessions = 500, idleTimeoutMs = 1800000 } = {}) {
@@ -32,12 +33,18 @@ class SessionManager {
       const cluster = new VirtualCluster();
       cluster.vfs = vfs;
       const terminal = new TerminalEngine(cluster, vfs);
+      const syncCoordinator = new SyncCoordinator({
+        vfs,
+        cluster,
+        activeFilePath: '/home/learner/workspace/manifest.yaml'
+      });
 
       session = {
         sessionId: sId,
         cluster,
         vfs,
         terminal,
+        syncCoordinator,
         activeLabId: 'lab-k8s-01',
         activeIncidentId: null,
         activeProjectId: null,
@@ -154,9 +161,13 @@ class SessionManager {
 
     if (session.vfs && typeof session.vfs.reset === 'function') {
       session.vfs.reset();
+      try {
+        session.vfs.mkdir('/home/learner/workspace', { recursive: true });
+      } catch {}
       if (lab.starterManifest) {
         try {
           session.vfs.writeFile('/home/learner/manifest.yaml', lab.starterManifest);
+          session.vfs.writeFile('/home/learner/workspace/manifest.yaml', lab.starterManifest);
         } catch {}
       }
     }

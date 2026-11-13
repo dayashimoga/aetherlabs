@@ -574,6 +574,12 @@ class ApiRouter {
         return sendJson(res, 400, { error: { code: 'EMPTY_MANIFEST', message: 'YAML/JSON manifest is required' } });
       }
       try {
+        if (session.syncCoordinator) {
+          session.syncCoordinator.flushEditorToVfs(body.manifest);
+        } else if (session.vfs && typeof session.vfs.writeFile === 'function') {
+          session.vfs.writeFile('/home/learner/workspace/manifest.yaml', body.manifest);
+          session.vfs.writeFile('/home/learner/manifest.yaml', body.manifest);
+        }
         const applied = session.cluster.applyManifest(body.manifest);
         return sendJson(res, 200, {
           applied: applied.map((a) => ({
@@ -587,6 +593,38 @@ class ApiRouter {
       } catch (err) {
         return sendJson(res, 422, { error: { code: 'MANIFEST_PARSE_ERROR', message: err.message } });
       }
+    }
+
+    if (method === 'GET' && pathname === '/api/workspace/file') {
+      const filePath = url.searchParams.get('path') || '/home/learner/workspace/manifest.yaml';
+      let content = '';
+      try {
+        content = session.vfs.readFile(filePath);
+      } catch {
+        try {
+          content = session.vfs.readFile('/home/learner/manifest.yaml');
+        } catch {}
+      }
+      return sendJson(res, 200, { path: filePath, content });
+    }
+
+    if (method === 'POST' && pathname === '/api/workspace/sync') {
+      const body = await readJsonBody(req);
+      const filePath = body.path || '/home/learner/workspace/manifest.yaml';
+      const content = body.content || '';
+      let lintReport = { valid: true, errors: [] };
+      if (session.syncCoordinator) {
+        session.syncCoordinator.onEditorInput(content, filePath);
+        lintReport = session.syncCoordinator.lintSchema(content);
+      } else if (session.vfs) {
+        session.vfs.writeFile(filePath, content);
+      }
+      return sendJson(res, 200, {
+        synced: true,
+        path: filePath,
+        lint: lintReport,
+        clusterState: session.cluster.exportSnapshot()
+      });
     }
 
     // 5. Production Incident Simulations
