@@ -43,6 +43,11 @@ try {
   cliFormatterModule = (typeof globalThis !== 'undefined' && globalThis.cliFormatterModule) || {};
 }
 const formatResourceTable = cliFormatterModule.formatResourceTable || function () { return ''; };
+const formatYaml = cliFormatterModule.formatYaml || JSON.stringify;
+const formatJson = cliFormatterModule.formatJson || JSON.stringify;
+const formatJsonPath = cliFormatterModule.formatJsonPath || function () { return ''; };
+const formatDescribeList = cliFormatterModule.formatDescribeList || function () { return ''; };
+const formatDescribe = cliFormatterModule.formatDescribe || function () { return ''; };
 
 function unpackArgs(firstArg, ...rest) {
   if (firstArg && typeof firstArg === 'object' && !Array.isArray(firstArg) && firstArg.argv) {
@@ -1261,13 +1266,18 @@ class TerminalEngine {
 
     if (flags.output && flags.output.startsWith('jsonpath=')) {
       const expr = flags.output.slice('jsonpath='.length);
-      const payload = targetName ? items[0] : { apiVersion: 'v1', kind: 'List', items };
-      return { exitCode: 0, output: evaluateJsonPath(payload, expr) };
+      const payload = targetName ? items[0] : items;
+      return { exitCode: 0, output: formatJsonPath(payload, expr) };
     }
 
-    if (flags.output === 'json' || flags.output === 'yaml') {
-      const payload = targetName ? items[0] : { apiVersion: 'v1', kind: 'List', items };
-      return { exitCode: 0, output: JSON.stringify(payload, null, 2) };
+    if (flags.output === 'json') {
+      const payload = targetName ? items[0] : items;
+      return { exitCode: 0, output: formatJson(payload) };
+    }
+
+    if (flags.output === 'yaml') {
+      const payload = targetName ? items[0] : items;
+      return { exitCode: 0, output: formatYaml(payload) };
     }
 
     const output = formatResourceTable(kind, items, {
@@ -1297,18 +1307,9 @@ class TerminalEngine {
       throw new Error(`Error from server (NotFound): ${kind.toLowerCase()} "${name || ''}" not found`);
     }
 
-    const lines = [];
-    for (const item of items) {
-      lines.push(`Name:         ${item.metadata.name}`);
-      lines.push(`Namespace:    ${item.metadata.namespace || '<cluster-scoped>'}`);
-      lines.push(`Kind:         ${item.kind}`);
-      lines.push(`Labels:       ${JSON.stringify(item.metadata.labels || {})}`);
-      lines.push(`Annotations:  ${JSON.stringify(item.metadata.annotations || {})}`);
-      lines.push(`Spec:         ${JSON.stringify(item.spec || {}, null, 2)}`);
-      lines.push(`Status:       ${JSON.stringify(item.status || {}, null, 2)}`);
-      lines.push('---');
-    }
-    return { exitCode: 0, output: lines.join('\n') };
+    const events = this.cluster?.state?.events || [];
+    const output = formatDescribeList(items, events);
+    return { exitCode: 0, output };
   }
 
   kubectlCreate(subArgs, flags) {

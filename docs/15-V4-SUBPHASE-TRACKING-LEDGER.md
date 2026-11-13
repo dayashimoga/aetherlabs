@@ -13,7 +13,7 @@
 | ID | Phase | Subphase Title | Status | Verification & Deliverables |
 | :--- | :--- | :--- | :---: | :--- |
 | **1.1.1** | Phase 1.1 | ASCII Table & Wide Output Renderer | `[COMPLETED]` | `src/core/cliFormatter.js`: Dynamic column padding, `-A`, `-o wide`, `--show-labels`, `-l`, 19 Kubernetes kinds. Verified with 12/12 tests passing in `tests/cliFormatter.test.js`. |
-| **1.1.2** | Phase 1.1 | YAML, JSON, JSONPath & Describe Renderers | `[PENDING]` | Multi-document YAML, JSON AST, JSONPath evaluator, full `kubectl describe` with live events. |
+| **1.1.2** | Phase 1.1 | YAML, JSON, JSONPath & Describe Renderers | `[COMPLETED]` | `src/core/cliFormatter.js`: Multi-document YAML, JSON AST, JSONPath evaluator, full multi-section `kubectl describe` with live events across Pod, Deploy, Svc, Node. Verified in `tests/cliFormatter.test.js`. |
 | **1.1.3** | Phase 1.1 | Realistic Exit Codes & Kubernetes API Error Formatter | `[PENDING]` | Authentic API error responses (`NotFound`, `Forbidden`, `AlreadyExists`, invalid spec), non-zero exit codes. |
 | **1.2.1** | Phase 1.2 | Full Kubernetes & Cluster Ops Binaries | `[PENDING]` | `kubectl` rollout/auth/debug, `kubeadm` init/certs/token, `etcdctl` snapshot/health. |
 | **1.2.2** | Phase 1.2 | Linux, Networking, Container & Git Binaries | `[PENDING]` | Linux shell builtins, `ip`, `iptables`, `ss`, `dig`, `curl`, `docker`, `crictl`, full `git` suite. |

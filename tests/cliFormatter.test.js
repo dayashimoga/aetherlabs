@@ -441,4 +441,198 @@ spec:
     assert.match(resDeploy.output, /^NAME\s+READY\s+UP-TO-DATE\s+AVAILABLE\s+AGE$/m);
     assert.match(resDeploy.output, /web-frontend\s+2\/2\s+2\s+2/);
   });
+
+  await t.test('12. formatYaml formats single resource and List items cleanly', () => {
+    const { formatYaml } = require('../src/core/cliFormatter');
+    const single = { apiVersion: 'v1', kind: 'Pod', metadata: { name: 'mypod', namespace: 'default' } };
+    const yamlSingle = formatYaml(single);
+    assert.match(yamlSingle, /apiVersion:\s*v1/);
+    assert.match(yamlSingle, /kind:\s*Pod/);
+    assert.match(yamlSingle, /name:\s*mypod/);
+
+    const list = [single];
+    const yamlList = formatYaml(list);
+    assert.match(yamlList, /kind:\s*List/);
+    assert.match(yamlList, /items:/);
+  });
+
+  await t.test('13. formatJson formats single resource and List items cleanly', () => {
+    const { formatJson } = require('../src/core/cliFormatter');
+    const single = { apiVersion: 'v1', kind: 'ConfigMap', metadata: { name: 'app-config' } };
+    const jsonSingle = formatJson(single);
+    const parsedSingle = JSON.parse(jsonSingle);
+    assert.equal(parsedSingle.kind, 'ConfigMap');
+
+    const list = [single];
+    const jsonList = formatJson(list);
+    const parsedList = JSON.parse(jsonList);
+    assert.equal(parsedList.kind, 'List');
+    assert.equal(parsedList.items.length, 1);
+  });
+
+  await t.test('14. formatJsonPath extracts data using JSONPath templates', () => {
+    const { formatJsonPath } = require('../src/core/cliFormatter');
+    const payload = {
+      items: [
+        { metadata: { name: 'pod-a' }, status: { podIP: '10.244.0.1' } },
+        { metadata: { name: 'pod-b' }, status: { podIP: '10.244.0.2' } }
+      ]
+    };
+    const outNames = formatJsonPath(payload, '{.items[*].metadata.name}');
+    assert.equal(outNames.trim(), 'pod-a pod-b');
+
+    const outIPs = formatJsonPath(payload, '.items[*].status.podIP');
+    assert.equal(outIPs.trim(), '10.244.0.1 10.244.0.2');
+  });
+
+  await t.test('15. formatDescribe produces authentic multi-section pod details and events', () => {
+    const { formatDescribe } = require('../src/core/cliFormatter');
+    const pod = {
+      kind: 'Pod',
+      metadata: {
+        name: 'auth-service-789',
+        namespace: 'production',
+        labels: { app: 'auth', tier: 'api' },
+        annotations: { 'deployment.kubernetes.io/revision': '1' }
+      },
+      spec: {
+        nodeName: 'worker-01',
+        containers: [
+          {
+            name: 'auth-api',
+            image: 'auth:v1.2',
+            ports: [{ containerPort: 8080, protocol: 'TCP' }]
+          }
+        ]
+      },
+      status: {
+        phase: 'Running',
+        podIP: '10.244.1.33'
+      }
+    };
+    const events = [
+      {
+        name: 'auth-service-789',
+        namespace: 'production',
+        type: 'Normal',
+        reason: 'Scheduled',
+        message: 'Successfully assigned production/auth-service-789 to worker-01'
+      },
+      {
+        name: 'auth-service-789',
+        namespace: 'production',
+        type: 'Normal',
+        reason: 'Started',
+        message: 'Started container auth-api'
+      }
+    ];
+
+    const desc = formatDescribe(pod, events);
+    assert.match(desc, /^Name:\s+auth-service-789/m);
+    assert.match(desc, /^Namespace:\s+production/m);
+    assert.match(desc, /^Status:\s+Running/m);
+    assert.match(desc, /^IP:\s+10\.244\.1\.33/m);
+    assert.match(desc, /Containers:/);
+    assert.match(desc, /auth-api:/);
+    assert.match(desc, /Port:\s+8080\/TCP/);
+    assert.match(desc, /Conditions:/);
+    assert.match(desc, /Initialized\s+True/);
+    assert.match(desc, /Events:/);
+    assert.match(desc, /Normal\s+Scheduled\s+.*Successfully assigned/);
+    assert.match(desc, /Normal\s+Started\s+.*Started container auth-api/);
+  });
+
+  await t.test('16. formatDescribe produces authentic Deployment, Service, and Node descriptions', () => {
+    const { formatDescribe } = require('../src/core/cliFormatter');
+    const deploy = {
+      kind: 'Deployment',
+      metadata: { name: 'cart-service', namespace: 'default' },
+      spec: { replicas: 3, selector: { matchLabels: { app: 'cart' } }, template: { spec: { containers: [{ name: 'cart', image: 'cart:1.0' }] } } },
+      status: { readyReplicas: 3, availableReplicas: 3, updatedReplicas: 3 }
+    };
+    const descDeploy = formatDescribe(deploy);
+    assert.match(descDeploy, /^Name:\s+cart-service/m);
+    assert.match(descDeploy, /Replicas:\s+3 desired \| 3 updated \| 3 total \| 3 available \| 0 unavailable/);
+    assert.match(descDeploy, /Pod Template:/);
+    assert.match(descDeploy, /RollingUpdateStrategy:/);
+
+    const svc = {
+      kind: 'Service',
+      metadata: { name: 'cart-svc', namespace: 'default' },
+      spec: { type: 'ClusterIP', clusterIP: '10.96.20.5', ports: [{ name: 'grpc', port: 50051, protocol: 'TCP' }] },
+      status: { endpoints: ['10.244.1.10:50051'] }
+    };
+    const descSvc = formatDescribe(svc);
+    assert.match(descSvc, /^Name:\s+cart-svc/m);
+    assert.match(descSvc, /Type:\s+ClusterIP/);
+    assert.match(descSvc, /IP:\s+10\.96\.20\.5/);
+    assert.match(descSvc, /Port:\s+grpc\s+50051\/TCP/);
+    assert.match(descSvc, /Endpoints:\s+10\.244\.1\.10:50051/);
+
+    const node = {
+      kind: 'Node',
+      metadata: { name: 'worker-01', labels: { 'kubernetes.io/os': 'linux' } },
+      status: { phase: 'Ready', internalIP: '192.168.1.10' }
+    };
+    const descNode = formatDescribe(node);
+    assert.match(descNode, /^Name:\s+worker-01/m);
+    assert.match(descNode, /Roles:\s+worker/);
+    assert.match(descNode, /Capacity:/);
+    assert.match(descNode, /Allocatable:/);
+    assert.match(descNode, /System Info:/);
+  });
+
+  await t.test('17. TerminalEngine end-to-end integration for -o yaml, -o json, -o jsonpath & describe', () => {
+    const { VirtualCluster } = require('../src/core/virtualCluster');
+    const { TerminalEngine } = require('../src/core/terminalEngine');
+    const cluster = new VirtualCluster();
+    const terminal = new TerminalEngine(cluster);
+
+    cluster.applyManifest(`
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: demo-api
+  namespace: default
+  labels:
+    tier: backend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      tier: backend
+  template:
+    metadata:
+      labels:
+        tier: backend
+    spec:
+      containers:
+      - name: api
+        image: demo:v1
+`);
+
+    // -o yaml
+    const resYaml = terminal.execute('kubectl get deployment demo-api -o yaml');
+    assert.equal(resYaml.exitCode, 0);
+    assert.match(resYaml.output, /apiVersion:\s*apps\/v1/);
+    assert.match(resYaml.output, /kind:\s*Deployment/);
+    assert.match(resYaml.output, /name:\s*demo-api/);
+
+    // -o json
+    const resJson = terminal.execute('kubectl get deployment demo-api -o json');
+    assert.equal(resJson.exitCode, 0);
+    const parsed = JSON.parse(resJson.output);
+    assert.equal(parsed.metadata.name, 'demo-api');
+
+    // -o jsonpath
+    const resJPath = terminal.execute("kubectl get deployment demo-api -o jsonpath='{.metadata.name}'");
+    assert.equal(resJPath.exitCode, 0);
+    assert.equal(resJPath.output.trim(), 'demo-api');
+
+    // kubectl describe
+    const resDesc = terminal.execute('kubectl describe deployment demo-api');
+    assert.equal(resDesc.exitCode, 0);
+    assert.match(resDesc.output, /^Name:\s+demo-api/m);
+    assert.match(resDesc.output, /RollingUpdateStrategy:/);
+  });
 });

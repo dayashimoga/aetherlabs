@@ -3,11 +3,25 @@
 /**
  * KubeLabs v4.0 Authentic CLI Output Formatting Engine
  * Subphase 1.1.1: Dynamic Column-Padding ASCII Table & Wide Output Renderer
+ * Subphase 1.1.2: YAML, JSON, JSONPath & Describe Renderers
  *
- * Provides real kubectl get tabular rendering across 19 Kubernetes resource kinds
- * with dynamic width calculation, -A / --all-namespaces, -o wide, --show-labels,
- * and label selector filtering (-l).
+ * Provides real kubectl get tabular rendering, -o yaml, -o json, -o jsonpath=<expr>,
+ * and authentic multi-section kubectl describe output with live ResourceGraph events.
  */
+
+let yamlParser;
+try {
+  yamlParser = require('./yamlParser');
+} catch {
+  yamlParser = (typeof globalThis !== 'undefined' && globalThis.yamlParser) || {};
+}
+
+let jsonPathModule;
+try {
+  jsonPathModule = require('./jsonPath');
+} catch {
+  jsonPathModule = (typeof globalThis !== 'undefined' && globalThis.jsonPathModule) || {};
+}
 
 const KIND_ALIASES = {
   po: 'Pod',
@@ -79,6 +93,18 @@ const CLUSTER_SCOPED_KINDS = new Set([
   'PriorityClass',
   'GatewayClass'
 ]);
+
+/**
+ * Normalizes container specs into an array safely
+ */
+function normalizeContainers(raw, fallbackName = 'main', fallbackImage = 'nginx:alpine') {
+  if (Array.isArray(raw)) return raw;
+  if (raw && typeof raw === 'object') {
+    const vals = Object.values(raw);
+    if (vals.length > 0) return vals;
+  }
+  return [{ name: fallbackName, image: fallbackImage }];
+}
 
 /**
  * Normalizes a resource kind string or alias to canonical PascalCase.
@@ -287,7 +313,7 @@ function formatResourceTable(rawKind, resources = [], options = {}) {
         const meta = p.metadata || {};
         const status = p.status || {};
         const spec = p.spec || {};
-        const containers = spec.containers || [];
+        const containers = normalizeContainers(spec.containers, meta.name || 'main');
         const containerStatuses = status.containerStatuses || [];
 
         let readyStr = '1/1';
@@ -340,7 +366,7 @@ function formatResourceTable(rawKind, resources = [], options = {}) {
 
         const row = [meta.name, `${ready}/${desired}`, String(upToDate), String(available), age];
         if (isWide) {
-          const containers = spec.template?.spec?.containers || [];
+          const containers = normalizeContainers(spec.template?.spec?.containers, meta.name || 'main');
           const cNames = containers.map((c) => c.name).join(',') || '<none>';
           const cImages = containers.map((c) => c.image).join(',') || '<none>';
           const sel = formatLabels(spec.selector?.matchLabels);
@@ -366,7 +392,7 @@ function formatResourceTable(rawKind, resources = [], options = {}) {
 
         const row = [meta.name, `${ready}/${desired}`, age];
         if (isWide) {
-          const containers = spec.template?.spec?.containers || [];
+          const containers = normalizeContainers(spec.template?.spec?.containers, meta.name || 'main');
           const cNames = containers.map((c) => c.name).join(',') || '<none>';
           const cImages = containers.map((c) => c.image).join(',') || '<none>';
           row.push(cNames, cImages);
@@ -404,7 +430,7 @@ function formatResourceTable(rawKind, resources = [], options = {}) {
           age
         ];
         if (isWide) {
-          const containers = spec.template?.spec?.containers || [];
+          const containers = normalizeContainers(spec.template?.spec?.containers, meta.name || 'main');
           const cNames = containers.map((c) => c.name).join(',') || '<none>';
           const cImages = containers.map((c) => c.image).join(',') || '<none>';
           const sel = formatLabels(spec.selector?.matchLabels);
@@ -715,6 +741,392 @@ function formatResourceTable(rawKind, resources = [], options = {}) {
   return formatTable(headers, rows);
 }
 
+/**
+ * Formats a resource or resource list as authentic YAML.
+ * @param {Object|Array} payload
+ * @returns {string}
+ */
+function formatYaml(payload) {
+  let doc = payload;
+  if (Array.isArray(payload)) {
+    doc = {
+      apiVersion: 'v1',
+      items: payload,
+      kind: 'List',
+      metadata: {
+        resourceVersion: ''
+      }
+    };
+  }
+  if (yamlParser.stringifyYaml) {
+    return yamlParser.stringifyYaml(doc);
+  }
+  return JSON.stringify(doc, null, 2);
+}
+
+/**
+ * Formats a resource or resource list as authentic JSON.
+ * @param {Object|Array} payload
+ * @returns {string}
+ */
+function formatJson(payload) {
+  let doc = payload;
+  if (Array.isArray(payload)) {
+    doc = {
+      apiVersion: 'v1',
+      items: payload,
+      kind: 'List',
+      metadata: {
+        resourceVersion: ''
+      }
+    };
+  }
+  return JSON.stringify(doc, null, 2);
+}
+
+/**
+ * Evaluates a JSONPath query against a resource or list.
+ * @param {Object|Array} payload
+ * @param {string} expr
+ * @returns {string}
+ */
+function formatJsonPath(payload, expr = '') {
+  let doc = payload;
+  if (Array.isArray(payload)) {
+    doc = {
+      apiVersion: 'v1',
+      items: payload,
+      kind: 'List',
+      metadata: {
+        resourceVersion: ''
+      }
+    };
+  }
+  const cleanExpr = String(expr || '').trim().replace(/^['"]|['"]$/g, '');
+  if (!cleanExpr) return '';
+
+  if (jsonPathModule.formatJsonPath) {
+    const wrapped = cleanExpr.startsWith('{') ? cleanExpr : `{${cleanExpr}}`;
+    const res = jsonPathModule.formatJsonPath(doc, wrapped);
+    if (res !== undefined && res !== '') return res;
+  }
+
+  if (jsonPathModule.jsonPath) {
+    const query = cleanExpr.replace(/^\{|\}$/g, '');
+    const jsonPathExpr = query.startsWith('$') ? query : `$.${query.replace(/^\./, '')}`;
+    const raw = jsonPathModule.jsonPath(doc, jsonPathExpr);
+    if (Array.isArray(raw)) {
+      return raw.map((r) => (typeof r === 'object' ? JSON.stringify(r) : String(r))).join(' ');
+    }
+    return String(raw !== undefined && raw !== null ? raw : '');
+  }
+
+  return '';
+}
+
+/**
+ * Helper to format labels/annotations multiline matching standard kubectl describe
+ */
+function formatLabelsMultiline(labels, indent = '                  ') {
+  if (!labels || typeof labels !== 'object') return '<none>';
+  const keys = Object.keys(labels).sort();
+  if (keys.length === 0) return '<none>';
+  return keys.map((k, i) => (i === 0 ? `${k}=${labels[k]}` : `${indent}${k}=${labels[k]}`)).join('\n');
+}
+
+/**
+ * Helper to render events table in kubectl describe
+ */
+function formatEventsSection(resource, events = []) {
+  const meta = resource.metadata || {};
+  const kind = resource.kind || 'Pod';
+  const name = meta.name;
+  const namespace = meta.namespace;
+
+  // Filter events relevant to this resource
+  const matched = (events || []).filter((e) => {
+    if (!e) return false;
+    if (e.name === name || e.involvedObject?.name === name) {
+      if (namespace && e.namespace && e.namespace !== namespace) return false;
+      return true;
+    }
+    return false;
+  });
+
+  if (matched.length === 0) {
+    return 'Events:  <none>';
+  }
+
+  const headers = ['Type', 'Reason', 'Age', 'From', 'Message'];
+  const rows = matched.map((e) => {
+    const type = e.type || 'Normal';
+    const reason = e.reason || 'Scheduled';
+    const age = calculateAge(e.timestamp || e.lastTimestamp);
+    const from = e.from || (type === 'Warning' ? 'kubelet' : 'default-scheduler');
+    const msg = e.message || '';
+    return [type, reason, age, from, msg];
+  });
+
+  // Calculate widths for event columns
+  const colWidths = headers.map((h, colIdx) => {
+    let max = h.length;
+    for (const r of rows) {
+      const len = String(r[colIdx] || '').length;
+      if (len > max) max = len;
+    }
+    return max;
+  });
+
+  const lines = ['Events:'];
+  const headerLine = '  ' + headers.map((h, i) => (i === headers.length - 1 ? h : h.padEnd(colWidths[i] + 2, ' '))).join('');
+  const dividerLine = '  ' + headers.map((h, i) => (i === headers.length - 1 ? '-------' : '-'.repeat(Math.max(4, h.length)).padEnd(colWidths[i] + 2, ' '))).join('');
+  lines.push(headerLine);
+  lines.push(dividerLine);
+
+  for (const r of rows) {
+    const rowLine = '  ' + r.map((c, i) => (i === r.length - 1 ? c : String(c).padEnd(colWidths[i] + 2, ' '))).join('');
+    lines.push(rowLine);
+  }
+
+  return lines.join('\n');
+}
+
+/**
+ * Authentic multi-section kubectl describe output generator
+ * @param {Object} resource
+ * @param {Array<Object>} events
+ * @param {Object} options
+ * @returns {string}
+ */
+function formatDescribe(resource, events = [], options = {}) {
+  if (!resource || typeof resource !== 'object') return '';
+  const kind = normalizeKind(resource.kind);
+  const meta = resource.metadata || {};
+  const spec = resource.spec || {};
+  const status = resource.status || {};
+  const lines = [];
+
+  switch (kind) {
+    case 'Pod': {
+      lines.push(`Name:             ${meta.name}`);
+      lines.push(`Namespace:        ${meta.namespace || 'default'}`);
+      lines.push(`Priority:         ${spec.priority || 0}`);
+      lines.push(`Service Account:  ${spec.serviceAccountName || spec.serviceAccount || 'default'}`);
+      const nodeName = status.nodeName || spec.nodeName || 'kubelabs-worker-01';
+      lines.push(`Node:             ${nodeName}/192.168.1.10`);
+      lines.push(`Start Time:       ${status.startTime || meta.creationTimestamp || 'Fri, 13 Nov 2026 12:00:00 +0000'}`);
+      lines.push(`Labels:           ${formatLabelsMultiline(meta.labels)}`);
+      lines.push(`Annotations:      ${formatLabelsMultiline(meta.annotations)}`);
+      lines.push(`Status:           ${status.phase || 'Running'}`);
+      lines.push(`IP:               ${status.podIP || '10.244.1.21'}`);
+      lines.push('IPs:');
+      lines.push(`  IP:  ${status.podIP || '10.244.1.21'}`);
+      const controlledBy = meta.ownerReferences
+        ? meta.ownerReferences.map((o) => `${o.kind}/${o.name}`).join(',')
+        : meta.ownerDeployment
+        ? `Deployment/${meta.ownerDeployment}`
+        : 'ReplicaSet/' + (meta.name.replace(/-[a-z0-9]+$/, '') || 'web');
+      lines.push(`Controlled By:    ${controlledBy}`);
+
+      lines.push('Containers:');
+      const containers = normalizeContainers(spec.containers, meta.name || 'main');
+      for (const c of containers) {
+        lines.push(`  ${c.name}:`);
+        lines.push(`    Container ID:   containerd://b9a8f4c3d2e1`);
+        lines.push(`    Image:          ${c.image || 'nginx:alpine'}`);
+        lines.push(`    Image ID:       docker.io/library/nginx@sha256:7b9201`);
+        const ports = (c.ports || []).map((p) => `${p.containerPort || 80}/${p.protocol || 'TCP'}`).join(', ') || '80/TCP';
+        lines.push(`    Port:           ${ports}`);
+        lines.push(`    Host Port:      0/TCP`);
+        const phase = status.phase || 'Running';
+        const state = phase === 'Running' ? 'Running' : status.reason || 'Waiting';
+        lines.push(`    State:          ${state}`);
+        if (state === 'Running') {
+          lines.push(`      Started:      ${meta.creationTimestamp || 'Fri, 13 Nov 2026 12:00:01 +0000'}`);
+        } else if (state === 'Waiting') {
+          lines.push(`      Reason:       ${status.reason || 'ContainerCreating'}`);
+        }
+        lines.push(`    Ready:          ${phase === 'Running' ? 'True' : 'False'}`);
+        lines.push(`    Restart Count:  ${status.restartCount || status.restarts || 0}`);
+        lines.push('    Limits:');
+        const lim = c.resources?.limits || {};
+        lines.push(`      cpu:     ${lim.cpu || '500m'}`);
+        lines.push(`      memory:  ${lim.memory || '512Mi'}`);
+        lines.push('    Requests:');
+        const req = c.resources?.requests || {};
+        lines.push(`      cpu:     ${req.cpu || '100m'}`);
+        lines.push(`      memory:  ${req.memory || '128Mi'}`);
+        lines.push('    Environment:    <none>');
+        lines.push('    Mounts:');
+        lines.push('      /var/run/secrets/kubernetes.io/serviceaccount from kube-api-access (ro)');
+      }
+
+      lines.push('Conditions:');
+      lines.push('  Type              Status');
+      lines.push('  Initialized       True ');
+      lines.push(`  Ready             ${status.phase === 'Running' ? 'True ' : 'False'}`);
+      lines.push(`  ContainersReady   ${status.phase === 'Running' ? 'True ' : 'False'}`);
+      lines.push('  PodScheduled      True ');
+
+      lines.push('Volumes:');
+      lines.push('  kube-api-access:');
+      lines.push('    Type:                    Projected (injected serviceaccount tokens)');
+      lines.push('QoS Class:                   Burstable');
+      lines.push(`Node-Selectors:              ${formatLabels(spec.nodeSelector)}`);
+      lines.push('Tolerations:                 node.kubernetes.io/not-ready:NoExecute op=Exists for 300s');
+      lines.push('                             node.kubernetes.io/unreachable:NoExecute op=Exists for 300s');
+      lines.push(formatEventsSection(resource, events));
+      break;
+    }
+
+    case 'Deployment': {
+      lines.push(`Name:                   ${meta.name}`);
+      lines.push(`Namespace:              ${meta.namespace || 'default'}`);
+      lines.push(`CreationTimestamp:      ${meta.creationTimestamp || new Date().toISOString()}`);
+      lines.push(`Labels:                 ${formatLabels(meta.labels)}`);
+      lines.push(`Annotations:            ${formatLabels(meta.annotations)}`);
+      lines.push(`Selector:               ${formatLabels(spec.selector?.matchLabels)}`);
+      const desired = spec.replicas !== undefined ? spec.replicas : 1;
+      const ready = status.readyReplicas !== undefined ? status.readyReplicas : desired;
+      const updated = status.updatedReplicas !== undefined ? status.updatedReplicas : desired;
+      const available = status.availableReplicas !== undefined ? status.availableReplicas : ready;
+      const unavail = desired - available > 0 ? desired - available : 0;
+      lines.push(`Replicas:               ${desired} desired | ${updated} updated | ${desired} total | ${available} available | ${unavail} unavailable`);
+      lines.push(`StrategyType:           ${spec.strategy?.type || 'RollingUpdate'}`);
+      lines.push(`MinReadySeconds:        ${spec.minReadySeconds || 0}`);
+      lines.push('RollingUpdateStrategy:  25% max unavailable, 25% max surge');
+      lines.push('Pod Template:');
+      lines.push(`  Labels:       ${formatLabels(spec.template?.metadata?.labels || meta.labels)}`);
+      lines.push('  Containers:');
+      const containers = normalizeContainers(spec.template?.spec?.containers, meta.name || 'app');
+      for (const c of containers) {
+        lines.push(`   ${c.name}:`);
+        lines.push(`    Image:        ${c.image || 'nginx:alpine'}`);
+        lines.push('    Port:         80/TCP');
+        lines.push('    Host Port:    0/TCP');
+        lines.push('    Environment:  <none>');
+        lines.push('    Mounts:       <none>');
+      }
+      lines.push('Conditions:');
+      lines.push('  Type           Status  Reason');
+      lines.push('  ----           ------  ------');
+      lines.push('  Available      True    MinimumReplicasAvailable');
+      lines.push('  Progressing    True    NewReplicaSetAvailable');
+      lines.push('OldReplicaSets:         <none>');
+      lines.push(`NewReplicaSet:          ${meta.name}-7d9c (${ready}/${desired} replicas created)`);
+      lines.push(formatEventsSection(resource, events));
+      break;
+    }
+
+    case 'Service': {
+      lines.push(`Name:                     ${meta.name}`);
+      lines.push(`Namespace:                ${meta.namespace || 'default'}`);
+      lines.push(`Labels:                   ${formatLabels(meta.labels)}`);
+      lines.push(`Annotations:              ${formatLabels(meta.annotations)}`);
+      lines.push(`Selector:                 ${formatLabels(spec.selector)}`);
+      lines.push(`Type:                     ${spec.type || 'ClusterIP'}`);
+      lines.push(`IP Family Policy:         SingleStack`);
+      lines.push(`IP Families:              IPv4`);
+      lines.push(`IP:                       ${status.clusterIP || spec.clusterIP || '10.96.0.10'}`);
+      lines.push(`IPs:                      ${status.clusterIP || spec.clusterIP || '10.96.0.10'}`);
+      let rawPorts = spec.ports || [{ port: 80, targetPort: 80, protocol: 'TCP' }];
+      if (!Array.isArray(rawPorts)) {
+        rawPorts = typeof rawPorts === 'object' && rawPorts !== null ? Object.values(rawPorts) : [];
+      }
+      for (const p of rawPorts) {
+        const pName = p.name ? `${p.name}  ` : 'http  ';
+        lines.push(`Port:                     ${pName}${p.port || 80}/${p.protocol || 'TCP'}`);
+        lines.push(`TargetPort:               ${p.targetPort || p.port || 80}/${p.protocol || 'TCP'}`);
+        if (p.nodePort) {
+          lines.push(`NodePort:                 ${pName}${p.nodePort}/${p.protocol || 'TCP'}`);
+        }
+      }
+      const eps = status.endpoints || [];
+      const epStr = Array.isArray(eps) && eps.length > 0 ? eps.join(',') : '<none>';
+      lines.push(`Endpoints:                ${epStr}`);
+      lines.push(`Session Affinity:         ${spec.sessionAffinity || 'None'}`);
+      lines.push(formatEventsSection(resource, events));
+      break;
+    }
+
+    case 'Node': {
+      lines.push(`Name:               ${meta.name}`);
+      const labels = meta.labels || {};
+      const role = 'node-role.kubernetes.io/control-plane' in labels ? 'control-plane' : 'worker';
+      lines.push(`Roles:              ${role}`);
+      lines.push(`Labels:             ${formatLabelsMultiline(meta.labels)}`);
+      lines.push(`Annotations:        ${formatLabelsMultiline(meta.annotations)}`);
+      lines.push(`CreationTimestamp:  ${meta.creationTimestamp || 'Fri, 13 Nov 2026 10:00:00 +0000'}`);
+      lines.push('Taints:             <none>');
+      lines.push('Conditions:');
+      lines.push('  Type                 Status  LastHeartbeatTime  LastTransitionTime  Reason                       Message');
+      lines.push('  ----                 ------  -----------------  ------------------  ------                       -------');
+      lines.push('  MemoryPressure       False   2m                 2m                  KubeletHasSufficientMemory   kubelet has sufficient memory available');
+      lines.push('  DiskPressure         False   2m                 2m                  KubeletHasNoDiskPressure     kubelet has no disk pressure');
+      lines.push('  PIDPressure          False   2m                 2m                  KubeletHasSufficientPID      kubelet has sufficient PID available');
+      lines.push('  Ready                True    2m                 2m                  KubeletReady                 kubelet is posting ready status');
+      lines.push('Addresses:');
+      lines.push(`  InternalIP:  ${status.internalIP || '192.168.1.10'}`);
+      lines.push(`  Hostname:    ${meta.name}`);
+      lines.push('Capacity:');
+      lines.push('  cpu:                4');
+      lines.push('  ephemeral-storage:  100Gi');
+      lines.push('  hugepages-2Mi:      0');
+      lines.push('  memory:             16Gi');
+      lines.push('  pods:               110');
+      lines.push('Allocatable:');
+      lines.push('  cpu:                4');
+      lines.push('  ephemeral-storage:  90Gi');
+      lines.push('  hugepages-2Mi:      0');
+      lines.push('  memory:             15.5Gi');
+      lines.push('  pods:               110');
+      lines.push('System Info:');
+      lines.push('  Machine ID:                 f7a8b9c0d1e2');
+      lines.push(`  Kernel Version:             ${status.nodeInfo?.kernelVersion || '6.8.0-45-generic'}`);
+      lines.push(`  OS Image:                   ${status.nodeInfo?.osImage || 'Ubuntu 24.04 LTS'}`);
+      lines.push('  Operating System:           linux');
+      lines.push('  Architecture:               amd64');
+      lines.push(`  Container Runtime Version:  ${status.nodeInfo?.containerRuntimeVersion || 'containerd://1.7.13'}`);
+      lines.push(`  Kubelet Version:            ${status.kubeletVersion || 'v1.32.0'}`);
+      lines.push('Non-terminated Pods:         (0 pods)');
+      lines.push(formatEventsSection(resource, events));
+      break;
+    }
+
+    default: {
+      lines.push(`Name:         ${meta.name}`);
+      lines.push(`Namespace:    ${meta.namespace || '<cluster-scoped>'}`);
+      lines.push(`Kind:         ${resource.kind || kind}`);
+      lines.push(`Labels:       ${formatLabels(meta.labels)}`);
+      lines.push(`Annotations:  ${formatLabels(meta.annotations)}`);
+      if (spec && Object.keys(spec).length > 0) {
+        lines.push('Spec:');
+        lines.push('  ' + JSON.stringify(spec, null, 2).replace(/\n/g, '\n  '));
+      }
+      if (status && Object.keys(status).length > 0) {
+        lines.push('Status:');
+        lines.push('  ' + JSON.stringify(status, null, 2).replace(/\n/g, '\n  '));
+      }
+      lines.push(formatEventsSection(resource, events));
+      break;
+    }
+  }
+
+  return lines.join('\n');
+}
+
+/**
+ * Formats describe output for multiple resources
+ * @param {Array<Object>} resources
+ * @param {Array<Object>} events
+ * @param {Object} options
+ * @returns {string}
+ */
+function formatDescribeList(resources = [], events = [], options = {}) {
+  if (!resources || resources.length === 0) return '';
+  return resources.map((r) => formatDescribe(r, events, options)).join('\n\n---\n\n');
+}
+
 module.exports = {
   KIND_ALIASES,
   CLUSTER_SCOPED_KINDS,
@@ -723,5 +1135,10 @@ module.exports = {
   matchesSelector,
   formatTable,
   formatLabels,
-  formatResourceTable
+  formatResourceTable,
+  formatYaml,
+  formatJson,
+  formatJsonPath,
+  formatDescribe,
+  formatDescribeList
 };
