@@ -28,7 +28,8 @@ const requiredCoreModules = [
   'projectEngine.js',
   'aiMentor.js',
   'architectureEngine.js',
-  'certificationEngine.js'
+  'certificationEngine.js',
+  'storageAdapter.js'
 ];
 
 console.log('[1/4] Verifying single source of truth modules in src/core/...');
@@ -115,6 +116,97 @@ const bundleHeader = `/**
     } catch {}
     memoryStore.set(key, JSON.parse(JSON.stringify(value)));
   }
+
+  // ==========================================
+  // 1.1 Hybrid Logical Clock & Vector Clock
+  // ==========================================
+  class VectorClock {
+    constructor(initialClock = {}) {
+      this.clock = {};
+      if (initialClock && typeof initialClock === 'object') {
+        for (const [k, v] of Object.entries(initialClock)) {
+          this.clock[k] = Number(v) || 0;
+        }
+      }
+    }
+    increment(nodeId) {
+      if (!nodeId) return this;
+      this.clock[nodeId] = (this.clock[nodeId] || 0) + 1;
+      return this;
+    }
+    get(nodeId) { return this.clock[nodeId] || 0; }
+    set(nodeId, counter) { this.clock[nodeId] = Number(counter) || 0; return this; }
+    clone() { return new VectorClock({ ...this.clock }); }
+    merge(otherClock) {
+      const other = otherClock instanceof VectorClock ? otherClock.clock : (otherClock || {});
+      for (const k of new Set([...Object.keys(this.clock), ...Object.keys(other)])) {
+        this.clock[k] = Math.max(this.get(k), Number(other[k]) || 0);
+      }
+      return this;
+    }
+    compare(otherClock) {
+      const other = otherClock instanceof VectorClock ? otherClock : new VectorClock(otherClock);
+      let hasGreater = false, hasLesser = false;
+      for (const k of new Set([...Object.keys(this.clock), ...Object.keys(other.clock)])) {
+        const v1 = this.get(k), v2 = other.get(k);
+        if (v1 > v2) hasGreater = true;
+        if (v1 < v2) hasLesser = true;
+      }
+      if (hasGreater && !hasLesser) return 'DOMINATES';
+      if (!hasGreater && hasLesser) return 'DOMINATED_BY';
+      if (!hasGreater && !hasLesser) return 'EQUAL';
+      return 'CONCURRENT';
+    }
+    toJSON() { return { ...this.clock }; }
+  }
+
+  class HybridLogicalClock {
+    constructor(opts = {}) {
+      this.nodeId = String(opts.nodeId || 'browser-pwa');
+      this.l = typeof opts.l === 'number' ? Math.floor(opts.l) : Date.now();
+      this.c = typeof opts.c === 'number' ? Math.floor(opts.c) : 0;
+    }
+    now(pt = Date.now()) {
+      const lOld = this.l;
+      this.l = Math.max(lOld, Math.floor(pt));
+      this.c = this.l === lOld ? this.c + 1 : 0;
+      return this.clone();
+    }
+    update(remote, pt = Date.now()) {
+      if (!remote) return this.clone();
+      const r = remote instanceof HybridLogicalClock ? remote : HybridLogicalClock.from(remote);
+      const lOld = this.l;
+      this.l = Math.max(lOld, r.l, Math.floor(pt));
+      if (this.l === lOld && this.l === r.l) this.c = Math.max(this.c, r.c) + 1;
+      else if (this.l === lOld) this.c += 1;
+      else if (this.l === r.l) this.c = r.c + 1;
+      else this.c = 0;
+      return this.clone();
+    }
+    compare(other) {
+      if (!other) return 1;
+      const r = other instanceof HybridLogicalClock ? other : HybridLogicalClock.from(other);
+      if (this.l !== r.l) return this.l < r.l ? -1 : 1;
+      if (this.c !== r.c) return this.c < r.c ? -1 : 1;
+      return this.nodeId < r.nodeId ? -1 : (this.nodeId > r.nodeId ? 1 : 0);
+    }
+    clone() { return new HybridLogicalClock({ l: this.l, c: this.c, nodeId: this.nodeId }); }
+    toString() { return \`\${this.l}:\${this.c}:\${this.nodeId}\`; }
+    toJSON() { return { l: this.l, c: this.c, nodeId: this.nodeId, hlc: this.toString() }; }
+    static from(val) {
+      if (val instanceof HybridLogicalClock) return val;
+      if (typeof val === 'string') {
+        const p = val.split(':');
+        return new HybridLogicalClock({ l: parseInt(p[0], 10), c: parseInt(p[1], 10), nodeId: p.slice(2).join(':') });
+      }
+      if (val && typeof val === 'object') {
+        return new HybridLogicalClock(val);
+      }
+      return new HybridLogicalClock();
+    }
+  }
+
+  const offlineHlc = new HybridLogicalClock({ nodeId: 'browser-client' });
 
   // ==========================================
   // 2. Virtual POSIX Filesystem (BrowserVFS)
@@ -833,7 +925,8 @@ const bundleHeader = `/**
       }
       setStored('kubelabs_offline_progress', existing);
       const queue = getStored('kubelabs_sync_queue') || [];
-      queue.push({ labId, xpReward, timestamp: new Date().toISOString() });
+      const hlcTick = offlineHlc.now().toString();
+      queue.push({ labId, xpReward, timestamp: new Date().toISOString(), hlc: hlcTick });
       setStored('kubelabs_sync_queue', queue);
     },
     getProgress: function() {
@@ -876,7 +969,10 @@ const bundleHeader = `/**
         setStored('kubelabs_sync_queue', q);
       },
       flush: () => Promise.resolve({ synced: 0 })
-    }
+    },
+    VectorClock,
+    HybridLogicalClock,
+    hlc: offlineHlc
   };
 });
 `;

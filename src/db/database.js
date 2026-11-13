@@ -591,9 +591,16 @@ class KubeLabsDatabase {
   }
 
   syncOfflineProgress(payload = {}) {
-    const completedLabs = Array.isArray(payload.completedLabs) ? payload.completedLabs : [];
-    const completedIncidents = Array.isArray(payload.incidents) ? payload.incidents : [];
-    const completedProjects = Array.isArray(payload.projects) ? payload.projects : [];
+    const entities = (payload && payload.entities) || {};
+    const completedLabs = Array.isArray(payload.completedLabs)
+      ? payload.completedLabs
+      : (Array.isArray(entities.lab_progress) ? entities.lab_progress : (Array.isArray(payload.queue) ? payload.queue : []));
+    const completedIncidents = Array.isArray(payload.incidents)
+      ? payload.incidents
+      : (Array.isArray(entities.incident_runs) ? entities.incident_runs : []);
+    const completedProjects = Array.isArray(payload.projects)
+      ? payload.projects
+      : (Array.isArray(entities.project_progress) ? entities.project_progress : []);
 
     for (const item of completedLabs) {
       const labId = typeof item === 'string' ? item : item.labId;
