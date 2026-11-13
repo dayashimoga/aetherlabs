@@ -10,6 +10,74 @@ const { ArchitectureEngine } = require('../engine/architectureEngine');
 
 const FORBIDDEN_MARKERS = ['TODO:', 'FIXME:', 'PLACEHOLDER_IMPLEMENTATION', 'COMING_SOON_STUB'];
 
+const V4_SPECIALIZED_SUBAGENTS = [
+  {
+    id: 'agent-terminal-runtime',
+    role: 'Terminal & Execution Engine',
+    prompt: `You own src/core/terminalEngine.js, src/core/multiCliDispatcher.js, src/core/shellParser.js, src/core/pipelineDriver.js, and the new src/core/cliFormatter.js. Eliminate all stubbed responses ('kubectl command executed'). Implement full POSIX argument parsing, pipe streaming (| grep, | awk, | jq, | sed), file redirection (>, >>), tab-completion, command history, and exact ASCII table/YAML/JSON formatters for: kubectl, helm, kustomize, docker, crictl, etcdctl, kubeadm, git, argocd, flux, istioctl, linkerd, terraform, tofu, trivy, promql, logql, systemctl, journalctl, ip, iptables, nc, dig, curl, and k8sgpt. Every command must mutate or query the live ResourceGraph and VirtualFileSystem.`,
+    ownedFiles: [
+      'src/core/terminalEngine.js',
+      'src/core/multiCliDispatcher.js',
+      'src/core/shellParser.js',
+      'src/core/pipelineDriver.js',
+      'src/core/cliFormatter.js'
+    ]
+  },
+  {
+    id: 'agent-curriculum-45',
+    role: '45-Domain Curriculum & Deterministic Validation',
+    prompt: `You own plugins/, schemas/plugin.schema.json, src/core/validationEngine.js, src/core/incidentEngine.js, and src/core/projectEngine.js. Restructure and expand the curriculum to cover all 45 mandatory domains organized into 7 progressive tiers (Tier 1: Linux, Networking, Git; Tier 2: Docker, CRI, Helm, Kustomize; Tier 3: K8s Fundamentals, CKAD, CKA, K8s Networking, K8s Storage, CKS, K8s Troubleshooting; Tier 4: GitOps, ArgoCD, FluxCD, CI/CD, DevSecOps, IaC, Terraform; Tier 5: Service Mesh, Istio, Linkerd, Observability, Prometheus, Grafana, OpenTelemetry, Logging & Monitoring, SRE, Platform Reliability, Performance Engineering, Production Operations, K8s Production Operations, K8s Multi-Cluster; Tier 6: Cloud-Native Architecture, Distributed Systems, Microservices, System Design, Platform Engineering, Security Engineering, Cloud Architecture Patterns, Enterprise Architecture; Tier 7: AI-Assisted Operations). Every domain must include: (1) Concise Concept Visualizer, (2) 6-to-10 Step Guided Lab with per-step state validation, (3) Unguided Challenge, (4) Live Break-Fix Troubleshooting Scenario, and (5) Certification Exam Drill.`,
+    ownedFiles: [
+      'plugins/',
+      'schemas/plugin.schema.json',
+      'src/core/validationEngine.js',
+      'src/core/incidentEngine.js',
+      'src/core/projectEngine.js'
+    ]
+  },
+  {
+    id: 'agent-ui-futuristic',
+    role: 'UI/UX Redesign & Interactive Workbench',
+    prompt: `You own public/index.html, public/css/styles.css, public/js/app.js, and public/js/offlineEngine.js. Replace the cluttered v3 interface with a modern, minimalist, futuristic Cloud-Native IDE. Implement:
+1. Left Icon Rail (64px) + Top Command Bar (Ctrl+K Search, Cluster Health Pill, XP/Level Progress) replacing the cluttered horizontal pill header.
+2. View 1: Interactive Skill Tree Roadmap (Homepage): 'Continue Learning' Hero banner + visual 7-Tier DAG Roadmap showing prerequisite paths, mastery progress, and certification milestones (no more wall-of-text card dumps).
+3. View 2: 3-Pane Split Lab IDE: Resizable panes (#resizer-left, #resizer-right). Left: Step-by-step interactive checklist that auto-advances on step validation. Center: Multi-tab YAML/HCL/Code Editor + Interactive Terminal with full ANSI colors and quick-action bar. Right: Live Interactive SVG Cluster Topology with click-to-inspect resource drawer (describe, logs, events).
+4. View 3: Incident War Room: Hide #active-incident-banner when idle. On incident launch, open War Room mode with live MTTR timer, PagerDuty alert stream, live latency/error sparklines, and terminal.
+5. View 4: Bi-Directional Architecture Studio: Fix empty YAML/HCL panel by auto-compiling the active blueprint on load. Fix clipped node titles with responsive node sizing and port connection animations.
+6. Modal & Accessibility Polish: Fix Ctrl+Shift+D Diagnostics modal sticky header overlap and empty card bugs.`,
+    ownedFiles: [
+      'public/index.html',
+      'public/css/styles.css',
+      'public/js/app.js',
+      'public/js/offlineEngine.js'
+    ]
+  },
+  {
+    id: 'agent-control-plane',
+    role: 'Kubernetes, Mesh, GitOps & Observability Fidelity',
+    prompt: `You own src/core/controllerManager.js, src/core/schedulerEngine.js, src/core/networkingEngine.js, src/core/storageAndSecurityEngine.js, src/core/observabilityEngine.js, src/core/autoscalingAndMeshEngine.js, and src/core/cloudExtensions.js. Ensure real-time reconciliation for all 45 domains: Pod lifecycle transitions (Pending -> ContainerCreating -> Running or CrashLoopBackOff / ImagePullBackOff / OOMKilled), Event generation (Normal Scheduled, Warning FailedMount, Warning BackOff), CNI 7-hop packet tracing, CoreDNS resolution, CSI PVC binding, RBAC can-i evaluation, ArgoCD/Flux sync status, Istio/Linkerd mTLS routing, and PromQL/LogQL time-series evaluation.`,
+    ownedFiles: [
+      'src/core/controllerManager.js',
+      'src/core/schedulerEngine.js',
+      'src/core/networkingEngine.js',
+      'src/core/storageAndSecurityEngine.js',
+      'src/core/observabilityEngine.js',
+      'src/core/autoscalingAndMeshEngine.js',
+      'src/core/cloudExtensions.js'
+    ]
+  },
+  {
+    id: 'agent-qa-auditor',
+    role: '56-Gate Self-Audit & E2E Verification',
+    prompt: `You own scripts/self-audit.js, scripts/verify-subphases.js, and tests/. Add strict regression tests ensuring: (1) Zero CLI commands ever output 'command executed', (2) All 45 domains load and validate deterministically (0% score before solution, 100% score after canonical solution), (3) Architecture Studio YAML/HCL output is non-empty on initial render, and (4) All UI tabs and modals render without layout clipping.`,
+    ownedFiles: [
+      'scripts/self-audit.js',
+      'scripts/verify-subphases.js',
+      'tests/'
+    ]
+  }
+];
+
 class AgentOrchestrator {
   constructor({ rootDir, pluginManager }) {
     this.rootDir = rootDir || path.join(__dirname, '..', '..');
@@ -349,7 +417,37 @@ class AgentOrchestrator {
       checks
     };
   }
+
+  getSpecializedAgents() {
+    return V4_SPECIALIZED_SUBAGENTS;
+  }
+
+  getSpecializedAgent(id) {
+    return V4_SPECIALIZED_SUBAGENTS.find((a) => a.id === id) || null;
+  }
+
+  runSpecializedAgentWorkflow() {
+    const results = [];
+    for (const agent of V4_SPECIALIZED_SUBAGENTS) {
+      const allFilesExist = agent.ownedFiles.every((f) => {
+        const full = path.join(this.rootDir, f);
+        return fs.existsSync(full);
+      });
+      results.push({
+        id: agent.id,
+        role: agent.role,
+        status: allFilesExist ? 'PASS' : 'IN_PROGRESS',
+        promptConfigured: Boolean(agent.prompt && agent.prompt.length > 50),
+        ownedFiles: agent.ownedFiles
+      });
+    }
+    return {
+      subagents: results,
+      total: results.length,
+      ready: results.filter((r) => r.status === 'PASS').length
+    };
+  }
 }
 
-module.exports = { AgentOrchestrator };
+module.exports = { AgentOrchestrator, V4_SPECIALIZED_SUBAGENTS };
 

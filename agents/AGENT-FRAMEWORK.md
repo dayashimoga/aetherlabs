@@ -96,3 +96,38 @@ flowchart TB
 - **Quality Gates**:
   - Process RSS memory `< 150MB` during full audit and all 11 agent checks pass in `src/agents/orchestrator.js`.
 
+---
+
+## 3. KubeLabs v4.0 Full-Stack Transformation Sub-Agents
+
+Configured and orchestrated via `src/agents/orchestrator.js`:
+
+```mermaid
+flowchart LR
+    A1["Agent 1: agent-terminal-runtime\n(Real POSIX & Multi-CLI Sandbox)"] --> A4["Agent 4: agent-control-plane\n(Virtual K8s/Mesh/GitOps Fidelity)"]
+    A4 --> A2["Agent 2: agent-curriculum-45\n(45-Domain Mastery Curriculum)"]
+    A2 --> A3["Agent 3: agent-ui-futuristic\n(Futuristic IDE & 3-Pane Workbench)"]
+    A3 --> A5["Agent 5: agent-qa-auditor\n(56-Gate Automated Verification)"]
+```
+
+### 3.1 Terminal & Execution Engine (`agent-terminal-runtime`)
+- **Owned Files**: `src/core/terminalEngine.js`, `src/core/multiCliDispatcher.js`, `src/core/shellParser.js`, `src/core/pipelineDriver.js`, `src/core/cliFormatter.js`
+- **System Prompt**: *"You own src/core/terminalEngine.js, src/core/multiCliDispatcher.js, src/core/shellParser.js, src/core/pipelineDriver.js, and the new src/core/cliFormatter.js. Eliminate all stubbed responses ('kubectl command executed'). Implement full POSIX argument parsing, pipe streaming (| grep, | awk, | jq, | sed), file redirection (>, >>), tab-completion, command history, and exact ASCII table/YAML/JSON formatters for: kubectl, helm, kustomize, docker, crictl, etcdctl, kubeadm, git, argocd, flux, istioctl, linkerd, terraform, tofu, trivy, promql, logql, systemctl, journalctl, ip, iptables, nc, dig, curl, and k8sgpt. Every command must mutate or query the live ResourceGraph and VirtualFileSystem."*
+
+### 3.2 45-Domain Curriculum & Deterministic Validation (`agent-curriculum-45`)
+- **Owned Files**: `plugins/`, `schemas/plugin.schema.json`, `src/core/validationEngine.js`, `src/core/incidentEngine.js`, `src/core/projectEngine.js`
+- **System Prompt**: *"You own plugins/, schemas/plugin.schema.json, src/core/validationEngine.js, src/core/incidentEngine.js, and src/core/projectEngine.js. Restructure and expand the curriculum to cover all 45 mandatory domains organized into 7 progressive tiers. Every domain must include: (1) Concise Concept Visualizer, (2) 6-to-10 Step Guided Lab with per-step state validation, (3) Unguided Challenge, (4) Live Break-Fix Troubleshooting Scenario, and (5) Certification Exam Drill."*
+
+### 3.3 UI/UX Redesign & Interactive Workbench (`agent-ui-futuristic`)
+- **Owned Files**: `public/index.html`, `public/css/styles.css`, `public/js/app.js`, `public/js/offlineEngine.js`
+- **System Prompt**: *"You own public/index.html, public/css/styles.css, public/js/app.js, and public/js/offlineEngine.js. Replace the cluttered v3 interface with a modern, minimalist, futuristic Cloud-Native IDE with 64px Left Icon Rail, Top Command Bar, 7-Tier DAG Roadmap, 3-Pane Split Lab IDE, Incident War Room, Bi-Directional Architecture Studio, and responsive modal polish."*
+
+### 3.4 Kubernetes, Mesh, GitOps & Observability Fidelity (`agent-control-plane`)
+- **Owned Files**: `src/core/controllerManager.js`, `src/core/schedulerEngine.js`, `src/core/networkingEngine.js`, `src/core/storageAndSecurityEngine.js`, `src/core/observabilityEngine.js`, `src/core/autoscalingAndMeshEngine.js`, `src/core/cloudExtensions.js`
+- **System Prompt**: *"You own src/core/controllerManager.js, src/core/schedulerEngine.js, src/core/networkingEngine.js, src/core/storageAndSecurityEngine.js, src/core/observabilityEngine.js, src/core/autoscalingAndMeshEngine.js, and src/core/cloudExtensions.js. Ensure real-time reconciliation for all 45 domains: Pod lifecycle transitions, Event generation, CNI 7-hop packet tracing, CoreDNS resolution, CSI PVC binding, RBAC can-i evaluation, ArgoCD/Flux sync status, Istio/Linkerd mTLS routing, and PromQL/LogQL time-series evaluation."*
+
+### 3.5 56-Gate Self-Audit & E2E Verification (`agent-qa-auditor`)
+- **Owned Files**: `scripts/self-audit.js`, `scripts/verify-subphases.js`, `tests/`
+- **System Prompt**: *"You own scripts/self-audit.js, scripts/verify-subphases.js, and tests/. Add strict regression tests ensuring: (1) Zero CLI commands ever output 'command executed', (2) All 45 domains load and validate deterministically (0% score before solution, 100% score after canonical solution), (3) Architecture Studio YAML/HCL output is non-empty on initial render, and (4) All UI tabs and modals render without layout clipping."*
+
+
