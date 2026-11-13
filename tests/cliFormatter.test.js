@@ -635,4 +635,84 @@ spec:
     assert.match(resDesc.output, /^Name:\s+demo-api/m);
     assert.match(resDesc.output, /RollingUpdateStrategy:/);
   });
+
+  await t.test('18. formatApiError renders authentic Kubernetes API errors', () => {
+    const { formatApiError } = require('../src/core/cliFormatter');
+    assert.equal(formatApiError('NotFound', { kind: 'Pod', name: 'missing-pod' }), 'Error from server (NotFound): pod "missing-pod" not found');
+    assert.equal(formatApiError('AlreadyExists', { kind: 'Deployment', name: 'web' }), 'Error from server (AlreadyExists): deployment "web" already exists');
+    assert.match(
+      formatApiError('Forbidden', { kind: 'Pod', name: 'vault-db', user: 'dev-user', verb: 'delete', namespace: 'prod' }),
+      /Error from server \(Forbidden\): pods "vault-db" is forbidden: User "dev-user" cannot delete resource "pods" in API group "" in the namespace "prod"/
+    );
+    assert.equal(
+      formatApiError('Invalid', { kind: 'Deployment', name: 'bad-deploy', field: 'spec.replicas', reason: '-1 must be greater than or equal to 0' }),
+      'The Deployment "bad-deploy" is invalid: spec.replicas: Invalid value: -1 must be greater than or equal to 0'
+    );
+    assert.match(formatApiError('BadRequest', { message: 'no objects passed to apply' }), /Error from server \(BadRequest\): no objects passed to apply/);
+    assert.match(formatApiError('Conflict', { kind: 'Pod', name: 'order-pod' }), /Error from server \(Conflict\): Operation cannot be fulfilled on pod "order-pod"/);
+    assert.equal(formatApiError('Unauthorized'), 'error: You must be logged in to the server (Unauthorized)');
+    assert.match(formatApiError('ConnectionRefused'), /The connection to the server 127\.0\.0\.1:6443 was refused/);
+    assert.equal(formatApiError('CommandNotFound', { bin: 'mycli' }), 'bash: mycli: command not found');
+    assert.equal(formatApiError('PermissionDenied', { bin: '/etc/shadow' }), 'bash: /etc/shadow: Permission denied');
+  });
+
+  await t.test('19. createApiError sets authentic POSIX exit codes and HTTP statuses', () => {
+    const { createApiError, KubernetesApiError } = require('../src/core/cliFormatter');
+    const nf = createApiError('NotFound', { kind: 'Service', name: 'api' });
+    assert.ok(nf instanceof KubernetesApiError);
+    assert.equal(nf.exitCode, 1);
+    assert.equal(nf.status, 404);
+
+    const cnf = createApiError('CommandNotFound', { bin: 'weird-bin' });
+    assert.equal(cnf.exitCode, 127);
+    assert.equal(cnf.status, 404);
+
+    const pd = createApiError('PermissionDenied', { bin: '/root/admin.key' });
+    assert.equal(pd.exitCode, 126);
+    assert.equal(pd.status, 403);
+
+    const ae = createApiError('AlreadyExists', { kind: 'Namespace', name: 'prod' });
+    assert.equal(ae.exitCode, 1);
+    assert.equal(ae.status, 409);
+
+    const inv = createApiError('Invalid', { kind: 'Pod', name: 'bad-pod', field: 'spec.containers', reason: 'at least 1 container required' });
+    assert.equal(inv.exitCode, 1);
+    assert.equal(inv.status, 422);
+  });
+
+  await t.test('20. TerminalEngine end-to-end integration for realistic exit codes & API error handling', () => {
+    const { VirtualCluster } = require('../src/core/virtualCluster');
+    const { TerminalEngine } = require('../src/core/terminalEngine');
+    const cluster = new VirtualCluster();
+    const terminal = new TerminalEngine(cluster);
+
+    // Command not found -> exit code 127
+    const resCmdNotFound = terminal.execute('nonexistent-binary-cmd --flag');
+    assert.equal(resCmdNotFound.exitCode, 127);
+    assert.match(resCmdNotFound.output, /bash: nonexistent-binary-cmd: command not found/);
+
+    // kubectl get nonexistent resource -> exit code 1 with Error from server (NotFound)
+    const resGetNotFound = terminal.execute('kubectl get pod nonexistent-pod-xyz');
+    assert.equal(resGetNotFound.exitCode, 1);
+    assert.match(resGetNotFound.output, /^Error from server \(NotFound\): pod "nonexistent-pod-xyz" not found$/m);
+
+    // kubectl describe nonexistent resource -> exit code 1 with Error from server (NotFound)
+    const resDescNotFound = terminal.execute('kubectl describe pod nonexistent-pod-xyz');
+    assert.equal(resDescNotFound.exitCode, 1);
+    assert.match(resDescNotFound.output, /^Error from server \(NotFound\): pod "nonexistent-pod-xyz" not found$/m);
+
+    // kubectl delete nonexistent resource -> exit code 1 with Error from server (NotFound)
+    const resDelNotFound = terminal.execute('kubectl delete pod nonexistent-pod-xyz');
+    assert.equal(resDelNotFound.exitCode, 1);
+    assert.match(resDelNotFound.output, /^Error from server \(NotFound\): pod "nonexistent-pod-xyz" not found$/m);
+
+    // Create a deployment
+    const resCreate = terminal.execute('kubectl create deployment unique-app --image=nginx:alpine');
+    assert.equal(resCreate.exitCode, 0);
+
+    // Create the same deployment again -> exit code 1 with Error from server (AlreadyExists)
+    const resDup = terminal.execute('kubectl create deployment unique-app --image=nginx:alpine');
+    assert.equal(resDup.exitCode, 1);
+    assert.match(resDup.output, /^Error from server \(AlreadyExists\): deployment "unique-app" already exists$/m);
+  });
 });

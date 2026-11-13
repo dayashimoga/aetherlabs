@@ -1127,6 +1127,141 @@ function formatDescribeList(resources = [], events = [], options = {}) {
   return resources.map((r) => formatDescribe(r, events, options)).join('\n\n---\n\n');
 }
 
+/**
+ * Custom Kubernetes API Error preserving authentic HTTP/gRPC status codes and CLI exit codes
+ */
+class KubernetesApiError extends Error {
+  constructor(message, exitCode = 1, status = 500) {
+    super(message);
+    this.name = 'KubernetesApiError';
+    this.exitCode = exitCode;
+    this.status = status;
+  }
+}
+
+/**
+ * Creates authentic Kubernetes API server error string
+ * @param {string} type - 'NotFound', 'AlreadyExists', 'Forbidden', 'Invalid', 'BadRequest', 'Conflict', 'Unauthorized', 'ConnectionRefused', 'UnknownFlag', 'FlagNeedsArgument', 'MissingResourceArgument', 'CommandNotFound', 'PermissionDenied'
+ * @param {Object|string} details
+ * @returns {string}
+ */
+function formatApiError(type, details = {}) {
+  const opts = typeof details === 'string' ? { message: details } : (details || {});
+  const {
+    kind = 'Pod',
+    name = '',
+    namespace = 'default',
+    field = 'spec',
+    reason = '',
+    flag = '',
+    bin = 'sh',
+    user = 'system:serviceaccount:default:default',
+    verb = 'get'
+  } = opts;
+
+  const kLower = kind ? kind.toLowerCase() : 'resource';
+  const kPlural = kLower.endsWith('s') ? kLower : `${kLower}s`;
+
+  switch (type) {
+    case 'NotFound':
+      if (opts.message) return `Error from server (NotFound): ${opts.message}`;
+      return `Error from server (NotFound): ${kLower} "${name}" not found`;
+
+    case 'AlreadyExists':
+      if (opts.message) return `Error from server (AlreadyExists): ${opts.message}`;
+      return `Error from server (AlreadyExists): ${kLower} "${name}" already exists`;
+
+    case 'Forbidden':
+      if (opts.message) return `Error from server (Forbidden): ${opts.message}`;
+      return `Error from server (Forbidden): ${kPlural} "${name}" is forbidden: User "${user}" cannot ${verb} resource "${kPlural}" in API group "" in the namespace "${namespace}"`;
+
+    case 'Invalid':
+      if (opts.message) return `The ${kind} "${name}" is invalid: ${opts.message}`;
+      return `The ${kind} "${name}" is invalid: ${field}: Invalid value: ${reason || 'field is required'}`;
+
+    case 'BadRequest':
+      return `Error from server (BadRequest): ${opts.message || reason || 'the server cannot process the request'}`;
+
+    case 'Conflict':
+      if (opts.message) return `Error from server (Conflict): ${opts.message}`;
+      return `Error from server (Conflict): Operation cannot be fulfilled on ${kLower} "${name}": the object has been modified; please apply your changes to the latest version and try again`;
+
+    case 'Unauthorized':
+      return `error: You must be logged in to the server (Unauthorized)`;
+
+    case 'ConnectionRefused':
+      return `The connection to the server 127.0.0.1:6443 was refused - did you specify the right host or port?`;
+
+    case 'UnknownFlag':
+      return `error: unknown flag: --${flag}\nSee 'kubectl --help' for usage.`;
+
+    case 'FlagNeedsArgument':
+      return `error: flag needs an argument: '${flag}'`;
+
+    case 'MissingResourceArgument':
+      return `error: You must specify the type of resource to get. Use "kubectl api-resources" for a complete list of supported resources.`;
+
+    case 'CommandNotFound':
+      return `bash: ${bin}: command not found`;
+
+    case 'PermissionDenied':
+      return `bash: ${bin}: Permission denied`;
+
+    default:
+      return opts.message || `Error from server (${type}): an error occurred`;
+  }
+}
+
+/**
+ * Creates a KubernetesApiError instance with authentic message, exitCode, and HTTP status
+ * @param {string} type
+ * @param {Object|string} details
+ * @returns {KubernetesApiError}
+ */
+function createApiError(type, details = {}) {
+  const msg = formatApiError(type, details);
+  let exitCode = 1;
+  let status = 400;
+
+  switch (type) {
+    case 'CommandNotFound':
+      exitCode = 127;
+      status = 404;
+      break;
+    case 'PermissionDenied':
+      exitCode = 126;
+      status = 403;
+      break;
+    case 'NotFound':
+      exitCode = 1;
+      status = 404;
+      break;
+    case 'Forbidden':
+      exitCode = 1;
+      status = 403;
+      break;
+    case 'AlreadyExists':
+    case 'Conflict':
+      exitCode = 1;
+      status = 409;
+      break;
+    case 'Unauthorized':
+      exitCode = 1;
+      status = 401;
+      break;
+    case 'Invalid':
+      exitCode = 1;
+      status = 422;
+      break;
+    default:
+      exitCode = 1;
+      status = 400;
+      break;
+  }
+
+  return new KubernetesApiError(msg, exitCode, status);
+}
+
 module.exports = {
   KIND_ALIASES,
   CLUSTER_SCOPED_KINDS,
@@ -1140,5 +1275,8 @@ module.exports = {
   formatJson,
   formatJsonPath,
   formatDescribe,
-  formatDescribeList
+  formatDescribeList,
+  KubernetesApiError,
+  formatApiError,
+  createApiError
 };

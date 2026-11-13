@@ -48,6 +48,9 @@ const formatJson = cliFormatterModule.formatJson || JSON.stringify;
 const formatJsonPath = cliFormatterModule.formatJsonPath || function () { return ''; };
 const formatDescribeList = cliFormatterModule.formatDescribeList || function () { return ''; };
 const formatDescribe = cliFormatterModule.formatDescribe || function () { return ''; };
+const KubernetesApiError = cliFormatterModule.KubernetesApiError || Error;
+const formatApiError = cliFormatterModule.formatApiError || function (type, details) { return String(details?.message || type); };
+const createApiError = cliFormatterModule.createApiError || function (type, details) { return new Error(formatApiError(type, details)); };
 
 function unpackArgs(firstArg, ...rest) {
   if (firstArg && typeof firstArg === 'object' && !Array.isArray(firstArg) && firstArg.argv) {
@@ -982,9 +985,26 @@ class TerminalEngine {
       }
       return { ...result, command: trimmed };
     } catch (err) {
+      const code = err.exitCode !== undefined ? err.exitCode : 1;
+      const rawMsg = err.message || '';
+      let formattedOutput = rawMsg;
+      if (
+        !rawMsg.startsWith('Error from server') &&
+        !rawMsg.startsWith('error:') &&
+        !rawMsg.startsWith('The ') &&
+        !rawMsg.startsWith('Error:') &&
+        !rawMsg.startsWith('bash:') &&
+        !rawMsg.startsWith('sh:') &&
+        !rawMsg.startsWith('Usage:')
+      ) {
+        formattedOutput = `error: ${rawMsg}`;
+      }
       return {
-        exitCode: 1,
-        output: `Error: ${err.message}`,
+        exitCode: code,
+        code,
+        output: formattedOutput,
+        stderr: formattedOutput,
+        stdout: '',
         command: trimmed
       };
     }
@@ -1088,7 +1108,10 @@ class TerminalEngine {
       default:
         return {
           exitCode: 127,
-          output: `kubelabs-sh: ${bin}: command not supported. Type 'help' to see available cloud-native & Linux CLI tools.`
+          code: 127,
+          output: `bash: ${bin}: command not found`,
+          stderr: `bash: ${bin}: command not found\n`,
+          stdout: ''
         };
     }
   }
@@ -1232,7 +1255,7 @@ class TerminalEngine {
       if (!kind || !name) throw new Error('Usage: kubectl delete <kind> <name> [-n <ns>]');
       const deleted = this.cluster.deleteResource(kind, name, flags.namespace);
       if (!deleted) {
-        throw new Error(`Error from server (NotFound): ${normalizeKind(kind)} "${name}" not found`);
+        throw createApiError('NotFound', { kind: normalizeKind(kind), name });
       }
       return { exitCode: 0, output: `${normalizeKind(kind).toLowerCase()} "${name}" deleted` };
     }
@@ -1260,7 +1283,7 @@ class TerminalEngine {
     if (targetName) {
       items = items.filter((r) => r.metadata && r.metadata.name === targetName);
       if (items.length === 0) {
-        throw new Error(`Error from server (NotFound): ${kind.toLowerCase()} "${targetName}" not found`);
+        throw createApiError('NotFound', { kind, name: targetName });
       }
     }
 
@@ -1304,7 +1327,7 @@ class TerminalEngine {
       : this.cluster.getResources(kind, flags.namespace);
 
     if (items.length === 0) {
-      throw new Error(`Error from server (NotFound): ${kind.toLowerCase()} "${name || ''}" not found`);
+      throw createApiError('NotFound', { kind, name: name || '' });
     }
 
     const events = this.cluster?.state?.events || [];
@@ -1319,6 +1342,11 @@ class TerminalEngine {
       throw new Error('Usage: kubectl create <kind> <name> [options]');
     }
     const kind = normalizeKind(rawKind);
+
+    const existing = this.cluster.getResource(kind, name, flags.namespace);
+    if (existing) {
+      throw createApiError('AlreadyExists', { kind, name });
+    }
 
     if (kind === 'Namespace') {
       this.cluster.applyResource({
