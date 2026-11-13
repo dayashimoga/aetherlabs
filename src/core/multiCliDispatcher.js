@@ -73,6 +73,22 @@ try {
   cloudExtensions = (typeof globalThis !== 'undefined' && globalThis.cloudExtensions) || {};
 }
 
+let PromQLEngine, LogQLEngine, OTelPipelineValidator, JaegerTraceGenerator, SloBurnRateCalculator;
+try {
+  const obs = require('./observabilityEngine');
+  PromQLEngine = obs.PromQLEngine;
+  LogQLEngine = obs.LogQLEngine;
+  OTelPipelineValidator = obs.OTelPipelineValidator;
+  JaegerTraceGenerator = obs.JaegerTraceGenerator;
+  SloBurnRateCalculator = obs.SloBurnRateCalculator;
+} catch {
+  PromQLEngine = (typeof globalThis !== 'undefined' && globalThis.PromQLEngine);
+  LogQLEngine = (typeof globalThis !== 'undefined' && globalThis.LogQLEngine);
+  OTelPipelineValidator = (typeof globalThis !== 'undefined' && globalThis.OTelPipelineValidator);
+  JaegerTraceGenerator = (typeof globalThis !== 'undefined' && globalThis.JaegerTraceGenerator);
+  SloBurnRateCalculator = (typeof globalThis !== 'undefined' && globalThis.SloBurnRateCalculator);
+}
+
 // ---------------------------------------------------------------------------
 // Kind Alias & Normalization Map
 // ---------------------------------------------------------------------------
@@ -183,6 +199,11 @@ class MultiCliDispatcher {
     this.istio = options.istio || (IstioMeshEngine ? new IstioMeshEngine() : null);
     this.tofu = options.tofu || (OpenTofuStateGraph ? new OpenTofuStateGraph() : null);
     this.cloudRegistry = options.cloudRegistry || (MultiCloudRegistry ? new MultiCloudRegistry() : null);
+
+    // Initialize Observability Engines
+    this.promql = options.promql || (PromQLEngine ? new PromQLEngine() : null);
+    this.logql = options.logql || (LogQLEngine ? new LogQLEngine() : null);
+    this.jaeger = options.jaeger || (JaegerTraceGenerator ? new JaegerTraceGenerator() : null);
 
     // Seed base cluster infrastructure if empty
     this._bootstrapDefaultResources();
@@ -361,6 +382,9 @@ class MultiCliDispatcher {
     pipelineDriver.registerCommand('flux', this.handleFlux.bind(this));
     pipelineDriver.registerCommand('velero', this.handleVelero.bind(this));
     pipelineDriver.registerCommand('vcluster', this.handleVcluster.bind(this));
+    pipelineDriver.registerCommand('promtool', this.handlePromtool.bind(this));
+    pipelineDriver.registerCommand('logcli', this.handleLogcli.bind(this));
+    pipelineDriver.registerCommand('otelcol', this.handleOtelcol.bind(this));
     pipelineDriver.registerCommand('curl', this.handleCurl.bind(this));
     pipelineDriver.registerCommand('dig', this.handleDig.bind(this));
     pipelineDriver.registerCommand('nslookup', this.handleNslookup.bind(this));
@@ -2277,6 +2301,51 @@ class MultiCliDispatcher {
 
   handleCurl({ argv = [] }) {
     const url = argv.find((a) => a.startsWith('http://') || a.startsWith('https://')) || 'http://kubernetes.default.svc';
+
+    // Loki API integration
+    if (url.includes('/loki/')) {
+      const qMatch = url.match(/[?&]query=([^&]+)/);
+      let logQuery = '';
+      if (qMatch) {
+        logQuery = decodeURIComponent(qMatch[1]);
+      } else {
+        const qIdx = argv.indexOf('--data-urlencode');
+        if (qIdx !== -1 && argv[qIdx + 1]?.startsWith('query=')) {
+          logQuery = argv[qIdx + 1].slice(6);
+        }
+      }
+      if (this.logql && logQuery) {
+        const res = this.logql.query(logQuery);
+        return {
+          stdout: JSON.stringify(res, null, 2) + '\n',
+          stderr: '',
+          code: res.status === 'success' ? 0 : 1
+        };
+      }
+    }
+
+    // Prometheus API integration
+    if (url.includes('/api/v1/query')) {
+      const qMatch = url.match(/[?&]query=([^&]+)/);
+      let promQuery = '';
+      if (qMatch) {
+        promQuery = decodeURIComponent(qMatch[1]);
+      } else {
+        const qIdx = argv.indexOf('--data-urlencode');
+        if (qIdx !== -1 && argv[qIdx + 1]?.startsWith('query=')) {
+          promQuery = argv[qIdx + 1].slice(6);
+        }
+      }
+      if (this.promql && promQuery) {
+        const res = this.promql.query(promQuery);
+        return {
+          stdout: JSON.stringify(res, null, 2) + '\n',
+          stderr: '',
+          code: res.status === 'success' ? 0 : 1
+        };
+      }
+    }
+
     return {
       stdout: JSON.stringify({
         status: '200 OK',
@@ -2284,6 +2353,114 @@ class MultiCliDispatcher {
         server: 'kubelabs-isomorphic-cluster/v3.0',
         timestamp: new Date().toISOString()
       }, null, 2) + '\n',
+      stderr: '',
+      code: 0
+    };
+  }
+
+  handlePromtool({ argv = [] }) {
+    const sub = argv[1];
+    if (sub === 'check') {
+      const target = argv[2];
+      if (target === 'rules') {
+        const file = argv[3];
+        if (this.vfs && file && this.vfs.exists(file)) {
+          const content = this.vfs.readFile(file);
+          let parsed;
+          try {
+            parsed = yamlParser.parseYaml ? yamlParser.parseYaml(content) : JSON.parse(content);
+          } catch (err) {
+            return { stdout: '', stderr: `Checking ${file}  FAILED:\n  ${err.message}\n`, code: 1 };
+          }
+          if (parsed && (parsed.groups || Array.isArray(parsed))) {
+            return { stdout: `Checking ${file}  SUCCESS\n`, stderr: '', code: 0 };
+          }
+          return { stdout: `Checking ${file}  SUCCESS\n`, stderr: '', code: 0 };
+        }
+        return { stdout: `Checking ${file || 'rules.yaml'}  SUCCESS\n`, stderr: '', code: 0 };
+      }
+    }
+
+    if (sub === 'query') {
+      const expr = argv[4] || argv[3] || 'up';
+      if (this.promql) {
+        const res = this.promql.query(expr);
+        if (res.status === 'success' && res.data?.result?.length > 0) {
+          const lines = res.data.result.map((r) => {
+            const labels = Object.entries(r.metric || {}).map(([k, v]) => `${k}="${v}"`).join(',');
+            return `{${labels}} => ${r.value[1]} @[${r.value[0]}]`;
+          });
+          return { stdout: lines.join('\n') + '\n', stderr: '', code: 0 };
+        }
+        return { stdout: `promtool query result: 0 series matched.\n`, stderr: '', code: 0 };
+      }
+    }
+
+    return {
+      stdout: 'promtool - Tooling for the Prometheus monitoring system v2.54.0\nusage: promtool <command> [<args> ...]\n',
+      stderr: '',
+      code: 0
+    };
+  }
+
+  handleLogcli({ argv = [] }) {
+    const sub = argv[1];
+    if (sub === 'query') {
+      const queryStr = argv.slice(2).find((a) => a.startsWith('{')) || argv[2] || '{app="default"}';
+      if (this.logql) {
+        const res = this.logql.query(queryStr);
+        if (res.status === 'success' && res.data?.result?.length > 0) {
+          const lines = [];
+          for (const item of res.data.result) {
+            for (const val of item.values || []) {
+              lines.push(`${new Date(Number(val[0]) / 1000000).toISOString()} ${val[1]}`);
+            }
+          }
+          return { stdout: lines.join('\n') + '\n', stderr: '', code: 0 };
+        }
+        return { stdout: `Common query: 0 streams matched.\n`, stderr: '', code: 0 };
+      }
+    }
+
+    return {
+      stdout: 'logcli - Command line interface for Loki v2.9.8\nusage: logcli <command> [<args> ...]\n',
+      stderr: '',
+      code: 0
+    };
+  }
+
+  handleOtelcol({ argv = [] }) {
+    const sub = argv[1];
+    let configPath = '';
+    for (let i = 1; i < argv.length; i++) {
+      if (argv[i].startsWith('--config=')) configPath = argv[i].split('=')[1];
+      else if (argv[i] === '--config') configPath = argv[++i];
+    }
+
+    if (sub === 'validate' || configPath) {
+      if (this.vfs && configPath && this.vfs.exists(configPath)) {
+        const content = this.vfs.readFile(configPath);
+        if (OTelPipelineValidator) {
+          const val = OTelPipelineValidator.validate(content);
+          if (val.valid) {
+            return {
+              stdout: `Validation succeeded.\n${val.warnings.length > 0 ? 'Warnings:\n' + val.warnings.join('\n') + '\n' : ''}`,
+              stderr: '',
+              code: 0
+            };
+          }
+          return {
+            stdout: '',
+            stderr: `Configuration validation failed:\n${val.errors.join('\n')}\n`,
+            code: 1
+          };
+        }
+      }
+      return { stdout: 'Configuration validation succeeded.\n', stderr: '', code: 0 };
+    }
+
+    return {
+      stdout: 'OpenTelemetry Collector v0.108.0\nusage: otelcol validate --config=<path>\n',
       stderr: '',
       code: 0
     };
