@@ -142,6 +142,14 @@
     return { exitCode: 0, clusterState: oe.getClusterState() };
   }
 
+  const VIEW_NAMES = {
+    'view-paths': 'Learning Paths & Catalog',
+    'view-workbench': 'Interactive Lab Workbench',
+    'view-incidents': 'Incident Response War Room',
+    'view-architect': 'Interactive Architecture Studio',
+    'view-certs': 'Certifications & Skill Profile'
+  };
+
   function switchView(viewId) {
     document.body.classList.toggle('workbench-open', viewId === 'view-workbench');
     document.querySelectorAll('.view-panel').forEach((panel) => {
@@ -150,6 +158,10 @@
     document.querySelectorAll('.nav-tab').forEach((btn) => {
       btn.classList.toggle('active', btn.dataset.view === viewId);
     });
+    const viewNameEl = document.getElementById('header-active-view-name');
+    if (viewNameEl) {
+      viewNameEl.textContent = VIEW_NAMES[viewId] || 'Workspace';
+    }
     if (viewId === 'view-workbench' && state.activeLab) {
       const sel = document.getElementById('wb-lab-selector');
       if (sel && sel.value !== state.activeLab.id) {
@@ -191,6 +203,221 @@
     modal.style.display = 'none';
     if (window.location.hash === '#admin-diagnostics') {
       history.replaceState(null, document.title, window.location.pathname + window.location.search);
+    }
+  }
+
+  // Command Palette Controller (Ctrl+K / Cmd+K)
+  let cmdPaletteSelectedIndex = 0;
+  let cmdPaletteItems = [];
+
+  function getAvailableCommands() {
+    const commands = [
+      {
+        id: 'nav-paths',
+        title: '1. Learning Paths & Catalog',
+        subtitle: 'Navigate to curriculum catalog, career tracks, and capstones',
+        badge: 'View',
+        icon: '📚',
+        action: () => switchView('view-paths')
+      },
+      {
+        id: 'nav-workbench',
+        title: '2. Interactive Lab Workbench',
+        subtitle: 'Open 3-pane split IDE with terminal, editor & SVG topology',
+        badge: 'View',
+        icon: '⚡',
+        action: () => switchView('view-workbench')
+      },
+      {
+        id: 'nav-incidents',
+        title: '3. Incident Response War Room',
+        subtitle: 'Active production outages, MTTR timer & simulated alerts',
+        badge: 'View',
+        icon: '🚨',
+        action: () => switchView('view-incidents')
+      },
+      {
+        id: 'nav-architect',
+        title: '4. Interactive Architecture Studio',
+        subtitle: 'Design blueprints and compile to Kubernetes YAML & OpenTofu HCL',
+        badge: 'View',
+        icon: '📐',
+        action: () => switchView('view-architect')
+      },
+      {
+        id: 'nav-certs',
+        title: '5. Certifications & Skill Profile',
+        subtitle: 'Role-based exam drills, skill radar, and Ed25519 credentials',
+        badge: 'View',
+        icon: '🎓',
+        action: () => switchView('view-certs')
+      },
+      {
+        id: 'cmd-diagnostics',
+        title: 'Open 11-Agent Diagnostics & Self-Audit (Ctrl+Shift+D)',
+        subtitle: 'Run 53-gate production readiness and memory budget audit',
+        badge: 'Tool',
+        icon: '🛡️',
+        action: () => openDiagnosticsModal()
+      },
+      {
+        id: 'cmd-theme',
+        title: 'Toggle Theme (Dark / Light / High Contrast)',
+        subtitle: 'Cycle through futuristic dark-first and accessibility themes',
+        badge: 'Setting',
+        icon: '🌓',
+        action: () => {
+          const next = state.currentTheme === 'dark' ? 'light' : state.currentTheme === 'light' ? 'high-contrast' : 'dark';
+          setTheme(next);
+        }
+      },
+      {
+        id: 'cmd-reset-lab',
+        title: 'Reset Active Lab Cluster State',
+        subtitle: 'Restore virtual cluster to fresh initial state',
+        badge: 'Cluster',
+        icon: '🔄',
+        action: () => {
+          switchView('view-workbench');
+          const btn = document.getElementById('btn-reset-lab');
+          if (btn) btn.click();
+        }
+      },
+      {
+        id: 'cmd-validate-lab',
+        title: 'Validate Active Lab Objectives',
+        subtitle: 'Run deterministic assertion engine against virtual cluster',
+        badge: 'Cluster',
+        icon: '✅',
+        action: () => {
+          switchView('view-workbench');
+          const btn = document.getElementById('btn-validate-lab');
+          if (btn) btn.click();
+        }
+      },
+      {
+        id: 'cmd-solve-lab',
+        title: 'Run Guided Lab Canonical Solution',
+        subtitle: 'Automatically apply valid configuration to complete objectives',
+        badge: 'Cluster',
+        icon: '✨',
+        action: () => {
+          switchView('view-workbench');
+          const btn = document.getElementById('btn-solve-lab');
+          if (btn) btn.click();
+        }
+      }
+    ];
+
+    if (state.overview && state.overview.domains) {
+      state.overview.domains.forEach((d) => {
+        if (d.labs) {
+          d.labs.forEach((l) => {
+            commands.push({
+              id: `lab-${l.id}`,
+              title: `Lab: ${l.title}`,
+              subtitle: `${d.name || d.id} • ${l.difficulty || 'Intermediate'} • ${l.estimatedMinutes || 15} mins`,
+              badge: 'Lab',
+              icon: '🧪',
+              action: async () => {
+                await startLab(l.id);
+                switchView('view-workbench');
+              }
+            });
+          });
+        }
+      });
+    }
+
+    return commands;
+  }
+
+  function openCommandPalette() {
+    const modal = document.getElementById('command-palette-modal');
+    if (!modal) return;
+    modal.style.display = 'flex';
+    const input = document.getElementById('cmd-palette-input');
+    if (input) {
+      input.value = '';
+      input.focus();
+    }
+    cmdPaletteSelectedIndex = 0;
+    renderCommandPaletteResults('');
+  }
+
+  function closeCommandPalette() {
+    const modal = document.getElementById('command-palette-modal');
+    if (!modal) return;
+    modal.style.display = 'none';
+  }
+
+  function renderCommandPaletteResults(query = '') {
+    const container = document.getElementById('cmd-palette-results');
+    if (!container) return;
+
+    const allCommands = getAvailableCommands();
+    const q = (query || '').toLowerCase().trim();
+
+    cmdPaletteItems = allCommands.filter((c) => {
+      if (!q) return true;
+      return c.title.toLowerCase().includes(q) ||
+             c.subtitle.toLowerCase().includes(q) ||
+             c.badge.toLowerCase().includes(q);
+    }).slice(0, 12);
+
+    if (cmdPaletteSelectedIndex >= cmdPaletteItems.length) {
+      cmdPaletteSelectedIndex = Math.max(0, cmdPaletteItems.length - 1);
+    }
+
+    if (cmdPaletteItems.length === 0) {
+      container.innerHTML = `
+        <div style="padding:1.5rem; text-align:center; color:var(--text-muted); font-size:0.85rem;">
+          No matching commands or labs found for "<strong>${escapeHtml(query)}</strong>"
+        </div>
+      `;
+      return;
+    }
+
+    container.innerHTML = cmdPaletteItems.map((item, idx) => `
+      <button class="cmd-result-item ${idx === cmdPaletteSelectedIndex ? 'selected' : ''}" data-index="${idx}" type="button" role="option" aria-selected="${idx === cmdPaletteSelectedIndex}">
+        <span class="cmd-result-icon">${item.icon}</span>
+        <span class="cmd-result-info">
+          <span class="cmd-result-title">${escapeHtml(item.title)}</span>
+          <span class="cmd-result-subtitle">${escapeHtml(item.subtitle)}</span>
+        </span>
+        <span class="cmd-result-badge">${escapeHtml(item.badge)}</span>
+      </button>
+    `).join('');
+
+    container.querySelectorAll('.cmd-result-item').forEach((el) => {
+      el.addEventListener('click', () => {
+        const idx = parseInt(el.dataset.index, 10);
+        executeCommandPaletteItem(idx);
+      });
+      el.addEventListener('mouseenter', () => {
+        cmdPaletteSelectedIndex = parseInt(el.dataset.index, 10);
+        updateCommandPaletteSelection();
+      });
+    });
+  }
+
+  function updateCommandPaletteSelection() {
+    const container = document.getElementById('cmd-palette-results');
+    if (!container) return;
+    container.querySelectorAll('.cmd-result-item').forEach((el, idx) => {
+      const isSel = idx === cmdPaletteSelectedIndex;
+      el.classList.toggle('selected', isSel);
+      el.setAttribute('aria-selected', isSel ? 'true' : 'false');
+      if (isSel) {
+        el.scrollIntoView({ block: 'nearest' });
+      }
+    });
+  }
+
+  function executeCommandPaletteItem(idx) {
+    if (cmdPaletteItems[idx]) {
+      closeCommandPalette();
+      cmdPaletteItems[idx].action();
     }
   }
 
@@ -2551,8 +2778,81 @@
       });
     }
 
-    // Ctrl+Shift+D keyboard shortcut & Escape handler
+    // Rail footer action buttons
+    const railDiagBtn = document.getElementById('rail-btn-diagnostics');
+    if (railDiagBtn) {
+      railDiagBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        openDiagnosticsModal();
+      });
+    }
+
+    const railThemeBtn = document.getElementById('rail-btn-theme');
+    if (railThemeBtn) {
+      railThemeBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        const nextTheme = state.currentTheme === 'dark' ? 'light' : state.currentTheme === 'light' ? 'high-contrast' : 'dark';
+        setTheme(nextTheme);
+      });
+    }
+
+    // Command Palette triggers & inputs (Ctrl+K)
+    const btnOpenCmd = document.getElementById('btn-open-cmd-palette');
+    if (btnOpenCmd) btnOpenCmd.addEventListener('click', openCommandPalette);
+
+    const railBtnCmd = document.getElementById('rail-btn-cmd-k');
+    if (railBtnCmd) railBtnCmd.addEventListener('click', openCommandPalette);
+
+    const btnCloseCmd = document.getElementById('btn-close-cmd-palette');
+    if (btnCloseCmd) btnCloseCmd.addEventListener('click', closeCommandPalette);
+
+    const cmdModal = document.getElementById('command-palette-modal');
+    if (cmdModal) {
+      cmdModal.addEventListener('click', (e) => {
+        if (e.target === cmdModal) closeCommandPalette();
+      });
+    }
+
+    const cmdInput = document.getElementById('cmd-palette-input');
+    if (cmdInput) {
+      cmdInput.addEventListener('input', () => {
+        cmdPaletteSelectedIndex = 0;
+        renderCommandPaletteResults(cmdInput.value);
+      });
+      cmdInput.addEventListener('keydown', (e) => {
+        if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          if (cmdPaletteItems.length > 0) {
+            cmdPaletteSelectedIndex = (cmdPaletteSelectedIndex + 1) % cmdPaletteItems.length;
+            updateCommandPaletteSelection();
+          }
+        } else if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          if (cmdPaletteItems.length > 0) {
+            cmdPaletteSelectedIndex = (cmdPaletteSelectedIndex - 1 + cmdPaletteItems.length) % cmdPaletteItems.length;
+            updateCommandPaletteSelection();
+          }
+        } else if (e.key === 'Enter') {
+          e.preventDefault();
+          executeCommandPaletteItem(cmdPaletteSelectedIndex);
+        } else if (e.key === 'Escape') {
+          e.preventDefault();
+          closeCommandPalette();
+        }
+      });
+    }
+
+    // Ctrl+Shift+D keyboard shortcut, Ctrl+K command palette, & Escape handler
     document.addEventListener('keydown', (e) => {
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K')) {
+        e.preventDefault();
+        const modal = document.getElementById('command-palette-modal');
+        if (modal && modal.style.display !== 'none') {
+          closeCommandPalette();
+        } else {
+          openCommandPalette();
+        }
+      }
       if (e.ctrlKey && e.shiftKey && (e.key === 'D' || e.key === 'd')) {
         e.preventDefault();
         const modal = document.getElementById('diagnostics-modal');
@@ -2563,6 +2863,10 @@
         }
       }
       if (e.key === 'Escape') {
+        const cmdM = document.getElementById('command-palette-modal');
+        if (cmdM && cmdM.style.display !== 'none') {
+          closeCommandPalette();
+        }
         const modal = document.getElementById('diagnostics-modal');
         if (modal && modal.style.display !== 'none') {
           closeDiagnosticsModal();

@@ -366,3 +366,4 @@ test('1.3.1 - Multi-Line YAML Heredoc Continuation & Execution', async () => {
   );
   assert.ok(termView.scrollback.some((s) => s.text.includes('resource configured')));
 });
+
