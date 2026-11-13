@@ -65,12 +65,12 @@
 
     <!-- VIEW 2: INTERACTIVE LAB WORKBENCH -->
     <section id="view-workbench" class="view-panel" aria-labelledby="workbench-heading">
-      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.75rem; margin-bottom:1rem;">
+      <div class="workbench-header-bar" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.75rem; margin-bottom:0.75rem;">
         <div>
           <span class="badge" id="wb-domain-badge">Kubernetes Core</span>
-          <h1 id="workbench-heading" style="font-size:1.3rem; display:inline; margin-left:0.5rem;">Loading Lab...</h1>
+          <h1 id="workbench-heading" style="font-size:1.25rem; display:inline; margin-left:0.5rem;">Loading Lab...</h1>
         </div>
-        <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
+        <div style="display:flex; gap:0.5rem; flex-wrap:wrap; align-items:center;">
           <select id="wb-lab-selector" aria-label="Select Lab"
             style="background:var(--bg-card); color:var(--text-primary); border:1px solid var(--border-subtle); border-radius:6px; padding:0.45rem 0.7rem; font-size:0.84rem;"></select>
           <button class="btn" id="btn-reset-lab" type="button">Reset Lab Cluster</button>
@@ -89,109 +89,254 @@
       <div class="workbench-layout" id="workbench-layout">
         <!-- Left Column: Scenario, Steps & Troubleshooting -->
         <div class="workbench-pane mobile-active" id="wb-pane-left" role="region" aria-label="Lab Instructions and Steps">
-          <div>
-            <h2 style="font-size:0.95rem; color:var(--accent-blue);">Production Scenario &amp; Context</h2>
-            <p id="wb-scenario" style="font-size:0.84rem; color:var(--text-secondary); margin-top:0.3rem;"></p>
-            <p id="wb-prod-context" style="font-size:0.78rem; color:var(--text-muted); margin-top:0.35rem; font-style:italic;"></p>
+          <div class="wb-pane-header">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.25rem;">
+              <h2 style="font-size:0.95rem; color:var(--accent-blue); margin:0;">Production Scenario &amp; Context</h2>
+              <button class="btn btn-secondary btn-sm" id="btn-view-lab-arch" type="button" title="View Production Architecture Diagram">
+                <span>📐 Architecture</span>
+              </button>
+            </div>
+            <p id="wb-scenario" style="font-size:0.84rem; color:var(--text-secondary); margin-top:0.25rem; margin-bottom:0.2rem;"></p>
+            <p id="wb-prod-context" style="font-size:0.78rem; color:var(--text-muted); margin-top:0.2rem; margin-bottom:0; font-style:italic;"></p>
           </div>
 
-          <div>
-            <h3 style="font-size:0.9rem; margin-bottom:0.45rem;">Step-by-Step Instructions (Click command to run)</h3>
-            <div id="wb-steps-list"></div>
-          </div>
+          <div class="wb-pane-scrollable">
+            <div>
+              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.45rem;">
+                <h3 style="font-size:0.9rem; margin:0;">Step-by-Step Instructions</h3>
+                <span class="badge" id="wb-steps-progress-badge">0 Steps</span>
+              </div>
+              <div id="wb-steps-list"></div>
+            </div>
 
-          <div style="background:var(--bg-secondary); padding:0.7rem; border-radius:6px; border:1px solid var(--border-subtle);">
-            <h4 style="font-size:0.82rem; color:var(--accent-amber);">Troubleshooting &amp; Verification Hint</h4>
-            <p id="wb-troubleshooting" style="font-size:0.78rem; color:var(--text-secondary); margin-top:0.25rem;"></p>
+            <!-- Socratic Hints & Troubleshooting Accordion -->
+            <div id="wb-hints-accordion" class="hints-accordion">
+              <details class="hint-details" open>
+                <summary class="hint-summary">
+                  <span class="hint-summary-title">💡 Troubleshooting &amp; Verification Hint</span>
+                </summary>
+                <div class="hint-body">
+                  <p id="wb-troubleshooting" style="font-size:0.78rem; color:var(--text-secondary); margin:0;"></p>
+                </div>
+              </details>
+              <details class="hint-details">
+                <summary class="hint-summary">
+                  <span class="hint-summary-title">🧠 Socratic Discovery Prompt</span>
+                </summary>
+                <div class="hint-body">
+                  <p id="wb-socratic-clue" style="font-size:0.78rem; color:var(--text-muted); margin:0;">
+                    Observe container exit status and events before applying fixes. What does <code>kubectl describe pod</code> report?
+                  </p>
+                </div>
+              </details>
+            </div>
           </div>
         </div>
 
         <!-- Resizer Divider 1 -->
         <div class="workbench-resizer" id="resizer-left" role="separator" aria-orientation="vertical" tabindex="0" title="Drag or use Left/Right arrow keys to resize left pane" aria-label="Resize instructions panel"></div>
 
-        <!-- Center Column: Built-in Terminal & YAML/HCL Manifest Editor -->
+        <!-- Center Column: Tabbed Full-Height Workspace (Terminal, YAML/HCL Editor, Observability) -->
         <div class="workbench-pane" id="wb-pane-center" role="region" aria-label="Terminal and Manifest Editor">
-          <div class="terminal-box">
-            <div class="terminal-topbar">
-              <span>Sandboxed Cloud-Native Shell (kubectl | helm | docker | argocd | istioctl | tofu | aws | az | gcloud | trivy | aiops)</span>
-              <button class="btn" id="btn-clear-terminal" type="button" style="padding:0.15rem 0.5rem; font-size:0.72rem;">Clear</button>
-            </div>
-            <div id="terminal-output" class="terminal-output" role="log" aria-live="polite"></div>
-
-            <!-- Mobile & Touch Virtual Quick-Key Bar -->
-            <div id="mobile-quick-keybar" class="mobile-quick-keybar" role="toolbar" aria-label="Mobile Terminal Quick Keys">
-              <button type="button" class="quick-key-btn" data-insert="kubectl " aria-label="Insert kubectl">kubectl</button>
-              <button type="button" class="quick-key-btn" data-insert="get " aria-label="Insert get">get</button>
-              <button type="button" class="quick-key-btn" data-insert="describe " aria-label="Insert describe">describe</button>
-              <button type="button" class="quick-key-btn" data-insert="apply -f " aria-label="Insert apply -f">apply -f</button>
-              <button type="button" class="quick-key-btn" data-insert="-n " aria-label="Insert namespace flag">-n</button>
-              <button type="button" class="quick-key-btn" data-insert="pods " aria-label="Insert pods">pods</button>
-              <button type="button" class="quick-key-btn" data-insert="svc " aria-label="Insert svc">svc</button>
-              <button type="button" class="quick-key-btn" data-insert="deploy " aria-label="Insert deploy">deploy</button>
-              <button type="button" class="quick-key-btn" data-insert="| " aria-label="Insert pipe">|</button>
-              <button type="button" class="quick-key-btn" data-insert="grep " aria-label="Insert grep">grep</button>
-              <button type="button" class="quick-key-btn" data-action="tab" aria-label="Trigger Tab completion">Tab</button>
-              <button type="button" class="quick-key-btn" data-action="ctrl-c" aria-label="Cancel command (Ctrl+C)">Ctrl+C</button>
-              <button type="button" class="quick-key-btn" data-action="history-up" aria-label="Previous history command (Up Arrow)">&uarr;</button>
-              <button type="button" class="quick-key-btn" data-action="history-down" aria-label="Next history command (Down Arrow)">&darr;</button>
-              <button type="button" class="quick-key-btn" data-action="clear" aria-label="Clear input line">Clear</button>
-            </div>
-
-            <form id="terminal-form" class="terminal-input-row">
-              <span class="terminal-prompt">learner@kubelabs:~$</span>
-              <input id="terminal-input" class="terminal-input" type="text" autocomplete="off" spellcheck="false"
-                placeholder="Type a command (e.g., kubectl get pods -A, help) and press Enter..." aria-label="Terminal Command Input" />
-              <button class="btn btn-primary" type="submit" style="padding:0.3rem 0.65rem;">Run</button>
-            </form>
+          <!-- Center Pane Tab Bar -->
+          <div class="pane-tab-bar" role="tablist" aria-label="Center Workspace Tabs">
+            <button type="button" class="pane-tab-btn center-tab-btn active" data-tab="center-tab-terminal" role="tab" aria-selected="true" id="tab-btn-terminal">
+              <span>💻 Terminal</span>
+            </button>
+            <button type="button" class="pane-tab-btn center-tab-btn" data-tab="center-tab-editor" role="tab" aria-selected="false" id="tab-btn-editor">
+              <span>📝 YAML / HCL Editor</span>
+            </button>
+            <button type="button" class="pane-tab-btn center-tab-btn" data-tab="center-tab-observability" role="tab" aria-selected="false" id="tab-btn-observability">
+              <span>📊 Observability &amp; Logs</span>
+            </button>
           </div>
 
-          <div style="display:flex; gap:0.4rem; flex-wrap:wrap;">
-            <button class="btn quick-cmd" data-cmd="kubectl get pods -A" type="button">kubectl get pods -A</button>
-            <button class="btn quick-cmd" data-cmd="kubectl get svc,deploy -n production" type="button">kubectl get svc,deploy -n production</button>
-            <button class="btn quick-cmd" data-cmd="kubectl top nodes" type="button">kubectl top nodes</button>
-            <button class="btn quick-cmd" data-cmd="aiops analyze" type="button">aiops analyze</button>
-            <button class="btn quick-cmd" data-cmd="help" type="button">help</button>
+          <!-- Tab 1: Sandboxed Terminal (Full Height) -->
+          <div class="center-tab-content active" id="center-tab-terminal" role="tabpanel" aria-labelledby="tab-btn-terminal">
+            <div class="terminal-box full-height-terminal">
+              <div class="terminal-topbar">
+                <span class="terminal-tools-desc">Sandboxed Cloud-Native Shell (kubectl | helm | docker | argocd | istioctl | tofu | aws | az | gcloud | trivy | aiops)</span>
+                <div style="display:flex; gap:0.4rem; align-items:center;">
+                  <button class="btn btn-xs" id="btn-zoom-term-out" type="button" title="Zoom terminal font out">A-</button>
+                  <button class="btn btn-xs" id="btn-zoom-term-in" type="button" title="Zoom terminal font in">A+</button>
+                  <button class="btn" id="btn-clear-terminal" type="button" style="padding:0.15rem 0.5rem; font-size:0.72rem;">Clear</button>
+                </div>
+              </div>
+              <div id="terminal-output" class="terminal-output" role="log" aria-live="polite"></div>
+
+              <!-- Mobile & Touch Virtual Quick-Key Bar -->
+              <div id="mobile-quick-keybar" class="mobile-quick-keybar" role="toolbar" aria-label="Mobile Terminal Quick Keys">
+                <button type="button" class="quick-key-btn" data-insert="kubectl " aria-label="Insert kubectl">kubectl</button>
+                <button type="button" class="quick-key-btn" data-insert="get " aria-label="Insert get">get</button>
+                <button type="button" class="quick-key-btn" data-insert="describe " aria-label="Insert describe">describe</button>
+                <button type="button" class="quick-key-btn" data-insert="apply -f " aria-label="Insert apply -f">apply -f</button>
+                <button type="button" class="quick-key-btn" data-insert="-n " aria-label="Insert namespace flag">-n</button>
+                <button type="button" class="quick-key-btn" data-insert="pods " aria-label="Insert pods">pods</button>
+                <button type="button" class="quick-key-btn" data-insert="svc " aria-label="Insert svc">svc</button>
+                <button type="button" class="quick-key-btn" data-insert="deploy " aria-label="Insert deploy">deploy</button>
+                <button type="button" class="quick-key-btn" data-insert="| " aria-label="Insert pipe">|</button>
+                <button type="button" class="quick-key-btn" data-insert="grep " aria-label="Insert grep">grep</button>
+                <button type="button" class="quick-key-btn" data-action="tab" aria-label="Trigger Tab completion">Tab</button>
+                <button type="button" class="quick-key-btn" data-action="ctrl-c" aria-label="Cancel command (Ctrl+C)">Ctrl+C</button>
+                <button type="button" class="quick-key-btn" data-action="history-up" aria-label="Previous history command (Up Arrow)">&uarr;</button>
+                <button type="button" class="quick-key-btn" data-action="history-down" aria-label="Next history command (Down Arrow)">&darr;</button>
+                <button type="button" class="quick-key-btn" data-action="clear" aria-label="Clear input line">Clear</button>
+              </div>
+
+              <form id="terminal-form" class="terminal-input-row">
+                <span class="terminal-prompt">learner@kubelabs:~$</span>
+                <input id="terminal-input" class="terminal-input" type="text" autocomplete="off" spellcheck="false"
+                  placeholder="Type a command (e.g., kubectl get pods -A, help) and press Enter..." aria-label="Terminal Command Input" />
+                <button class="btn btn-primary" type="submit" style="padding:0.3rem 0.65rem;">Run</button>
+              </form>
+            </div>
+
+            <div class="quick-cmd-bar" style="display:flex; gap:0.4rem; flex-wrap:wrap; margin-top:0.4rem;">
+              <button class="btn quick-cmd" data-cmd="kubectl get pods -A" type="button">kubectl get pods -A</button>
+              <button class="btn quick-cmd" data-cmd="kubectl get svc,deploy -n production" type="button">kubectl get svc,deploy -n production</button>
+              <button class="btn quick-cmd" data-cmd="kubectl top nodes" type="button">kubectl top nodes</button>
+              <button class="btn quick-cmd" data-cmd="aiops analyze" type="button">aiops analyze</button>
+              <button class="btn quick-cmd" data-cmd="help" type="button">help</button>
+            </div>
           </div>
 
-          <div>
-            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.4rem;">
-              <label for="wb-manifest-editor" style="font-size:0.86rem; font-weight:600;">Declarative YAML / HCL Manifest Editor</label>
-              <button class="btn btn-primary" id="btn-apply-manifest" type="button" style="padding:0.3rem 0.75rem; font-size:0.78rem;">Apply Manifest to Cluster (kubectl apply -f)</button>
+          <!-- Tab 2: YAML / HCL Editor with Line Numbers & Diff -->
+          <div class="center-tab-content" id="center-tab-editor" role="tabpanel" aria-labelledby="tab-btn-editor" style="display:none;">
+            <div class="editor-header-bar" style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.4rem;">
+              <div style="display:flex; align-items:center; gap:0.5rem;">
+                <label for="wb-manifest-editor" class="editor-label" style="font-size:0.86rem; font-weight:600; margin:0;">Declarative YAML / HCL Manifest Editor</label>
+                <span class="badge" id="editor-schema-badge" style="background:#064e3b; color:#6ee7b7; font-size:0.72rem;">Schema Valid</span>
+              </div>
+              <div style="display:flex; gap:0.35rem; align-items:center; flex-wrap:wrap;">
+                <button class="btn btn-sm" id="btn-format-yaml" type="button" title="Format YAML indentation">Format YAML</button>
+                <button class="btn btn-sm" id="btn-diff-manifest" type="button" title="Compare editor manifest with live cluster">Diff with Live Cluster</button>
+                <button class="btn btn-primary btn-sm" id="btn-apply-manifest" type="button">Apply Manifest to Cluster (kubectl apply -f)</button>
+              </div>
             </div>
-            <textarea id="wb-manifest-editor" class="code-editor" spellcheck="false"></textarea>
+
+            <div class="editor-container" id="editor-container">
+              <div class="editor-gutter" id="manifest-line-gutter" aria-hidden="true">1</div>
+              <textarea id="wb-manifest-editor" class="code-editor full-height-editor" spellcheck="false" wrap="off"></textarea>
+            </div>
+
+            <!-- Inline Diff Viewer Panel -->
+            <div class="editor-diff-panel" id="wb-manifest-diff" style="display:none;">
+              <div class="diff-header" style="display:flex; justify-content:space-between; align-items:center; padding:0.35rem 0.5rem; background:#0f172a; border-bottom:1px solid var(--border-subtle);">
+                <span style="font-weight:600; font-size:0.78rem;">Live Cluster Diff (Editor Manifest vs. Cluster State)</span>
+                <button class="btn btn-xs" id="btn-close-diff" type="button">Close Diff</button>
+              </div>
+              <div class="diff-content" id="wb-diff-content" style="padding:0.5rem; max-height:160px; overflow-y:auto; font-family:var(--font-mono); font-size:0.76rem;"></div>
+            </div>
+          </div>
+
+          <!-- Tab 3: Observability Query Console -->
+          <div class="center-tab-content" id="center-tab-observability" role="tabpanel" aria-labelledby="tab-btn-observability" style="display:none;">
+            <div class="observability-container">
+              <!-- PromQL Query Section -->
+              <div class="obs-card">
+                <div class="obs-card-header" style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.4rem; flex-wrap:wrap; gap:0.4rem;">
+                  <span style="font-weight:700; font-size:0.85rem; color:var(--accent-amber);">Prometheus Metrics Explorer (PromQL)</span>
+                  <div style="display:flex; gap:0.35rem; align-items:center;">
+                    <select id="promql-preset-selector" class="select-sm" aria-label="PromQL Presets" style="background:var(--bg-card); color:var(--text-primary); border:1px solid var(--border-subtle); border-radius:4px; padding:0.25rem 0.45rem; font-size:0.75rem;">
+                      <option value="rate(http_requests_total[5m])">Preset: rate(http_requests_total[5m])</option>
+                      <option value="container_memory_working_set_bytes">Preset: container_memory_working_set_bytes</option>
+                      <option value="kube_pod_status_phase">Preset: kube_pod_status_phase</option>
+                      <option value="node_cpu_utilization_ratio">Preset: node_cpu_utilization_ratio</option>
+                    </select>
+                    <button class="btn btn-primary btn-sm" id="btn-run-promql" type="button">Run Query</button>
+                  </div>
+                </div>
+                <div class="promql-input-row" style="margin-bottom:0.45rem;">
+                  <input type="text" id="promql-query-input" class="promql-input" value="rate(http_requests_total[5m])" placeholder="Enter PromQL query expression..." spellcheck="false" style="width:100%; background:var(--bg-terminal); border:1px solid var(--border-subtle); color:var(--text-primary); padding:0.35rem 0.55rem; border-radius:4px; font-family:var(--font-mono); font-size:0.78rem;" />
+                </div>
+                <div class="promql-chart-box" style="background:var(--bg-terminal); border:1px solid var(--border-subtle); border-radius:4px; padding:0.4rem; text-align:center;">
+                  <canvas id="promql-chart-canvas" width="600" height="130" aria-label="Prometheus Metrics Time-Series Chart" style="max-width:100%; height:auto;"></canvas>
+                </div>
+              </div>
+
+              <!-- Loki Log Stream Tailer -->
+              <div class="obs-card" style="margin-top:0.6rem;">
+                <div class="obs-card-header" style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.35rem;">
+                  <span style="font-weight:700; font-size:0.85rem; color:var(--accent-blue);">Loki Log Tailer &amp; LogQL</span>
+                  <input type="text" id="loki-filter-input" class="filter-input-sm" placeholder="Filter logs (e.g. error, ready)..." style="background:var(--bg-card); color:var(--text-primary); border:1px solid var(--border-subtle); border-radius:4px; padding:0.2rem 0.5rem; font-size:0.75rem;" />
+                </div>
+                <div id="loki-log-tailer" class="loki-log-stream" role="log" aria-live="polite"></div>
+              </div>
+
+              <!-- Jaeger Trace Waterfall -->
+              <div class="obs-card" style="margin-top:0.6rem;">
+                <div class="obs-card-header" style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.35rem;">
+                  <span style="font-weight:700; font-size:0.85rem; color:var(--accent-purple);">Jaeger Distributed Trace Waterfall</span>
+                  <span class="badge" id="jaeger-trace-id">trace-5df2b9-live</span>
+                </div>
+                <div id="jaeger-trace-waterfall" class="trace-waterfall"></div>
+              </div>
+            </div>
           </div>
         </div>
 
         <!-- Resizer Divider 2 -->
         <div class="workbench-resizer" id="resizer-right" role="separator" aria-orientation="vertical" tabindex="0" title="Drag or use Left/Right arrow keys to resize right pane" aria-label="Resize visualizer and validation panel"></div>
 
-        <!-- Right Column: Live Cluster Visualizer, Validation Engine & AI Mentor -->
+        <!-- Right Column: Tabbed Workspace (Topology, Objectives & CIS, AI Mentor) -->
         <div class="workbench-pane" id="wb-pane-right" role="region" aria-label="Cluster Topology and Validation Objectives">
-          <div>
+          <!-- Right Pane Tab Bar -->
+          <div class="pane-tab-bar" role="tablist" aria-label="Right Workspace Tabs">
+            <button type="button" class="pane-tab-btn right-tab-btn active" data-tab="right-tab-topology" role="tab" aria-selected="true" id="tab-btn-topology">
+              <span>🌐 Topology</span>
+            </button>
+            <button type="button" class="pane-tab-btn right-tab-btn" data-tab="right-tab-validation" role="tab" aria-selected="false" id="tab-btn-validation">
+              <span>✅ Objectives &amp; CIS</span>
+            </button>
+            <button type="button" class="pane-tab-btn right-tab-btn" data-tab="right-tab-mentor" role="tab" aria-selected="false" id="tab-btn-mentor">
+              <span>🤖 AI Mentor</span>
+            </button>
+          </div>
+
+          <!-- Tab 1: Live Interactive Cluster Topology -->
+          <div class="right-tab-content active" id="right-tab-topology" role="tabpanel" aria-labelledby="tab-btn-topology">
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.4rem;">
-              <h3 style="font-size:0.9rem; color:var(--accent-blue);">Live Virtual Cluster Topology</h3>
+              <h3 style="font-size:0.9rem; color:var(--accent-blue); margin:0;">Live Virtual Cluster Topology</h3>
               <span class="badge" id="cluster-resource-count">0 Resources</span>
             </div>
-            <div id="cluster-topology-svg-container" style="margin-bottom:0.6rem;">
+            <div style="margin-bottom:0.4rem;">
+              <input type="text" id="topology-search-input" class="filter-input-sm" placeholder="Filter resources by name, namespace, kind..." style="width:100%; background:var(--bg-terminal); border:1px solid var(--border-subtle); color:var(--text-primary); border-radius:4px; padding:0.25rem 0.5rem; font-size:0.76rem;" />
+            </div>
+            <div id="cluster-topology-svg-container" style="margin-bottom:0.5rem;">
               <svg id="cluster-topology-svg" class="topology-svg" viewBox="0 0 540 170"></svg>
             </div>
-            <div id="cluster-topology-view" class="resource-list"></div>
+            <div id="cluster-topology-view" class="resource-list full-height-resource-list"></div>
           </div>
 
-          <div>
-            <h3 style="font-size:0.9rem; margin-bottom:0.4rem;">Deterministic Validation Engine</h3>
-            <div id="wb-validation-results"></div>
+          <!-- Tab 2: Deterministic Validation Engine & CIS Security Grader -->
+          <div class="right-tab-content" id="right-tab-validation" role="tabpanel" aria-labelledby="tab-btn-validation" style="display:none;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.4rem;">
+              <h3 style="font-size:0.9rem; margin:0;">Deterministic Objectives Grader</h3>
+              <button class="btn btn-primary btn-xs" id="btn-revalidate-in-tab" type="button">Run Validation</button>
+            </div>
+            <div id="wb-validation-results" class="validation-results-scrollable"></div>
+
+            <div style="margin-top:0.75rem; border-top:1px solid var(--border-subtle); padding-top:0.5rem;">
+              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.4rem;">
+                <h4 style="font-size:0.82rem; color:var(--accent-green); margin:0;">CIS Benchmark &amp; Hardening Grader</h4>
+                <span class="badge" id="cis-score-badge">100% Pass</span>
+              </div>
+              <div id="wb-cis-security-checklist" class="cis-checklist"></div>
+            </div>
           </div>
 
-          <div style="border-top:1px solid var(--border-subtle); padding-top:0.75rem;">
-            <h3 style="font-size:0.9rem; color:var(--accent-purple); margin-bottom:0.4rem;">Contextual Socratic AI Mentor (Offline-Ready)</h3>
+          <!-- Tab 3: Contextual Socratic AI Mentor -->
+          <div class="right-tab-content" id="right-tab-mentor" role="tabpanel" aria-labelledby="tab-btn-mentor" style="display:none;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.4rem;">
+              <h3 style="font-size:0.9rem; color:var(--accent-purple); margin:0;">Contextual Socratic AI Mentor (Offline-Ready)</h3>
+            </div>
             <div style="display:flex; gap:0.35rem; flex-wrap:wrap; margin-bottom:0.5rem;">
               <button class="btn mentor-mode-btn" data-mode="hint" type="button" style="font-size:0.74rem; padding:0.3rem 0.55rem;">Socratic Hint</button>
               <button class="btn mentor-mode-btn" data-mode="debug-error" type="button" style="font-size:0.74rem; padding:0.3rem 0.55rem;">Debug Cluster</button>
               <button class="btn mentor-mode-btn" data-mode="explain" type="button" style="font-size:0.74rem; padding:0.3rem 0.55rem;">Explain Concept</button>
               <button class="btn mentor-mode-btn" data-mode="security-audit" type="button" style="font-size:0.74rem; padding:0.3rem 0.55rem;">CIS Security Audit</button>
             </div>
-            <div id="mentor-response-box" style="background:var(--bg-terminal); border:1px solid var(--border-subtle); border-radius:6px; padding:0.7rem; font-size:0.78rem; color:var(--text-secondary); white-space:pre-wrap; max-height:220px; overflow-y:auto;">Click any mentor coaching mode above to analyze your live cluster state and active objectives.</div>
+            <div id="mentor-response-box" class="mentor-response-full" style="background:var(--bg-terminal); border:1px solid var(--border-subtle); border-radius:6px; padding:0.7rem; font-size:0.78rem; color:var(--text-secondary); white-space:pre-wrap; max-height:220px; overflow-y:auto;">Click any mentor coaching mode above to analyze your live cluster state and active objectives.</div>
           </div>
         </div>
       </div>
@@ -315,6 +460,30 @@
     </section>
 
   </main>
+
+  <!-- Production Architecture Diagram Modal (#lab-arch-modal) -->
+  <div id="lab-arch-modal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="lab-arch-title" style="display:none;">
+    <div class="modal-dialog arch-modal-dialog">
+      <div class="modal-header">
+        <div>
+          <div style="display:flex; align-items:center; gap:0.5rem;">
+            <span class="badge" style="background:rgba(56,189,248,0.15); color:var(--accent-blue); border:1px solid rgba(56,189,248,0.3);">Architecture Topology</span>
+            <h2 id="lab-arch-title" style="font-size:1.15rem; margin:0;">Production Scenario Architecture Diagram</h2>
+          </div>
+          <p id="lab-arch-subtitle" style="color:var(--text-secondary); font-size:0.82rem; margin:0.35rem 0 0 0;">
+            Target production reference topology and network traffic flow for this lab.
+          </p>
+        </div>
+        <button class="modal-close-btn" id="btn-close-lab-arch" type="button" aria-label="Close Architecture Modal">&times;</button>
+      </div>
+      <div class="modal-body" style="padding:1rem;">
+        <div id="lab-arch-svg-container" style="background:var(--bg-terminal); border:1px solid var(--border-subtle); border-radius:8px; padding:0.75rem; text-align:center; overflow-x:auto;">
+          <svg id="lab-arch-svg" width="700" height="300" viewBox="0 0 700 300"></svg>
+        </div>
+        <div id="lab-arch-details" style="margin-top:0.75rem; font-size:0.8rem; color:var(--text-secondary);"></div>
+      </div>
+    </div>
+  </div>
 
   <!-- INTERNAL DIAGNOSTICS MODAL (11-AGENT QUALITY GATE) - Accessible via Ctrl+Shift+D or Footer -->
   <div id="diagnostics-modal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="gov-heading" style="display:none;">

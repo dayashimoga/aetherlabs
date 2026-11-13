@@ -10,4 +10,5 @@ require('./stage2-scheduler.test');
 require('./stage2-networking.test');
 require('./stage2-storage-security.test');
 require('./stage2-navigation.test');
+require('./stage2-workbench-ide.test');
 

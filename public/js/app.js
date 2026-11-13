@@ -143,6 +143,7 @@
   }
 
   function switchView(viewId) {
+    document.body.classList.toggle('workbench-open', viewId === 'view-workbench');
     document.querySelectorAll('.view-panel').forEach((panel) => {
       panel.classList.toggle('active', panel.id === viewId);
     });
@@ -154,7 +155,25 @@
       if (sel && sel.value !== state.activeLab.id) {
         sel.value = state.activeLab.id;
       }
+      updateEditorGutter();
     }
+  }
+
+  function openLabArchModal() {
+    const modal = document.getElementById('lab-arch-modal');
+    if (!modal) return;
+    modal.style.display = 'flex';
+    if (state.activeLab) {
+      renderLabArchDiagram(state.activeLab);
+    }
+    const closeBtn = document.getElementById('btn-close-lab-arch');
+    if (closeBtn) closeBtn.focus();
+  }
+
+  function closeLabArchModal() {
+    const modal = document.getElementById('lab-arch-modal');
+    if (!modal) return;
+    modal.style.display = 'none';
   }
 
   function openDiagnosticsModal() {
@@ -540,29 +559,332 @@
     document.getElementById('wb-scenario').textContent = data.lab.scenario;
     document.getElementById('wb-prod-context').textContent = `Production Pattern: ${data.lab.productionContext}`;
     document.getElementById('wb-troubleshooting').textContent = data.lab.troubleshootingGuide;
-    document.getElementById('wb-manifest-editor').value = data.lab.starterManifest || '';
+
+    const socraticEl = document.getElementById('wb-socratic-clue');
+    if (socraticEl) {
+      socraticEl.textContent = `Scenario Clue: Inspect cluster events and container logs before applying manifest fixes. What does kubectl describe indicate?`;
+    }
+
+    const stepsBadge = document.getElementById('wb-steps-progress-badge');
+    if (stepsBadge) {
+      stepsBadge.textContent = `${(data.lab.steps || []).length} Steps`;
+    }
+
+    const editor = document.getElementById('wb-manifest-editor');
+    if (editor) {
+      editor.value = data.lab.starterManifest || '';
+      updateEditorGutter();
+    }
 
     const stepsContainer = document.getElementById('wb-steps-list');
-    stepsContainer.innerHTML = (data.lab.steps || [])
+    if (stepsContainer) {
+      stepsContainer.innerHTML = (data.lab.steps || [])
+        .map(
+          (s) => `
+          <div class="step-card">
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+              <div style="font-size:0.83rem; font-weight:700;">Step ${s.stepNumber}: ${escapeHtml(s.title)}</div>
+              <span class="step-status-badge" style="font-size:0.72rem; color:var(--text-muted);">&#x25CB; Pending</span>
+            </div>
+            <div style="font-size:0.79rem; color:var(--text-secondary); margin-top:0.2rem;">${escapeHtml(s.instruction)}</div>
+            <code class="step-cmd" data-cmd="${escapeHtml(s.commandHint)}" title="Click to execute command in terminal">$ ${escapeHtml(s.commandHint)}</code>
+            <div class="step-actions">
+              <button type="button" class="btn-run-step" data-cmd="${escapeHtml(s.commandHint)}" title="Execute command directly in terminal">&#x25B6; Run in Terminal</button>
+              <button type="button" class="btn-copy-step" data-cmd="${escapeHtml(s.commandHint)}" title="Copy command to clipboard">&#x1F4CB; Copy</button>
+            </div>
+          </div>
+        `
+        )
+        .join('');
+
+      stepsContainer.querySelectorAll('.step-cmd').forEach((codeEl) => {
+        codeEl.addEventListener('click', () => executeTerminalCommand(codeEl.dataset.cmd));
+      });
+
+      stepsContainer.querySelectorAll('.btn-run-step').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          const cmd = btn.dataset.cmd;
+          const card = btn.closest('.step-card');
+          const badge = card ? card.querySelector('.step-status-badge') : null;
+          if (badge) {
+            badge.textContent = '✓ Executed';
+            badge.style.color = 'var(--accent-green)';
+          }
+          await executeTerminalCommand(cmd);
+        });
+      });
+
+      stepsContainer.querySelectorAll('.btn-copy-step').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          const cmd = btn.dataset.cmd;
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            try {
+              await navigator.clipboard.writeText(cmd);
+              const origText = btn.textContent;
+              btn.textContent = '✓ Copied!';
+              setTimeout(() => { btn.textContent = origText; }, 1500);
+            } catch {}
+          }
+        });
+      });
+    }
+
+    renderPendingValidation(data.lab);
+    renderClusterTopology(data.clusterState);
+    renderCisChecklist(data.lab, data.clusterState);
+    seedObservability(data.lab, data.clusterState);
+    appendTerminalLine(`--- Initialized Lab: ${data.lab.title} ---`);
+    switchView('view-workbench');
+  }
+
+  function updateEditorGutter() {
+    const editor = document.getElementById('wb-manifest-editor');
+    const gutter = document.getElementById('manifest-line-gutter');
+    if (!editor || !gutter) return;
+    const lines = (editor.value || '').split('\n').length;
+    let numbers = '';
+    for (let i = 1; i <= Math.max(lines, 1); i++) {
+      numbers += (i === 1 ? '1' : '\n' + i);
+    }
+    gutter.textContent = numbers;
+    gutter.scrollTop = editor.scrollTop;
+  }
+
+  function computeSimpleDiff(oldText, newText) {
+    const oldLines = (oldText || '').split('\n');
+    const newLines = (newText || '').split('\n');
+    const diffLines = [];
+    let i = 0, j = 0;
+    while (i < oldLines.length || j < newLines.length) {
+      if (i < oldLines.length && j < newLines.length && oldLines[i] === newLines[j]) {
+        diffLines.push({ type: 'unchanged', text: '  ' + oldLines[i] });
+        i++;
+        j++;
+      } else if (j < newLines.length && (!oldLines.includes(newLines[j]) || (i >= oldLines.length))) {
+        diffLines.push({ type: 'added', text: '+ ' + newLines[j] });
+        j++;
+      } else if (i < oldLines.length) {
+        diffLines.push({ type: 'removed', text: '- ' + oldLines[i] });
+        i++;
+      } else {
+        break;
+      }
+    }
+    return diffLines;
+  }
+
+  function drawPromqlChart(metricName = 'rate(http_requests_total[5m])') {
+    const canvas = document.getElementById('promql-chart-canvas');
+    if (!canvas || !canvas.getContext) return;
+    const ctx = canvas.getContext('2d');
+    const w = canvas.width;
+    const h = canvas.height;
+    ctx.clearRect(0, 0, w, h);
+
+    // Background & grid
+    ctx.fillStyle = '#080d1a';
+    ctx.fillRect(0, 0, w, h);
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.08)';
+    ctx.lineWidth = 1;
+    for (let y = 15; y < h - 15; y += 25) {
+      ctx.beginPath();
+      ctx.moveTo(35, y);
+      ctx.lineTo(w - 10, y);
+      ctx.stroke();
+    }
+
+    // Axes
+    ctx.strokeStyle = '#334155';
+    ctx.beginPath();
+    ctx.moveTo(35, 10);
+    ctx.lineTo(35, h - 20);
+    ctx.lineTo(w - 10, h - 20);
+    ctx.stroke();
+
+    // Deterministic wave points
+    const points = [];
+    const numPoints = 20;
+    const stepX = (w - 55) / (numPoints - 1);
+    for (let i = 0; i < numPoints; i++) {
+      const x = 40 + i * stepX;
+      const factor = metricName.includes('memory') ? 0.4 : metricName.includes('cpu') ? 0.6 : 0.75;
+      const wave = Math.sin(i * 0.5) * 18 * factor + Math.cos(i * 0.35) * 12 * factor;
+      const y = (h - 35) - (wave + 30 * factor);
+      points.push({ x, y: Math.max(15, Math.min(h - 22, y)) });
+    }
+
+    // Gradient fill
+    const grad = ctx.createLinearGradient(0, 0, 0, h);
+    grad.addColorStop(0, 'rgba(56, 189, 248, 0.35)');
+    grad.addColorStop(1, 'rgba(56, 189, 248, 0.0)');
+
+    ctx.beginPath();
+    ctx.moveTo(points[0].x, h - 20);
+    points.forEach((p) => ctx.lineTo(p.x, p.y));
+    ctx.lineTo(points[points.length - 1].x, h - 20);
+    ctx.closePath();
+    ctx.fillStyle = grad;
+    ctx.fill();
+
+    // Line
+    ctx.strokeStyle = '#38bdf8';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    points.forEach((p, idx) => {
+      if (idx === 0) ctx.moveTo(p.x, p.y);
+      else ctx.lineTo(p.x, p.y);
+    });
+    ctx.stroke();
+
+    // Dots
+    ctx.fillStyle = '#38bdf8';
+    points.forEach((p) => {
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 2.5, 0, Math.PI * 2);
+      ctx.fill();
+    });
+
+    // Labels
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = '10px monospace';
+    ctx.fillText('100%', 5, 20);
+    ctx.fillText('50%', 10, (h - 20) / 2);
+    ctx.fillText('0%', 15, h - 20);
+    ctx.fillText('-15m', 40, h - 6);
+    ctx.fillText('-5m', w / 2 - 10, h - 6);
+    ctx.fillText('now', w - 30, h - 6);
+  }
+
+  function seedObservability(lab, clusterState) {
+    const input = document.getElementById('promql-query-input');
+    drawPromqlChart(input ? input.value : 'rate(http_requests_total[5m])');
+
+    const lokiEl = document.getElementById('loki-log-tailer');
+    if (lokiEl) {
+      const now = new Date().toISOString();
+      const podName = (clusterState && clusterState.pods && clusterState.pods[0]) ? clusterState.pods[0].metadata.name : 'order-processor-7dbd8';
+      lokiEl.innerHTML = `
+        <div style="color:#94a3b8; margin-bottom:0.2rem;"><span style="color:#64748b;">${now}</span> [INFO] [cluster.kubelabs.local] Initialized kubelet on node kubelabs-worker-01</div>
+        <div style="color:#38bdf8; margin-bottom:0.2rem;"><span style="color:#64748b;">${now}</span> [INFO] [${podName}] Container entrypoint started</div>
+        <div style="color:#fbbf24; margin-bottom:0.2rem;"><span style="color:#64748b;">${now}</span> [WARN] [ingress-controller] Service endpoint probe latency 42ms</div>
+        <div style="color:#94a3b8;"><span style="color:#64748b;">${now}</span> [INFO] [prometheus-operator] Scraped metrics targets (26 active jobs, 0 scrape errors)</div>
+      `;
+    }
+
+    const jaegerEl = document.getElementById('jaeger-trace-waterfall');
+    if (jaegerEl) {
+      jaegerEl.innerHTML = `
+        <div class="trace-span-row">
+          <span class="trace-span-name">GET /api/v1/orders</span>
+          <div class="trace-span-bar-wrap"><div class="trace-span-bar" style="width:100%; background:#38bdf8;"></div></div>
+          <span class="trace-span-time">68ms</span>
+        </div>
+        <div class="trace-span-row" style="padding-left:1rem;">
+          <span class="trace-span-name">ingress-gateway</span>
+          <div class="trace-span-bar-wrap"><div class="trace-span-bar" style="margin-left:5%; width:30%; background:#818cf8;"></div></div>
+          <span class="trace-span-time">18ms</span>
+        </div>
+        <div class="trace-span-row" style="padding-left:2rem;">
+          <span class="trace-span-name">order-processor</span>
+          <div class="trace-span-bar-wrap"><div class="trace-span-bar" style="margin-left:35%; width:50%; background:#34d399;"></div></div>
+          <span class="trace-span-time">35ms</span>
+        </div>
+        <div class="trace-span-row" style="padding-left:3rem;">
+          <span class="trace-span-name">postgres-db query</span>
+          <div class="trace-span-bar-wrap"><div class="trace-span-bar" style="margin-left:55%; width:25%; background:#f59e0b;"></div></div>
+          <span class="trace-span-time">15ms</span>
+        </div>
+      `;
+    }
+  }
+
+  function renderCisChecklist(lab, clusterState) {
+    const listEl = document.getElementById('wb-cis-security-checklist');
+    if (!listEl) return;
+    const checks = [
+      { id: 'CIS-5.1.1', desc: 'Pod Security Admission restricted profile enforced', status: 'PASS' },
+      { id: 'CIS-5.2.1', desc: 'Minimize admission of privileged containers', status: 'PASS' },
+      { id: 'CIS-5.3.1', desc: 'NetworkPolicies defined for tenant namespaces', status: 'PASS' },
+      { id: 'CIS-5.4.1', desc: 'Containers run as non-root user (runAsNonRoot)', status: 'PASS' },
+      { id: 'CIS-5.5.1', desc: 'Memory and CPU limits defined on all containers', status: 'PASS' }
+    ];
+    listEl.innerHTML = checks
       .map(
-        (s) => `
-        <div class="step-card">
-          <div style="font-size:0.83rem; font-weight:700;">Step ${s.stepNumber}: ${s.title}</div>
-          <div style="font-size:0.79rem; color:var(--text-secondary); margin-top:0.2rem;">${s.instruction}</div>
-          <code class="step-cmd" data-cmd="${s.commandHint.replace(/"/g, '&quot;')}" title="Click to execute command in terminal">$ ${s.commandHint}</code>
+        (c) => `
+        <div class="cis-item">
+          <div><strong style="color:var(--accent-blue);">${c.id}:</strong> ${c.desc}</div>
+          <span class="badge" style="background:#064e3b; color:#6ee7b7; font-size:0.68rem;">${c.status}</span>
         </div>
       `
       )
       .join('');
+  }
 
-    stepsContainer.querySelectorAll('.step-cmd').forEach((codeEl) => {
-      codeEl.addEventListener('click', () => executeTerminalCommand(codeEl.dataset.cmd));
-    });
+  function renderLabArchDiagram(lab) {
+    const svg = document.getElementById('lab-arch-svg');
+    const details = document.getElementById('lab-arch-details');
+    if (!svg || !lab) return;
 
-    renderPendingValidation(data.lab);
-    renderClusterTopology(data.clusterState);
-    appendTerminalLine(`--- Initialized Lab: ${data.lab.title} ---`);
-    switchView('view-workbench');
+    const titleEl = document.getElementById('lab-arch-title');
+    if (titleEl) titleEl.textContent = `${lab.title} — Production Architecture`;
+
+    const domain = lab.domainTitle || lab.domainId || 'Kubernetes';
+    svg.innerHTML = `
+      <defs>
+        <marker id="arrow" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#38bdf8" />
+        </marker>
+        <linearGradient id="cardGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stop-color="#1e293b" />
+          <stop offset="100%" stop-color="#0f172a" />
+        </linearGradient>
+      </defs>
+
+      <!-- Client / Ingress Tier -->
+      <rect x="30" y="50" width="120" height="70" rx="8" fill="url(#cardGrad)" stroke="#38bdf8" stroke-width="1.5" />
+      <text x="90" y="80" fill="#38bdf8" font-size="12" font-weight="bold" text-anchor="middle">Ingress Gateway</text>
+      <text x="90" y="100" fill="#94a3b8" font-size="10" text-anchor="middle">Port 80/443 (TLS)</text>
+
+      <!-- Arrow 1 -->
+      <line x1="150" y1="85" x2="220" y2="85" stroke="#38bdf8" stroke-width="2" marker-end="url(#arrow)" />
+
+      <!-- Service Tier -->
+      <rect x="220" y="50" width="130" height="70" rx="8" fill="url(#cardGrad)" stroke="#818cf8" stroke-width="1.5" />
+      <text x="285" y="80" fill="#818cf8" font-size="12" font-weight="bold" text-anchor="middle">ClusterIP Service</text>
+      <text x="285" y="100" fill="#94a3b8" font-size="10" text-anchor="middle">10.96.0.0/12</text>
+
+      <!-- Arrow 2 -->
+      <line x1="350" y1="85" x2="420" y2="85" stroke="#38bdf8" stroke-width="2" marker-end="url(#arrow)" />
+
+      <!-- Pod Replica Tier -->
+      <rect x="420" y="30" width="140" height="110" rx="8" fill="url(#cardGrad)" stroke="#34d399" stroke-width="1.5" />
+      <text x="490" y="55" fill="#34d399" font-size="12" font-weight="bold" text-anchor="middle">Deployment Pods</text>
+      <text x="490" y="75" fill="#94a3b8" font-size="10" text-anchor="middle">Replicas: 3</text>
+      <rect x="435" y="85" width="110" height="42" rx="4" fill="#070b14" stroke="#334155" />
+      <text x="490" y="102" fill="#e2e8f0" font-size="9" text-anchor="middle">Container: App</text>
+      <text x="490" y="118" fill="#a5f3fc" font-size="9" text-anchor="middle">Cilium eBPF Net</text>
+
+      <!-- Arrow 3 to Data/Config -->
+      <line x1="490" y1="140" x2="490" y2="190" stroke="#f59e0b" stroke-width="2" marker-end="url(#arrow)" />
+
+      <!-- Data / Storage Tier -->
+      <rect x="420" y="190" width="140" height="70" rx="8" fill="url(#cardGrad)" stroke="#f59e0b" stroke-width="1.5" />
+      <text x="490" y="218" fill="#f59e0b" font-size="12" font-weight="bold" text-anchor="middle">Config &amp; Storage</text>
+      <text x="490" y="238" fill="#94a3b8" font-size="10" text-anchor="middle">ConfigMap / Secret / CSI</text>
+
+      <!-- Node Boundary Box -->
+      <rect x="20" y="15" width="560" height="260" rx="12" fill="none" stroke="#334155" stroke-dasharray="4 4" />
+      <text x="35" y="32" fill="#64748b" font-size="10">Worker Node: kubelabs-worker-01</text>
+    `;
+
+    if (details) {
+      details.innerHTML = `
+        <div style="background:var(--bg-secondary); border:1px solid var(--border-subtle); border-radius:6px; padding:0.65rem;">
+          <strong>Target Topology Pattern:</strong> ${escapeHtml(lab.productionContext || 'Standard Cloud-Native Deployment')}
+          <div style="margin-top:0.35rem; color:var(--text-muted); font-size:0.76rem;">Domain: ${escapeHtml(domain)} &bull; Validation Assertions: ${(lab.validationRules || []).length} active</div>
+        </div>
+      `;
+    }
   }
 
   function renderPendingValidation(lab) {
@@ -1314,6 +1636,181 @@
     });
   }
 
+  function setupWorkbenchTabs() {
+    // Center Pane Tabs (Terminal, Editor, Observability)
+    document.querySelectorAll('.center-tab-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const targetTab = btn.dataset.tab;
+        document.querySelectorAll('.center-tab-btn').forEach((b) => {
+          b.classList.toggle('active', b === btn);
+          b.setAttribute('aria-selected', b === btn ? 'true' : 'false');
+        });
+        document.querySelectorAll('.center-tab-content').forEach((pane) => {
+          const isActive = pane.id === targetTab;
+          pane.classList.toggle('active', isActive);
+          pane.style.display = isActive ? 'flex' : 'none';
+        });
+
+        if (targetTab === 'center-tab-editor') {
+          updateEditorGutter();
+        } else if (targetTab === 'center-tab-observability') {
+          const input = document.getElementById('promql-query-input');
+          drawPromqlChart(input ? input.value : 'rate(http_requests_total[5m])');
+        } else if (targetTab === 'center-tab-terminal') {
+          if (state.terminalView) state.terminalView.focus();
+        }
+      });
+    });
+
+    // Right Pane Tabs (Topology, Objectives & CIS, AI Mentor)
+    document.querySelectorAll('.right-tab-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const targetTab = btn.dataset.tab;
+        document.querySelectorAll('.right-tab-btn').forEach((b) => {
+          b.classList.toggle('active', b === btn);
+          b.setAttribute('aria-selected', b === btn ? 'true' : 'false');
+        });
+        document.querySelectorAll('.right-tab-content').forEach((pane) => {
+          const isActive = pane.id === targetTab;
+          pane.classList.toggle('active', isActive);
+          pane.style.display = isActive ? 'flex' : 'none';
+        });
+      });
+    });
+
+    // Editor Line Numbers Gutter Sync
+    const editor = document.getElementById('wb-manifest-editor');
+    if (editor) {
+      editor.addEventListener('input', updateEditorGutter);
+      editor.addEventListener('scroll', updateEditorGutter);
+    }
+
+    // Format YAML button
+    const formatBtn = document.getElementById('btn-format-yaml');
+    if (formatBtn && editor) {
+      formatBtn.addEventListener('click', () => {
+        try {
+          const val = editor.value;
+          const formatted = val
+            .split('\n')
+            .map((line) => line.replace(/\t/g, '  '))
+            .join('\n');
+          editor.value = formatted;
+          updateEditorGutter();
+        } catch {}
+      });
+    }
+
+    // Diff with Live Cluster button
+    const diffBtn = document.getElementById('btn-diff-manifest');
+    const closeDiffBtn = document.getElementById('btn-close-diff');
+    const diffPanel = document.getElementById('wb-manifest-diff');
+    const diffContent = document.getElementById('wb-diff-content');
+    if (diffBtn && editor && diffPanel && diffContent) {
+      diffBtn.addEventListener('click', () => {
+        const starter = (state.activeLab && state.activeLab.starterManifest) ? state.activeLab.starterManifest : '';
+        const current = editor.value;
+        const diff = computeSimpleDiff(starter, current);
+        diffContent.innerHTML = diff
+          .map((d) => `<div class="diff-line ${d.type}">${escapeHtml(d.text)}</div>`)
+          .join('');
+        diffPanel.style.display = 'block';
+      });
+    }
+    if (closeDiffBtn && diffPanel) {
+      closeDiffBtn.addEventListener('click', () => {
+        diffPanel.style.display = 'none';
+      });
+    }
+
+    // PromQL Run Query & Preset Selector
+    const runPromqlBtn = document.getElementById('btn-run-promql');
+    const promqlInput = document.getElementById('promql-query-input');
+    const presetSelector = document.getElementById('promql-preset-selector');
+    if (presetSelector && promqlInput) {
+      presetSelector.addEventListener('change', () => {
+        promqlInput.value = presetSelector.value;
+        drawPromqlChart(promqlInput.value);
+      });
+    }
+    if (runPromqlBtn && promqlInput) {
+      runPromqlBtn.addEventListener('click', () => {
+        drawPromqlChart(promqlInput.value);
+      });
+    }
+
+    // Loki Filter Input
+    const lokiFilter = document.getElementById('loki-filter-input');
+    const lokiStream = document.getElementById('loki-log-tailer');
+    if (lokiFilter && lokiStream) {
+      lokiFilter.addEventListener('input', () => {
+        const term = lokiFilter.value.toLowerCase();
+        lokiStream.querySelectorAll('div').forEach((row) => {
+          row.style.display = (!term || row.textContent.toLowerCase().includes(term)) ? 'block' : 'none';
+        });
+      });
+    }
+
+    // Topology Filter Search
+    const topSearch = document.getElementById('topology-search-input');
+    if (topSearch) {
+      topSearch.addEventListener('input', () => {
+        const q = topSearch.value.toLowerCase();
+        const list = document.getElementById('cluster-topology-view');
+        if (list) {
+          list.querySelectorAll('.resource-chip').forEach((chip) => {
+            chip.style.display = (!q || chip.textContent.toLowerCase().includes(q)) ? 'flex' : 'none';
+          });
+        }
+      });
+    }
+
+    // Revalidate in tab button
+    const revalBtn = document.getElementById('btn-revalidate-in-tab');
+    if (revalBtn) {
+      revalBtn.addEventListener('click', validateActiveLab);
+    }
+
+    // Architecture Diagram Modal Triggers
+    const viewArchBtn = document.getElementById('btn-view-lab-arch');
+    const closeArchBtn = document.getElementById('btn-close-lab-arch');
+    const archModal = document.getElementById('lab-arch-modal');
+    if (viewArchBtn) {
+      viewArchBtn.addEventListener('click', openLabArchModal);
+    }
+    if (closeArchBtn) {
+      closeArchBtn.addEventListener('click', closeLabArchModal);
+    }
+    if (archModal) {
+      archModal.addEventListener('click', (e) => {
+        if (e.target === archModal) closeLabArchModal();
+      });
+    }
+
+    // Terminal Font Zoom Controls
+    const zoomInBtn = document.getElementById('btn-zoom-term-in');
+    const zoomOutBtn = document.getElementById('btn-zoom-term-out');
+    let termFontSize = 13;
+    if (zoomInBtn) {
+      zoomInBtn.addEventListener('click', () => {
+        if (termFontSize < 20) {
+          termFontSize += 1;
+          const termEl = document.getElementById('terminal-output');
+          if (termEl) termEl.style.fontSize = `${termFontSize}px`;
+        }
+      });
+    }
+    if (zoomOutBtn) {
+      zoomOutBtn.addEventListener('click', () => {
+        if (termFontSize > 10) {
+          termFontSize -= 1;
+          const termEl = document.getElementById('terminal-output');
+          if (termEl) termEl.style.fontSize = `${termFontSize}px`;
+        }
+      });
+    }
+  }
+
   async function init() {
     // Register offline Service Worker
     if ('serviceWorker' in navigator) {
@@ -1323,6 +1820,7 @@
     setupResizableWorkbench();
     setupMobileQuickKeybar();
     setupMobilePaneSwitcher();
+    setupWorkbenchTabs();
 
     // Navigation tab switching
     document.querySelectorAll('.nav-tab').forEach((btn) => {
@@ -1588,6 +2086,10 @@
         const modal = document.getElementById('diagnostics-modal');
         if (modal && modal.style.display !== 'none') {
           closeDiagnosticsModal();
+        }
+        const archModal = document.getElementById('lab-arch-modal');
+        if (archModal && archModal.style.display !== 'none') {
+          closeLabArchModal();
         }
       }
     });

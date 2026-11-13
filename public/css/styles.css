@@ -259,13 +259,411 @@ body {
   color: #fca5a5;
 }
 
-/* Lab Workbench 3-Column Split with Resizers */
+/* Lab Workbench 3-Column Split with Resizers (Full-Viewport 100vh IDE) */
+@media (min-width: 901px) {
+  body.workbench-open {
+    height: 100vh;
+    overflow: hidden;
+  }
+  body.workbench-open .app-container {
+    height: calc(100vh - 58px);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    padding: 0.5rem 1rem 0 1rem;
+    max-width: 100%;
+  }
+  #view-workbench.active {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+}
+
 .workbench-layout {
   display: grid;
   grid-template-columns: var(--wb-left-width, 360px) 8px 1fr 8px var(--wb-right-width, 380px);
   gap: 0.5rem;
   align-items: stretch;
   min-height: 650px;
+  flex: 1;
+  height: 100%;
+}
+
+.workbench-pane {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.wb-pane-header {
+  flex-shrink: 0;
+  padding-bottom: 0.4rem;
+  border-bottom: 1px solid var(--border-subtle);
+  margin-bottom: 0.5rem;
+}
+
+.wb-pane-scrollable {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding-right: 0.35rem;
+  scrollbar-width: thin;
+}
+
+.wb-pane-scrollable::-webkit-scrollbar {
+  width: 5px;
+}
+
+.wb-pane-scrollable::-webkit-scrollbar-thumb {
+  background: var(--border-subtle);
+  border-radius: 3px;
+}
+
+/* Socratic Hints Accordion */
+.hints-accordion {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin-top: 0.25rem;
+}
+
+.hint-details {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  overflow: hidden;
+  transition: all 0.15s ease;
+}
+
+.hint-details[open] {
+  border-color: rgba(245, 158, 11, 0.4);
+}
+
+.hint-summary {
+  padding: 0.45rem 0.65rem;
+  cursor: pointer;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--accent-amber);
+  user-select: none;
+  background: rgba(245, 158, 11, 0.06);
+}
+
+.hint-summary:hover {
+  background: rgba(245, 158, 11, 0.12);
+}
+
+.hint-body {
+  padding: 0.55rem 0.65rem;
+  border-top: 1px solid var(--border-subtle);
+}
+
+/* Step Card Actions */
+.step-actions {
+  display: flex;
+  gap: 0.4rem;
+  margin-top: 0.35rem;
+  align-items: center;
+}
+
+.btn-run-step {
+  background: var(--accent-green);
+  color: #064e3b;
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 0.2rem 0.55rem;
+  border-radius: 4px;
+  border: none;
+  cursor: pointer;
+  transition: filter 0.15s ease;
+}
+
+.btn-run-step:hover {
+  filter: brightness(1.15);
+}
+
+.btn-copy-step {
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+  padding: 0.2rem 0.55rem;
+  border-radius: 4px;
+  border: 1px solid var(--border-subtle);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.btn-copy-step:hover {
+  color: var(--text-primary);
+  border-color: var(--text-secondary);
+}
+
+/* Pane Tabs (Center & Right Column) */
+.pane-tab-bar {
+  display: flex;
+  gap: 0.35rem;
+  background: #090e1a;
+  border-bottom: 1px solid var(--border-subtle);
+  padding: 0.35rem 0.5rem 0 0.5rem;
+  margin-bottom: 0.5rem;
+  border-radius: 6px 6px 0 0;
+  flex-shrink: 0;
+}
+
+.pane-tab-btn {
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-secondary);
+  padding: 0.4rem 0.75rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  transition: all 0.15s ease;
+  border-radius: 4px 4px 0 0;
+}
+
+.pane-tab-btn:hover {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.pane-tab-btn.active {
+  color: var(--accent-blue);
+  border-bottom: 2px solid var(--accent-blue);
+  background: rgba(56, 189, 248, 0.1);
+}
+
+.center-tab-content, .right-tab-content {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Full-Height Terminal */
+.full-height-terminal {
+  flex: 1;
+  min-height: 0;
+  height: 100% !important;
+  display: flex;
+  flex-direction: column;
+}
+
+.terminal-tools-desc {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 75%;
+}
+
+/* Code Editor Line Numbers & Gutter */
+.editor-container {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  background: var(--bg-terminal);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  overflow: hidden;
+  position: relative;
+}
+
+.editor-gutter {
+  width: 42px;
+  background: #090e1a;
+  border-right: 1px solid var(--border-subtle);
+  color: #475569;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  line-height: 1.4rem;
+  padding: 0.6rem 0.4rem;
+  text-align: right;
+  user-select: none;
+  overflow: hidden;
+  white-space: pre;
+}
+
+.full-height-editor {
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+  background: transparent;
+  color: #a5f3fc;
+  border: none;
+  padding: 0.6rem 0.75rem;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  line-height: 1.4rem;
+  outline: none;
+  resize: none;
+  overflow: auto;
+  white-space: pre;
+  tab-size: 2;
+}
+
+.editor-diff-panel {
+  background: #070b14;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  margin-top: 0.5rem;
+  max-height: 160px;
+  overflow-y: auto;
+  flex-shrink: 0;
+}
+
+.diff-line {
+  padding: 0.15rem 0.4rem;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.diff-line.added { background: rgba(34, 197, 94, 0.15); color: #86efac; }
+.diff-line.removed { background: rgba(239, 68, 68, 0.15); color: #fca5a5; }
+.diff-line.unchanged { color: var(--text-muted); }
+
+/* Observability Console */
+.observability-container {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding-right: 0.25rem;
+  scrollbar-width: thin;
+}
+
+.obs-card {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  padding: 0.65rem;
+}
+
+.loki-log-stream {
+  background: var(--bg-terminal);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  padding: 0.5rem;
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+  max-height: 130px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  line-height: 1.35;
+}
+
+.trace-waterfall {
+  background: var(--bg-terminal);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  padding: 0.5rem;
+  font-size: 0.76rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.trace-span-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+}
+
+.trace-span-name {
+  width: 140px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trace-span-bar-wrap {
+  flex: 1;
+  background: rgba(255, 255, 255, 0.05);
+  height: 12px;
+  border-radius: 2px;
+  position: relative;
+}
+
+.trace-span-bar {
+  height: 100%;
+  border-radius: 2px;
+}
+
+.trace-span-time {
+  width: 60px;
+  text-align: right;
+  color: var(--text-muted);
+  font-size: 0.7rem;
+}
+
+/* Right Pane Validation & CIS Checklist */
+.validation-results-scrollable {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  scrollbar-width: thin;
+}
+
+.full-height-resource-list {
+  flex: 1;
+  min-height: 0;
+  max-height: none !important;
+  overflow-y: auto;
+}
+
+.cis-checklist {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  max-height: 140px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+.cis-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.25rem 0.45rem;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  font-size: 0.73rem;
+}
+
+.mentor-response-full {
+  flex: 1;
+  min-height: 0;
+  max-height: none !important;
+  overflow-y: auto;
+}
+
+.arch-modal-dialog {
+  max-width: 780px;
+  width: 90%;
 }
 
 .workbench-resizer {
