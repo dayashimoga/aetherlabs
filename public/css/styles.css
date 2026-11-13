@@ -1566,6 +1566,30 @@ body {
   }
 }
 
+@media (max-width: 360px) {
+  .brand-subtitle {
+    display: none;
+  }
+  .top-header {
+    padding: 0.35rem 0.5rem;
+  }
+  .quick-key-btn {
+    min-width: 40px;
+    padding: 0.25rem 0.4rem;
+    font-size: 0.72rem;
+  }
+}
+
+/* Ultrawide & 4K Displays (2560px - 3840px) */
+@media (min-width: 2560px) {
+  .app-container {
+    max-width: 2400px;
+  }
+  .workbench-layout {
+    min-height: 850px;
+  }
+}
+
 /* ==========================================================================
    Internal Diagnostics Modal (Ctrl+Shift+D) & Footer
    ========================================================================== */

@@ -12,11 +12,16 @@ const jsPath = path.resolve(__dirname, '../public/js/app.js');
 test('Subphase 5.1.1: index.html markup contains split-pane resizers, mobile quick keybar, and ARIA landmarks', () => {
   const html = fs.readFileSync(htmlPath, 'utf8');
 
-  // 1. Resizers
+  // 1. Resizers & ARIA range values
   assert.ok(html.includes('id="resizer-left"'), 'Must have resizer-left element');
   assert.ok(html.includes('id="resizer-right"'), 'Must have resizer-right element');
   assert.ok(html.includes('role="separator"'), 'Resizers must have role="separator"');
   assert.ok(html.includes('aria-orientation="vertical"'), 'Resizers must have aria-orientation="vertical"');
+  assert.ok(html.includes('aria-valuenow="360"'), 'Left resizer must have initial aria-valuenow="360"');
+  assert.ok(html.includes('aria-valuenow="380"'), 'Right resizer must have initial aria-valuenow="380"');
+  assert.ok(html.includes('aria-valuemin="220"'), 'Left resizer must have aria-valuemin="220"');
+  assert.ok(html.includes('aria-valuemin="240"'), 'Right resizer must have aria-valuemin="240"');
+  assert.ok(html.includes('aria-valuemax="650"'), 'Resizers must have aria-valuemax="650"');
 
   // 2. Mobile Touch Quick-Key Bar
   assert.ok(html.includes('id="mobile-quick-keybar"'), 'Must have mobile-quick-keybar element');
@@ -64,11 +69,13 @@ test('Subphase 5.1.1: styles.css contains resizable layout, 44px touch targets, 
   assert.ok(css.includes('min-height: 44px;'), 'Interactive touch elements must meet 44px min-height');
   assert.ok(css.includes('min-width: 44px;'), 'Interactive touch elements must meet 44px min-width');
 
-  // 3. Responsive Breakpoints down to 360px
+  // 3. Responsive Breakpoints down to 360px & up to 4K (2560px+)
   assert.ok(css.includes('@media (max-width: 1200px)'), 'Must include 1200px desktop breakpoint');
   assert.ok(css.includes('@media (max-width: 900px)'), 'Must include 900px tablet breakpoint');
   assert.ok(css.includes('@media (max-width: 640px)'), 'Must include 640px mobile breakpoint');
-  assert.ok(css.includes('@media (max-width: 380px)'), 'Must include 380px/360px small mobile breakpoint');
+  assert.ok(css.includes('@media (max-width: 380px)'), 'Must include 380px small mobile breakpoint');
+  assert.ok(css.includes('@media (max-width: 360px)'), 'Must include 360px compact mobile breakpoint');
+  assert.ok(css.includes('@media (min-width: 2560px)'), 'Must include 2560px/4K ultrawide breakpoint');
 
   // 4. WCAG 2.1 AA Accessibility
   assert.ok(css.includes(':focus-visible'), 'Must define visible keyboard focus indicator');
@@ -83,6 +90,7 @@ test('Subphase 5.1.1: app.js wires resizer dragging, mobile quick key actions, a
   assert.ok(js.includes('setupResizableWorkbench'), 'Must define setupResizableWorkbench');
   assert.ok(js.includes('kubelabs_pane_left_width'), 'Must persist left pane width to localStorage');
   assert.ok(js.includes('kubelabs_pane_right_width'), 'Must persist right pane width to localStorage');
+  assert.ok(js.includes("resizer.setAttribute('aria-valuenow'"), 'Must update aria-valuenow on drag or arrow keys');
   assert.ok(js.includes("e.key === 'ArrowLeft'"), 'Must support ArrowLeft keyboard resizing');
   assert.ok(js.includes("e.key === 'ArrowRight'"), 'Must support ArrowRight keyboard resizing');
 
@@ -90,6 +98,7 @@ test('Subphase 5.1.1: app.js wires resizer dragging, mobile quick key actions, a
   assert.ok(js.includes('setupMobileQuickKeybar'), 'Must define setupMobileQuickKeybar');
   assert.ok(js.includes("btn.dataset.insert"), 'Must handle text insertion at cursor position');
   assert.ok(js.includes("btn.dataset.action"), 'Must handle quick actions (tab, ctrl-c, history)');
+  assert.ok(js.includes("ContextAwareQuickKeyEngine"), 'Must integrate ContextAwareQuickKeyEngine for intelligent token insertion');
   assert.ok(js.includes("handleTabCompletion"), 'Must trigger tab completion from quick bar');
 
   // 3. Mobile Pane Switcher logic
@@ -99,4 +108,30 @@ test('Subphase 5.1.1: app.js wires resizer dragging, mobile quick key actions, a
   // 4. Accessibility Announcer
   assert.ok(js.includes('function announceAria'), 'Must define announceAria helper');
   assert.ok(js.includes("aria-live-announcer"), 'Must query aria-live-announcer');
+});
+
+test('Subphase 5.1.1: ContextAwareQuickKeyEngine provides zero-friction mobile token insertion', () => {
+  const QuickKeyEngine = require('../public/js/quickKeyEngine');
+
+  // 1. Empty command line defaults
+  const kRes = QuickKeyEngine.insertToken('', 0, 'kubectl');
+  assert.equal(kRes.line, 'kubectl ');
+
+  const getRes = QuickKeyEngine.insertToken('', 0, 'get');
+  assert.equal(getRes.line, 'kubectl get ');
+
+  const podsRes = QuickKeyEngine.insertToken('', 0, 'pods');
+  assert.equal(podsRes.line, 'kubectl get pods ');
+
+  // 2. Resource multi-chaining
+  const multiRes = QuickKeyEngine.insertToken('kubectl get pods', 16, 'svc');
+  assert.equal(multiRes.line, 'kubectl get pods,svc ');
+
+  // 3. Pipe & grep wrapping
+  const grepRes = QuickKeyEngine.insertToken('kubectl get pods', 16, 'grep');
+  assert.equal(grepRes.line, 'kubectl get pods | grep ');
+
+  // 4. Clean verb replacement
+  const descRes = QuickKeyEngine.insertToken('kubectl get pods', 16, 'describe');
+  assert.equal(descRes.line, 'kubectl describe pods ');
 });

@@ -1931,8 +1931,14 @@
     // Restore saved widths from localStorage
     const savedLeft = localStorage.getItem('kubelabs_pane_left_width');
     const savedRight = localStorage.getItem('kubelabs_pane_right_width');
-    if (savedLeft) layout.style.setProperty('--wb-left-width', `${savedLeft}px`);
-    if (savedRight) layout.style.setProperty('--wb-right-width', `${savedRight}px`);
+    if (savedLeft) {
+      layout.style.setProperty('--wb-left-width', `${savedLeft}px`);
+      resizerLeft.setAttribute('aria-valuenow', savedLeft);
+    }
+    if (savedRight) {
+      layout.style.setProperty('--wb-right-width', `${savedRight}px`);
+      resizerRight.setAttribute('aria-valuenow', savedRight);
+    }
 
     function initDrag(resizer, isLeft) {
       function startDrag(e) {
@@ -1945,10 +1951,12 @@
           if (isLeft) {
             const newWidth = Math.max(220, Math.min(650, currentX - rect.left));
             layout.style.setProperty('--wb-left-width', `${newWidth}px`);
+            resizer.setAttribute('aria-valuenow', String(newWidth));
             localStorage.setItem('kubelabs_pane_left_width', newWidth);
           } else {
             const newWidth = Math.max(240, Math.min(650, rect.right - currentX));
             layout.style.setProperty('--wb-right-width', `${newWidth}px`);
+            resizer.setAttribute('aria-valuenow', String(newWidth));
             localStorage.setItem('kubelabs_pane_right_width', newWidth);
           }
         }
@@ -1981,6 +1989,7 @@
           const delta = (e.key === 'ArrowRight' ? 25 : -25) * (isLeft ? 1 : -1);
           const updated = Math.max(220, Math.min(650, currentVal + delta));
           layout.style.setProperty(isLeft ? '--wb-left-width' : '--wb-right-width', `${updated}px`);
+          resizer.setAttribute('aria-valuenow', String(updated));
           localStorage.setItem(isLeft ? 'kubelabs_pane_left_width' : 'kubelabs_pane_right_width', updated);
           announceAria(`${isLeft ? 'Left' : 'Right'} pane width set to ${updated} pixels`);
         }
@@ -2004,7 +2013,12 @@
 
         if (state.terminalView) {
           if (toInsert) {
-            state.terminalView.insertAtCursor(toInsert);
+            if (typeof ContextAwareQuickKeyEngine !== 'undefined') {
+              const res = ContextAwareQuickKeyEngine.insertToken(state.terminalView.lineBuffer, state.terminalView.cursorPos, toInsert);
+              state.terminalView.setLineAndCursor(res.line, res.cursorPos);
+            } else {
+              state.terminalView.insertAtCursor(toInsert);
+            }
           } else if (action === 'tab') {
             state.terminalView.handleTabCompletion();
           } else if (action === 'ctrl-c') {
@@ -2022,12 +2036,19 @@
 
         if (!termInput) return;
         if (toInsert) {
-          const start = termInput.selectionStart || termInput.value.length;
-          const end = termInput.selectionEnd || termInput.value.length;
-          const val = termInput.value;
-          termInput.value = val.slice(0, start) + toInsert + val.slice(end);
-          const nextPos = start + toInsert.length;
-          termInput.setSelectionRange(nextPos, nextPos);
+          if (typeof ContextAwareQuickKeyEngine !== 'undefined') {
+            const start = termInput.selectionStart ?? termInput.value.length;
+            const res = ContextAwareQuickKeyEngine.insertToken(termInput.value, start, toInsert);
+            termInput.value = res.line;
+            termInput.setSelectionRange(res.cursorPos, res.cursorPos);
+          } else {
+            const start = termInput.selectionStart || termInput.value.length;
+            const end = termInput.selectionEnd || termInput.value.length;
+            const val = termInput.value;
+            termInput.value = val.slice(0, start) + toInsert + val.slice(end);
+            const nextPos = start + toInsert.length;
+            termInput.setSelectionRange(nextPos, nextPos);
+          }
           termInput.focus();
         } else if (action === 'tab') {
           handleTabCompletion(termInput);
