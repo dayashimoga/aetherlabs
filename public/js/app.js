@@ -174,6 +174,7 @@
   function openLabArchModal() {
     const modal = document.getElementById('lab-arch-modal');
     if (!modal) return;
+    document.body.classList.add('modal-open');
     modal.style.display = 'flex';
     if (state.activeLab) {
       renderLabArchDiagram(state.activeLab);
@@ -185,12 +186,14 @@
   function closeLabArchModal() {
     const modal = document.getElementById('lab-arch-modal');
     if (!modal) return;
+    document.body.classList.remove('modal-open');
     modal.style.display = 'none';
   }
 
   function openDiagnosticsModal() {
     const modal = document.getElementById('diagnostics-modal');
     if (!modal) return;
+    document.body.classList.add('modal-open');
     modal.style.display = 'flex';
     runLiveAgentAudit();
     const closeBtn = document.getElementById('btn-close-diagnostics');
@@ -200,6 +203,7 @@
   function closeDiagnosticsModal() {
     const modal = document.getElementById('diagnostics-modal');
     if (!modal) return;
+    document.body.classList.remove('modal-open');
     modal.style.display = 'none';
     if (window.location.hash === '#admin-diagnostics') {
       history.replaceState(null, document.title, window.location.pathname + window.location.search);
@@ -335,6 +339,7 @@
   function openCommandPalette() {
     const modal = document.getElementById('command-palette-modal');
     if (!modal) return;
+    document.body.classList.add('modal-open');
     modal.style.display = 'flex';
     const input = document.getElementById('cmd-palette-input');
     if (input) {
@@ -348,6 +353,7 @@
   function closeCommandPalette() {
     const modal = document.getElementById('command-palette-modal');
     if (!modal) return;
+    document.body.classList.remove('modal-open');
     modal.style.display = 'none';
   }
 
@@ -2111,42 +2117,90 @@
   }
 
   async function runLiveAgentAudit() {
-    const report = await apiCall('/api/agents/audit');
     const summaryEl = document.getElementById('agent-audit-summary');
     const gridEl = document.getElementById('agent-audit-grid');
+    if (!summaryEl || !gridEl) return;
+
+    // Show initial skeleton loading states to completely prevent empty black card boxes
     summaryEl.innerHTML = `
-      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap;">
-        <div>
-          <span class="badge ${report.passed ? 'completed' : 'sev1'}">${report.passed ? 'ALL 11 AGENTS GREEN' : 'AUDIT WARNING'}</span>
-          <strong style="margin-left:0.5rem;">${report.summary}</strong>
+      <div class="card" style="padding:1rem 1.25rem;">
+        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem;">
+          <div style="display:flex; align-items:center; gap:0.75rem;">
+            <span class="badge badge-cyan badge-glow-cyan">AUDITING AGENTS</span>
+            <strong>Running real-time 11-agent production readiness evaluation...</strong>
+          </div>
+          <span style="font-size:0.8rem; color:var(--text-muted);">Please wait...</span>
         </div>
-        <span style="font-size:0.8rem; color:var(--text-muted);">Execution: ${report.durationMs}ms | Memory RSS: ${report.memoryRssMB} MB</span>
       </div>
     `;
 
-    gridEl.innerHTML = (report.agents || [])
+    gridEl.innerHTML = Array.from({ length: 11 })
       .map(
-        (a) => `
-        <div class="card">
-          <div class="card-header">
-            <span class="card-title">${a.role}</span>
-            <span class="badge ${a.status === 'PASS' ? 'completed' : 'sev1'}">${a.status}</span>
-          </div>
-          <div>
-            ${a.checks
-              .map(
-                (c) => `
-                <div style="font-size:0.78rem; color:var(--text-secondary); margin-top:0.3rem;">
-                  <span class="status-dot ${c.passed ? 'healthy' : 'broken'}"></span>${c.name}
-                </div>
-              `
-              )
-              .join('')}
-          </div>
+        () => `
+        <div class="audit-skeleton-card">
+          <div class="audit-skeleton-header"></div>
+          <div class="audit-skeleton-line" style="width:80%;"></div>
+          <div class="audit-skeleton-line" style="width:65%;"></div>
+          <div class="audit-skeleton-line" style="width:90%;"></div>
         </div>
       `
       )
       .join('');
+
+    try {
+      const report = await apiCall('/api/agents/audit');
+      summaryEl.innerHTML = `
+        <div class="card" style="padding:1rem 1.25rem;">
+          <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem;">
+            <div style="display:flex; align-items:center; gap:0.75rem;">
+              <span class="badge ${report.passed ? 'completed badge-glow-emerald' : 'sev1 badge-glow-red'}">${report.passed ? 'ALL 11 AGENTS GREEN' : 'AUDIT WARNING'}</span>
+              <strong style="color:var(--text-primary);">${report.summary}</strong>
+            </div>
+            <span style="font-size:0.8rem; color:var(--text-muted); font-family:var(--font-mono);">Execution: ${report.durationMs}ms | Memory RSS: ${report.memoryRssMB} MB</span>
+          </div>
+        </div>
+      `;
+
+      gridEl.innerHTML = (report.agents || [])
+        .map(
+          (a) => `
+          <div class="card agent-card">
+            <div class="agent-card-header">
+              <span class="agent-role-title">
+                <span style="color:var(--accent-cyan); font-size:1.05rem;">⚙</span>
+                <span>${a.role}</span>
+              </span>
+              <span class="badge ${a.status === 'PASS' ? 'completed' : 'sev1'}">${a.status}</span>
+            </div>
+            <div class="agent-checks-list">
+              ${a.checks
+                .map(
+                  (c) => `
+                  <div class="agent-check-item">
+                    <span class="status-dot ${c.passed ? 'healthy' : 'broken'}"></span>
+                    <span>${c.name}</span>
+                  </div>
+                `
+                )
+                .join('')}
+            </div>
+          </div>
+        `
+        )
+        .join('');
+    } catch (err) {
+      summaryEl.innerHTML = `
+        <div class="card" style="padding:1rem 1.25rem; border-color:var(--accent-red);">
+          <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem;">
+            <div>
+              <span class="badge sev1">AUDIT ERROR</span>
+              <strong style="color:var(--accent-red); margin-left:0.5rem;">Failed to run live self-audit: ${err.message}</strong>
+            </div>
+            <button class="btn btn-primary" onclick="runLiveAgentAudit()" type="button" style="padding:0.35rem 0.75rem; font-size:0.8rem;">Retry Audit</button>
+          </div>
+        </div>
+      `;
+    }
   }
 
   function setupResizableWorkbench() {
