@@ -54,6 +54,7 @@ const CAPSTONE_PROJECTS = [
     validationRules: [
       {
         id: 'proj-01-r1',
+        milestoneNumber: 1,
         description: 'ConfigMap kube-system/edge-sysctl has ip_forward=1',
         type: 'resource_field_equals',
         kind: 'ConfigMap',
@@ -65,6 +66,7 @@ const CAPSTONE_PROJECTS = [
       },
       {
         id: 'proj-01-r2',
+        milestoneNumber: 2,
         description: 'Deployment production/edge-api has 2 running distroless replicas',
         type: 'replica_count_min',
         kind: 'Deployment',
@@ -75,6 +77,7 @@ const CAPSTONE_PROJECTS = [
       },
       {
         id: 'proj-01-r3',
+        milestoneNumber: 3,
         description: 'Service production/edge-api has 2 active endpoints',
         type: 'service_has_endpoints',
         kind: 'Service',
@@ -85,6 +88,7 @@ const CAPSTONE_PROJECTS = [
       },
       {
         id: 'proj-01-r4',
+        milestoneNumber: 3,
         description: 'Ingress production/edge-ingress exists',
         type: 'resource_exists',
         kind: 'Ingress',
@@ -140,6 +144,7 @@ const CAPSTONE_PROJECTS = [
     validationRules: [
       {
         id: 'proj-02-r1',
+        milestoneNumber: 1,
         description: 'ServiceAccount production/commerce-sa exists',
         type: 'resource_exists',
         kind: 'ServiceAccount',
@@ -149,6 +154,7 @@ const CAPSTONE_PROJECTS = [
       },
       {
         id: 'proj-02-r2',
+        milestoneNumber: 1,
         description: 'Role production/commerce-role exists',
         type: 'resource_exists',
         kind: 'Role',
@@ -158,6 +164,7 @@ const CAPSTONE_PROJECTS = [
       },
       {
         id: 'proj-02-r3',
+        milestoneNumber: 2,
         description: 'Helm release commerce-cache is deployed',
         type: 'helm_release_deployed',
         name: 'commerce-cache',
@@ -166,6 +173,7 @@ const CAPSTONE_PROJECTS = [
       },
       {
         id: 'proj-02-r4',
+        milestoneNumber: 3,
         description: 'Argo CD Application commerce-gitops is Synced & Healthy',
         type: 'argocd_app_synced',
         name: 'commerce-gitops',
@@ -227,6 +235,7 @@ const CAPSTONE_PROJECTS = [
     validationRules: [
       {
         id: 'proj-03-r1',
+        milestoneNumber: 1,
         description: 'Scanned container image with Trivy',
         type: 'command_executed',
         commandSubstring: 'trivy image',
@@ -234,6 +243,7 @@ const CAPSTONE_PROJECTS = [
       },
       {
         id: 'proj-03-r2',
+        milestoneNumber: 1,
         description: 'Deployment production/payment-vault enforces runAsNonRoot=true',
         type: 'resource_field_equals',
         kind: 'Deployment',
@@ -245,6 +255,7 @@ const CAPSTONE_PROJECTS = [
       },
       {
         id: 'proj-03-r3',
+        milestoneNumber: 2,
         description: 'NetworkPolicy production/payment-vault-netpol exists',
         type: 'resource_exists',
         kind: 'NetworkPolicy',
@@ -254,6 +265,7 @@ const CAPSTONE_PROJECTS = [
       },
       {
         id: 'proj-03-r4',
+        milestoneNumber: 3,
         description: 'PeerAuthentication production/strict-mesh-mtls has mode=STRICT',
         type: 'resource_field_equals',
         kind: 'PeerAuthentication',
@@ -325,6 +337,7 @@ const CAPSTONE_PROJECTS = [
     validationRules: [
       {
         id: 'proj-04-r1',
+        milestoneNumber: 1,
         description: 'All pods for production/sre-checkout are Running',
         type: 'pod_status_running',
         kind: 'Pod',
@@ -334,6 +347,7 @@ const CAPSTONE_PROJECTS = [
       },
       {
         id: 'proj-04-r2',
+        milestoneNumber: 2,
         description: 'HorizontalPodAutoscaler production/sre-checkout configured with maxReplicas=15',
         type: 'resource_field_equals',
         kind: 'HorizontalPodAutoscaler',
@@ -345,6 +359,7 @@ const CAPSTONE_PROJECTS = [
       },
       {
         id: 'proj-04-r3',
+        milestoneNumber: 3,
         description: 'PrometheusRule monitoring/checkout-slo-burn exists',
         type: 'resource_exists',
         kind: 'PrometheusRule',
@@ -392,6 +407,7 @@ const CAPSTONE_PROJECTS = [
     validationRules: [
       {
         id: 'proj-05-r1',
+        milestoneNumber: 1,
         description: 'Cloud resource aws_eks_cluster.prod provisioned via OpenTofu',
         type: 'cloud_resource_exists',
         name: 'aws_eks_cluster.prod',
@@ -399,6 +415,7 @@ const CAPSTONE_PROJECTS = [
       },
       {
         id: 'proj-05-r2',
+        milestoneNumber: 2,
         description: 'Crossplane Service production/idp-shared-db-db reconciled with active endpoint',
         type: 'service_has_endpoints',
         kind: 'Service',
@@ -409,6 +426,7 @@ const CAPSTONE_PROJECTS = [
       },
       {
         id: 'proj-05-r3',
+        milestoneNumber: 3,
         description: 'Deployment monitoring/idp-opencost is Running',
         type: 'pod_status_running',
         kind: 'Pod',
@@ -478,6 +496,7 @@ const CAPSTONE_PROJECTS = [
     validationRules: [
       {
         id: 'proj-06-r1',
+        milestoneNumber: 1,
         description: 'AWS EKS cluster eks-ai-fleet active',
         type: 'cloud_resource_exists',
         name: 'eks-ai-fleet',
@@ -485,6 +504,7 @@ const CAPSTONE_PROJECTS = [
       },
       {
         id: 'proj-06-r2',
+        milestoneNumber: 1,
         description: 'Google GKE cluster gke-ai-fleet active',
         type: 'cloud_resource_exists',
         name: 'gke-ai-fleet',
@@ -492,6 +512,7 @@ const CAPSTONE_PROJECTS = [
       },
       {
         id: 'proj-06-r3',
+        milestoneNumber: 2,
         description: 'Pod for production/global-llm is scheduled and Running on GPU node',
         type: 'pod_status_running',
         kind: 'Pod',
@@ -501,6 +522,7 @@ const CAPSTONE_PROJECTS = [
       },
       {
         id: 'proj-06-r4',
+        milestoneNumber: 3,
         description: 'AI-Ops remediation report recorded in monitoring/aiops-remediation-report',
         type: 'resource_exists',
         kind: 'ConfigMap',
@@ -551,6 +573,7 @@ const CAPSTONE_PROJECTS = [
     validationRules: [
       {
         id: 'proj-07-r1',
+        milestoneNumber: 1,
         description: 'ResourceQuota alpha-quota in namespace tenant-alpha limits hard.pods to 10',
         type: 'resource_field_equals',
         kind: 'ResourceQuota',
@@ -562,6 +585,7 @@ const CAPSTONE_PROJECTS = [
       },
       {
         id: 'proj-07-r2',
+        milestoneNumber: 2,
         description: 'ClusterPolicy require-team-label exists',
         type: 'resource_exists',
         kind: 'ClusterPolicy',
@@ -570,13 +594,16 @@ const CAPSTONE_PROJECTS = [
       },
       {
         id: 'proj-07-r3',
+        milestoneNumber: 3,
         description: 'Command vcluster create executed for alpha-vcluster in tenant-alpha',
         type: 'command_executed',
+        commandSubstring: 'vcluster create alpha-vcluster',
         pattern: 'vcluster create alpha-vcluster',
         remediation: 'Run `vcluster create alpha-vcluster -n tenant-alpha`.'
       },
       {
         id: 'proj-07-r4',
+        milestoneNumber: 4,
         description: 'NetworkPolicy deny-cross-tenant exists in namespace tenant-alpha',
         type: 'resource_exists',
         kind: 'NetworkPolicy',
@@ -627,6 +654,7 @@ const CAPSTONE_PROJECTS = [
     validationRules: [
       {
         id: 'proj-08-r1',
+        milestoneNumber: 1,
         description: 'PyTorchJob foundation-llm-finetune exists in namespace ai-platform',
         type: 'resource_exists',
         kind: 'PyTorchJob',
@@ -636,6 +664,7 @@ const CAPSTONE_PROJECTS = [
       },
       {
         id: 'proj-08-r2',
+        milestoneNumber: 2,
         description: 'InferenceService gpt-distributed-inference exists in namespace ai-platform',
         type: 'resource_exists',
         kind: 'InferenceService',
@@ -645,6 +674,7 @@ const CAPSTONE_PROJECTS = [
       },
       {
         id: 'proj-08-r3',
+        milestoneNumber: 3,
         description: 'Service inference-gw exists in namespace ai-platform',
         type: 'resource_exists',
         kind: 'Service',
@@ -654,8 +684,10 @@ const CAPSTONE_PROJECTS = [
       },
       {
         id: 'proj-08-r4',
+        milestoneNumber: 4,
         description: 'Command aiops analyze executed',
         type: 'command_executed',
+        commandSubstring: 'aiops analyze',
         pattern: 'aiops analyze',
         remediation: 'Run `aiops analyze`.'
       }
@@ -690,10 +722,6 @@ class ProjectEngine {
   listTracks() {
     const tracks = new Set(this.projects.map((p) => p.trackId));
     return Array.from(tracks);
-  }
-
-  listProjects() {
-    return this.projects;
   }
 
   getProject(projectId) {

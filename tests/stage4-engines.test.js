@@ -8,52 +8,109 @@ const { ArchitectureEngine, ENTERPRISE_REFERENCE_ARCHITECTURES } = require('../s
 const { AiMentor } = require('../src/core/aiMentor');
 const { CertificationEngine } = require('../src/core/certificationEngine');
 
-const { VirtualCluster } = require('../src/engine/virtualCluster');
-const { TerminalEngine } = require('../src/engine/terminalEngine');
+const { VirtualCluster } = require('../src/core/virtualCluster');
+const { TerminalEngine } = require('../src/core/terminalEngine');
+const { VirtualFileSystem } = require('../src/core/virtualFileSystem');
 const { ValidationEngine } = require('../src/core/validationEngine');
+const { SessionManager } = require('../src/core/sessionManager');
 const { PluginManager } = require('../src/plugins/pluginManager');
 const { KubeLabsDatabase } = require('../src/db/database');
 
-test('Subphase 4.2.2: ProjectEngine - 8 Enterprise Capstones, Milestone & Full Validation', () => {
+test('Subphase 4.2.1: ProjectEngine - 8 Enterprise Capstones Catalog, Track Filtering & Milestone Validation', () => {
   const validationEngine = new ValidationEngine();
   const engine = new ProjectEngine(validationEngine);
 
   assert.equal(engine.listProjects().length, 8);
   assert.equal(CAPSTONE_PROJECTS.length, 8);
 
+  // 1. Verify all 6 tracks have projects
   const tracks = engine.listTracks();
   assert.ok(tracks.length >= 5);
 
-  const platformProjects = engine.getProjectsByTrack('track-platform');
-  assert.ok(platformProjects.length >= 2);
-  assert.ok(platformProjects.some((p) => p.id === 'proj-07-multitenant-vcluster-platform'));
-
-  // Test Capstone 1 milestone validation
-  const proj1 = engine.getProject('proj-01-hardened-edge-node');
-  assert.ok(proj1);
-  assert.equal(proj1.milestones.length, 3);
-
-  const cluster = new VirtualCluster(proj1.initialClusterState);
-  const term = new TerminalEngine(cluster);
-
-  // Before executing milestone 1: fails
-  const m1Before = engine.validateMilestone(proj1.id, 1, cluster, term.commandHistory);
-  assert.equal(m1Before.passed, false);
-
-  // Execute milestone 1 solution command
-  term.execute(proj1.solutionCommands[0]);
-  const m1After = engine.validateMilestone(proj1.id, 1, cluster, term.commandHistory);
-  assert.equal(m1After.passed, true);
-
-  // Execute remaining solution commands
-  for (let i = 1; i < proj1.solutionCommands.length; i++) {
-    term.execute(proj1.solutionCommands[i]);
+  const expectedTracks = [
+    'track-foundations',
+    'track-k8s-admin',
+    'track-devsecops',
+    'track-sre',
+    'track-platform',
+    'track-multicloud-aiops'
+  ];
+  for (const tId of expectedTracks) {
+    const projs = engine.listProjects(tId);
+    assert.ok(projs.length >= 1, `Track ${tId} must have at least 1 project`);
+    assert.equal(engine.getProjectsByTrack(tId).length, projs.length);
   }
 
-  // Full project validation should pass
-  const fullValidate = engine.validateProject(proj1.id, cluster, term.commandHistory);
-  assert.equal(fullValidate.passed, true);
-  assert.equal(fullValidate.xpReward, 400);
+  // 2. Test Milestone Validation across all 8 Capstone Projects
+  for (const proj of engine.listProjects()) {
+    assert.ok(proj.id, 'Project must have id');
+    assert.ok(proj.title, 'Project must have title');
+    assert.ok(proj.trackId, 'Project must have trackId');
+    assert.ok(Array.isArray(proj.milestones) && proj.milestones.length >= 3, `Project ${proj.id} must have >= 3 milestones`);
+    assert.ok(Array.isArray(proj.validationRules) && proj.validationRules.length >= 3, `Project ${proj.id} must have >= 3 rules`);
+    assert.ok(Array.isArray(proj.solutionCommands) && proj.solutionCommands.length >= 3, `Project ${proj.id} must have >= 3 solutionCommands`);
+    assert.ok(proj.xpReward >= 400, `Project ${proj.id} must have >= 400 XP`);
+
+    const cluster = new VirtualCluster(proj.initialClusterState);
+    const term = new TerminalEngine(cluster);
+
+    // Initial project check: MUST fail
+    const initialCheck = engine.validateProject(proj.id, cluster, []);
+    assert.equal(initialCheck.passed, false, `Project ${proj.id} must fail before solution`);
+
+    // Initial milestone 1 check: MUST fail
+    const m1Before = engine.validateMilestone(proj.id, 1, cluster, []);
+    assert.equal(m1Before.passed, false, `Milestone 1 for ${proj.id} must fail before solution`);
+
+    // Execute all solution commands
+    for (const cmd of proj.solutionCommands) {
+      const res = term.execute(cmd);
+      assert.equal(res.exitCode, 0, `Command "${cmd}" failed in project ${proj.id}: ${res.output}`);
+    }
+
+    // After all commands: every milestone must pass
+    for (const m of proj.milestones) {
+      const mAfter = engine.validateMilestone(proj.id, m.milestoneNumber, cluster, term.commandHistory);
+      assert.equal(mAfter.passed, true, `Milestone ${m.milestoneNumber} for ${proj.id} must pass after solution: ${JSON.stringify(mAfter.results)}`);
+    }
+
+    // Full project validation: MUST pass 100%
+    const fullValidate = engine.validateProject(proj.id, cluster, term.commandHistory);
+    assert.equal(fullValidate.passed, true, `Full validation for ${proj.id} failed: ${JSON.stringify(fullValidate.results)}`);
+    assert.equal(fullValidate.score, 100);
+    assert.equal(fullValidate.xpReward, proj.xpReward);
+  }
+});
+
+test('Subphase 4.2.1: SessionManager.bindProject lifecycle and cluster state reset', () => {
+  const sessionManager = new SessionManager();
+  const session = sessionManager.getSession('capstone-session');
+  const engine = new ProjectEngine();
+
+  const proj = engine.getProject('proj-02-gitops-ha-commerce');
+  assert.ok(proj);
+
+  const bound = sessionManager.bindProject(session.sessionId, proj, engine);
+  assert.equal(bound.activeProjectId, 'proj-02-gitops-ha-commerce');
+  assert.equal(session.activeProjectId, 'proj-02-gitops-ha-commerce');
+  assert.equal(session.activeContextType, 'project');
+  assert.equal(session.activeLabId, null);
+  assert.equal(session.activeIncidentId, null);
+
+  // Initial validation in session: must fail
+  const initialCheck = engine.validateProject(proj.id, session.cluster, session.terminal.commandHistory);
+  assert.equal(initialCheck.passed, false);
+
+  // Execute commands in session terminal
+  for (const cmd of proj.solutionCommands) {
+    const res = session.terminal.execute(cmd);
+    assert.equal(res.exitCode, 0);
+  }
+
+  // Solved validation in session: must pass 100%
+  const solvedCheck = engine.validateProject(proj.id, session.cluster, session.terminal.commandHistory);
+  assert.equal(solvedCheck.passed, true);
+  assert.equal(solvedCheck.score, 100);
 });
 
 test('Subphase 4.2.2: ArchitectureEngine - 8 Reference Architectures, 4-Pillar Scoring & IaC Compilation', () => {

@@ -899,13 +899,13 @@ class ValidationEngine {
       }
 
       case 'command_executed': {
-        const sub = String(rule.commandSubstring || rule.expectedValue || '').toLowerCase();
-        const found = (context.commandHistory || []).some((entry) => {
+        const sub = String(rule.commandSubstring || rule.pattern || rule.expectedValue || '').toLowerCase();
+        const found = sub.length > 0 && (context.commandHistory || []).some((entry) => {
           const cmd = typeof entry === 'string' ? entry : (entry && entry.command ? entry.command : '');
           return cmd.toLowerCase().includes(sub);
         });
         return {
-          passed: found,
+          passed: Boolean(found),
           actual: found ? `Executed command matching "${sub}"` : 'Command not yet executed',
           expected: `Command containing "${sub}"`
         };
