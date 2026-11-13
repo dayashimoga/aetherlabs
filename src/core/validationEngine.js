@@ -45,6 +45,20 @@ const {
 const { NetworkTracer } = require('./networkTracer');
 const { SecurityPolicyEngine } = require('./storageAndSecurityEngine');
 
+let ResourceGraph;
+try {
+  ResourceGraph = require('./resourceGraph').ResourceGraph;
+} catch {
+  ResourceGraph = (typeof globalThis !== 'undefined' && globalThis.ResourceGraph);
+}
+
+let NetworkingEngine;
+try {
+  NetworkingEngine = require('./networkingEngine').NetworkingEngine;
+} catch {
+  NetworkingEngine = (typeof globalThis !== 'undefined' && globalThis.NetworkingEngine);
+}
+
 // ---------------------------------------------------------------------------
 // Path & Value Comparison Utilities
 // ---------------------------------------------------------------------------
@@ -285,10 +299,16 @@ class ValidationEngine {
       // 3. PromQL Query Result
       // -----------------------------------------------------------------------
       case 'promql_query_result': {
-        const promql = context.promql || new PromQLEngine();
+        const promql = context.promql || (context.cluster && context.cluster.promql) || new PromQLEngine();
         const query = rule.query;
         const op = rule.operator || '==';
         const expected = rule.expectedValue;
+
+        if (Array.isArray(rule.samples)) {
+          for (const s of rule.samples) {
+            promql.recordSample(s.metricName || s.name, s.labels || {}, s.value);
+          }
+        }
 
         try {
           let res = null;
@@ -520,6 +540,14 @@ class ValidationEngine {
               readyCount += (sub.addresses || []).length;
             }
           }
+          if (readyCount === 0) {
+            const slices = context.graph.list({ kind: 'EndpointSlice', namespace: ns });
+            for (const slice of slices) {
+              if (slice.metadata?.labels?.['kubernetes.io/service-name'] === rule.name || slice.metadata?.name?.startsWith(rule.name)) {
+                readyCount += (slice.endpoints || []).filter((e) => e.conditions?.ready !== false).length;
+              }
+            }
+          }
         }
 
         const minExpected = Number(rule.expectedValue || 1);
@@ -575,14 +603,15 @@ class ValidationEngine {
           return { passed: false, actual: `HPA "${rule.name}" not found in "${ns}"`, expected: 'HPA resource present' };
         }
 
-        const currentDesired = (hpa.status && hpa.status.desiredReplicas) || 1;
+        const currentDesired = (hpa.status && (hpa.status.desiredReplicas !== undefined ? hpa.status.desiredReplicas : hpa.status.currentReplicas)) || 1;
         const expected = Number(rule.expectedReplicas || rule.expectedValue || 1);
-        const passed = currentDesired === expected;
+        const op = rule.operator || '==';
+        const passed = compareValues(currentDesired, op, expected);
 
         return {
           passed,
           actual: `HPA desiredReplicas: ${currentDesired}`,
-          expected: `desiredReplicas == ${expected}`
+          expected: `desiredReplicas ${op} ${expected}`
         };
       }
 
@@ -654,9 +683,10 @@ class ValidationEngine {
         const vsName = rule.virtualService || rule.name;
         const uri = rule.uri || '/';
         const headers = rule.headers || {};
+        const random = rule.random !== undefined ? rule.random : 0.5;
 
         try {
-          const res = istio.resolveHttpRoute(vsName, ns, { uri, headers });
+          const res = istio.resolveHttpRoute(vsName, ns, { uri, headers, random });
           let passed = res.matched;
           if (rule.expectedSubset) {
             passed = passed && res.destination?.subset === rule.expectedSubset;
@@ -666,6 +696,9 @@ class ValidationEngine {
           }
           if (rule.expectedFaultType) {
             passed = passed && res.fault?.type === rule.expectedFaultType;
+          }
+          if (rule.expectedWeight !== undefined && res.weight !== undefined) {
+            passed = passed && res.weight === rule.expectedWeight;
           }
 
           return {
@@ -691,6 +724,13 @@ class ValidationEngine {
         const subset = rule.subset || null;
         const expectedTripped = rule.expectedTripped !== undefined ? rule.expectedTripped : true;
 
+        if (Array.isArray(rule.errorCodes)) {
+          for (const code of rule.errorCodes) {
+            const host = rule.host || drName;
+            istio.recordEndpointResult(host, subset, code);
+          }
+        }
+
         try {
           const res = istio.evaluateDestinationRule(drName, ns, subset);
           const passed = res.circuitBreakerTripped === expectedTripped;
@@ -708,13 +748,14 @@ class ValidationEngine {
       // 17. VFS File Contains
       // -----------------------------------------------------------------------
       case 'vfs_file_contains': {
-        const vfs = context.vfs;
+        const vfs = context.vfs || context.cluster?.vfs;
         if (!vfs) {
           return { passed: false, actual: 'VirtualFileSystem unavailable', expected: `File ${rule.path} exists` };
         }
 
         const filePath = rule.path;
         const expected = String(rule.expectedContent || rule.expectedValue || rule.pattern || '');
+        const isRegex = Boolean(rule.isRegex);
 
         try {
           if (!vfs.exists(filePath)) {
@@ -726,7 +767,7 @@ class ValidationEngine {
           }
 
           const content = vfs.readFile(filePath);
-          const passed = content.includes(expected);
+          const passed = isRegex ? new RegExp(expected).test(content) : content.includes(expected);
           return {
             passed,
             actual: passed ? `File contains "${expected}"` : 'Pattern not found in file content',
@@ -756,7 +797,22 @@ class ValidationEngine {
           const res = context.cluster.resolveDns(host);
           resolvedIp = res.ip;
           loopDetected = res.loopDetected;
-        } else if (context.graph) {
+        } else if (context.networking && typeof context.networking.resolveDNS === 'function') {
+          const res = context.networking.resolveDNS(host);
+          resolvedIp = res.ip;
+          loopDetected = res.loopDetected;
+        } else if (context.graph && NetworkingEngine) {
+          try {
+            const net = new NetworkingEngine(context.graph);
+            const res = net.resolveDNS(host);
+            resolvedIp = res.ip;
+            loopDetected = res.loopDetected;
+          } catch {
+            // Fallback to direct service lookup
+          }
+        }
+
+        if (!resolvedIp && context.graph) {
           // Direct lookup in ResourceGraph Services
           const parts = host.split('.');
           const svcName = parts[0];
@@ -911,32 +967,67 @@ class ValidationEngine {
       return { ...base, commandHistory };
     }
 
-    // If it's a context map object with known keys
-    if (clusterOrContext.graph || clusterOrContext.cluster || clusterOrContext.vfs) {
-      return {
-        ...base,
-        ...clusterOrContext,
-        commandHistory: clusterOrContext.commandHistory || commandHistory
-      };
-    }
+    let ctx;
+    const isVirtualCluster = Boolean(
+      clusterOrContext && (
+        typeof clusterOrContext.getResource === 'function' ||
+        typeof clusterOrContext.applyManifest === 'function' ||
+        (clusterOrContext.state && Array.isArray(clusterOrContext.state.resources))
+      )
+    );
 
-    // If it's a ResourceGraph instance
-    if (typeof clusterOrContext.list === 'function' && typeof clusterOrContext.get === 'function' && !clusterOrContext.getResource) {
-      return {
+    const isResourceGraph = Boolean(
+      clusterOrContext &&
+      typeof clusterOrContext.list === 'function' &&
+      typeof clusterOrContext.get === 'function' &&
+      !isVirtualCluster
+    );
+
+    if (isVirtualCluster) {
+      ctx = {
+        ...base,
+        cluster: clusterOrContext,
+        graph: clusterOrContext.graph || null,
+        vfs: clusterOrContext.vfs || null,
+        commandHistory
+      };
+    } else if (isResourceGraph) {
+      ctx = {
         ...base,
         graph: clusterOrContext,
         commandHistory
       };
+    } else if (clusterOrContext.graph || clusterOrContext.cluster || clusterOrContext.vfs) {
+      // If it's a context map object with known keys
+      ctx = {
+        ...base,
+        ...clusterOrContext,
+        commandHistory: clusterOrContext.commandHistory || commandHistory
+      };
+    } else {
+      ctx = {
+        ...base,
+        cluster: clusterOrContext,
+        graph: clusterOrContext.graph || null,
+        vfs: clusterOrContext.vfs || null,
+        commandHistory
+      };
     }
 
-    // If it's a VirtualCluster instance
-    return {
-      ...base,
-      cluster: clusterOrContext,
-      graph: clusterOrContext.graph || null,
-      vfs: clusterOrContext.vfs || null,
-      commandHistory
-    };
+    // Auto-bridge: If graph is missing but cluster has resources, create an ephemeral ResourceGraph
+    if (!ctx.graph && ctx.cluster && Array.isArray(ctx.cluster.state?.resources) && ResourceGraph) {
+      try {
+        const g = new ResourceGraph();
+        for (const r of ctx.cluster.state.resources) {
+          g.set(r, { skipReconcileNotification: true });
+        }
+        ctx.graph = g;
+      } catch {
+        // Fallback gracefully
+      }
+    }
+
+    return ctx;
   }
 
   _resolveResource(kind, name, namespace, context) {

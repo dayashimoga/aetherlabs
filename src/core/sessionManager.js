@@ -30,6 +30,7 @@ class SessionManager {
 
       const vfs = new VirtualFileSystem();
       const cluster = new VirtualCluster();
+      cluster.vfs = vfs;
       const terminal = new TerminalEngine(cluster, vfs);
 
       session = {
@@ -148,6 +149,7 @@ class SessionManager {
 
     if (session.cluster && typeof session.cluster.reset === 'function') {
       session.cluster.reset(lab.initialClusterState || null);
+      session.cluster.vfs = session.vfs;
     }
 
     if (session.vfs && typeof session.vfs.reset === 'function') {

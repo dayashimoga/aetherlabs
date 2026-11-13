@@ -232,3 +232,4 @@ test('Subphase 3.2.2: Istioctl analyze, proxy-status, and authn tls-check mesh v
   assert.equal(proxyStatusRes.code, 0);
   assert.ok(proxyStatusRes.stdout.includes('SYNCED'));
 });
+
