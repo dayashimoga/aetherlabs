@@ -36,6 +36,13 @@ try {
   ResourceGraph = (typeof globalThis !== 'undefined' && globalThis.ResourceGraph);
 }
 
+let yamlParser;
+try {
+  yamlParser = require('./yamlParser');
+} catch {
+  yamlParser = (typeof globalThis !== 'undefined' && globalThis.yamlParser) || {};
+}
+
 let cliFormatterModule;
 try {
   cliFormatterModule = require('./cliFormatter');
@@ -513,6 +520,10 @@ function parseKubeFlags(tokens) {
       targetPort = Number(parts[1] || parts[0]);
     } else if (t === '-p' || t === '--patch') {
       patchJson = tokens[++i];
+    } else if (t.startsWith('--patch=')) {
+      patchJson = t.slice('--patch='.length);
+    } else if (t.startsWith('-p=')) {
+      patchJson = t.slice(3);
     } else if (t.startsWith('--from-literal=')) {
       const kv = t.slice('--from-literal='.length);
       const eq = kv.indexOf('=');
@@ -1240,11 +1251,29 @@ class TerminalEngine {
       const nodeName = subArgs[nodeIdx];
       const taintExpr = subArgs[nodeIdx + 1];
       if (!nodeName || !taintExpr) throw new Error('Usage: kubectl taint nodes <node-name> <key>=<value>:<effect>');
+      if (taintExpr.endsWith('-')) {
+        const cleanExpr = taintExpr.slice(0, -1);
+        const colonIdx = cleanExpr.indexOf(':');
+        const keyPart = colonIdx > -1 ? cleanExpr.slice(0, colonIdx) : cleanExpr;
+        const eqIdx = keyPart.indexOf('=');
+        const key = eqIdx > -1 ? keyPart.slice(0, eqIdx) : keyPart;
+        this.cluster.taintNode(nodeName, key, '', '-');
+        return { exitCode: 0, output: `node/${nodeName} untainted` };
+      }
       const parts = taintExpr.split(':');
       const effect = parts[1] || 'NoSchedule';
       const kv = parts[0].split('=');
       this.cluster.taintNode(nodeName, kv[0], kv[1] || '', effect);
       return { exitCode: 0, output: `node/${nodeName} tainted` };
+    }
+    if (sub === 'replace') {
+      return this.kubectlReplace(subArgs, flags, options);
+    }
+    if (sub === 'exec') {
+      return this.kubectlExec(subArgs, flags, options);
+    }
+    if (sub === 'debug') {
+      return this.kubectlDebug(subArgs, flags);
     }
     if (sub === 'delete') {
       let kind = subArgs[0];
@@ -1260,7 +1289,7 @@ class TerminalEngine {
       return { exitCode: 0, output: `${normalizeKind(kind).toLowerCase()} "${name}" deleted` };
     }
 
-    throw new Error(`Unsupported kubectl subcommand "${sub}". Try get, describe, apply, create, scale, set, patch, label, annotate, rollout, autoscale, logs, top, auth, delete.`);
+    throw new Error(`Unsupported kubectl subcommand "${sub}". Try get, describe, apply, replace, create, scale, set, patch, label, annotate, rollout, autoscale, logs, exec, debug, top, auth, cordon, uncordon, drain, taint, delete.`);
   }
 
   kubectlGet(subArgs, flags) {
@@ -1520,6 +1549,67 @@ class TerminalEngine {
     return { exitCode: 0, output: `service/${name} exposed` };
   }
 
+  kubectlReplace(subArgs, flags, options = {}) {
+    let manifestText = options.manifestText || '';
+    const fIdx = (subArgs || []).indexOf('-f');
+    if (fIdx > -1 && subArgs[fIdx + 1] && subArgs[fIdx + 1] !== '-') {
+      const filePath = subArgs[fIdx + 1];
+      if (this.vfs && this.vfs.exists(filePath)) {
+        manifestText = this.vfs.readFile(filePath);
+      } else {
+        throw new Error(`error: the path "${filePath}" does not exist`);
+      }
+    } else if (fIdx > -1 && subArgs[fIdx + 1] === '-') {
+      manifestText = options.stdin || '';
+    }
+
+    if (!manifestText || !manifestText.trim()) {
+      throw new Error('Provide YAML manifest via -f <file> or stdin to replace.');
+    }
+
+    const force = (subArgs || []).includes('--force');
+    let parsedDocs = [];
+    if (yamlParser && typeof yamlParser.parseAllYaml === 'function') {
+      parsedDocs = yamlParser.parseAllYaml(manifestText);
+    } else if (yamlParser && typeof yamlParser.parseYaml === 'function') {
+      parsedDocs = [yamlParser.parseYaml(manifestText)];
+    } else {
+      parsedDocs = [JSON.parse(manifestText)];
+    }
+
+    if (!parsedDocs || parsedDocs.length === 0) {
+      throw new Error('error: no valid resources found in manifest');
+    }
+
+    const outputs = [];
+    for (const doc of parsedDocs) {
+      if (!doc || !doc.kind) continue;
+      const kind = normalizeKind(doc.kind);
+      const name = doc.metadata?.name;
+      const docNs = doc.metadata?.namespace || flags.namespace || 'default';
+      if (!name) throw new Error('error: resource name not specified in manifest');
+
+      const existing = this.cluster.getResource(kind, name, docNs);
+      if (!existing) {
+        throw createApiError('NotFound', { kind, name });
+      }
+
+      if (force) {
+        this.cluster.deleteResource(kind, name, docNs);
+        this.cluster.applyResource(doc);
+      } else {
+        existing.spec = JSON.parse(JSON.stringify(doc.spec || {}));
+        existing.metadata = existing.metadata || {};
+        existing.metadata.labels = JSON.parse(JSON.stringify(doc.metadata?.labels || {}));
+        existing.metadata.annotations = JSON.parse(JSON.stringify(doc.metadata?.annotations || {}));
+        this.cluster.reconcile();
+      }
+      outputs.push(`${normalizeKind(kind).toLowerCase()}/${name} replaced`);
+    }
+
+    return { exitCode: 0, output: outputs.join('\n') };
+  }
+
   kubectlScale(subArgs, flags) {
     let kind = 'Deployment';
     let name = subArgs[0];
@@ -1624,6 +1714,42 @@ class TerminalEngine {
       return { exitCode: 0, output: `${normalizeKind(kind).toLowerCase()}.apps/${name} resource requirements updated` };
     }
 
+    if (setType === 'selector') {
+      let kind = 'Service';
+      let name = subArgs[1];
+      let assignToken = subArgs[2];
+      if (name && name.includes('/')) {
+        const parts = name.split('/');
+        kind = parts[0];
+        name = parts[1];
+      } else if (subArgs.length >= 4 && !subArgs[2].includes('=')) {
+        kind = subArgs[1];
+        name = subArgs[2];
+        assignToken = subArgs[3];
+      }
+      if (!assignToken || !assignToken.includes('=')) {
+        throw new Error('Usage: kubectl set selector <type>/<name> <key>=<val>');
+      }
+      const [k, v] = assignToken.split('=');
+      const res = this.cluster.getResource(kind, name, flags.namespace);
+      if (!res) throw createApiError('NotFound', { kind: normalizeKind(kind), name });
+      if (normalizeKind(kind) === 'Service') {
+        res.spec = res.spec || {};
+        res.spec.selector = res.spec.selector || {};
+        res.spec.selector[k] = v;
+      } else {
+        res.spec = res.spec || {};
+        res.spec.selector = res.spec.selector || {};
+        res.spec.selector.matchLabels = res.spec.selector.matchLabels || {};
+        res.spec.selector.matchLabels[k] = v;
+        if (res.spec.template?.metadata?.labels) {
+          res.spec.template.metadata.labels[k] = v;
+        }
+      }
+      this.cluster.reconcile();
+      return { exitCode: 0, output: `${normalizeKind(kind).toLowerCase()}/${name} selector updated` };
+    }
+
     throw new Error(`Unsupported kubectl set command "${setType}"`);
   }
 
@@ -1640,7 +1766,17 @@ class TerminalEngine {
     if (!flags.patchJson) {
       throw new Error('Provide patch payload with -p \'<json>\'');
     }
-    const patchObj = JSON.parse(flags.patchJson);
+    let patchObj;
+    try {
+      patchObj = JSON.parse(flags.patchJson);
+    } catch {
+      try {
+        const relaxed = flags.patchJson.replace(/([{,]\s*)([a-zA-Z0-9_-]+)\s*:/g, '$1"$2":');
+        patchObj = JSON.parse(relaxed);
+      } catch {
+        throw new Error(`invalid patch payload: ${flags.patchJson}`);
+      }
+    }
     deepMerge(res, patchObj);
     this.cluster.reconcile();
     return { exitCode: 0, output: `${normalizeKind(kind).toLowerCase()}/${name} patched` };
@@ -1658,8 +1794,12 @@ class TerminalEngine {
     if (!res) throw new Error(`${normalizeKind(kind)} "${name}" not found`);
     res.metadata.labels = res.metadata.labels || {};
     for (let i = kvIndex; i < subArgs.length; i++) {
-      const [k, v] = subArgs[i].split('=');
-      if (k && v !== undefined) {
+      const token = subArgs[i];
+      if (token === '--overwrite' || token.startsWith('--')) continue;
+      if (token.endsWith('-')) {
+        delete res.metadata.labels[token.slice(0, -1)];
+      } else if (token.includes('=')) {
+        const [k, v] = token.split('=');
         res.metadata.labels[k] = v;
       }
     }
@@ -1679,11 +1819,13 @@ class TerminalEngine {
     if (!res) throw new Error(`${normalizeKind(kind)} "${name}" not found`);
     res.metadata.annotations = res.metadata.annotations || {};
     for (let i = kvIndex; i < subArgs.length; i++) {
-      const eq = subArgs[i].indexOf('=');
-      if (eq > -1) {
-        const k = subArgs[i].slice(0, eq);
-        const v = subArgs[i].slice(eq + 1);
-        res.metadata.annotations[k] = v;
+      const token = subArgs[i];
+      if (token === '--overwrite' || token.startsWith('--')) continue;
+      if (token.endsWith('-')) {
+        delete res.metadata.annotations[token.slice(0, -1)];
+      } else if (token.includes('=')) {
+        const eq = token.indexOf('=');
+        res.metadata.annotations[token.slice(0, eq)] = token.slice(eq + 1);
       }
     }
     this.cluster.reconcile();
@@ -1704,6 +1846,13 @@ class TerminalEngine {
         return { exitCode: 0, output: `deployment "${name}" successfully rolled out (${ready}/${desired} ready)` };
       }
       return { exitCode: 0, output: `Waiting for deployment "${name}" rollout to finish: ${ready} of ${desired} updated replicas are available...` };
+    }
+
+    if (action === 'history') {
+      return {
+        exitCode: 0,
+        output: `${normalizeKind(kind).toLowerCase()}.apps/${name}\nREVISION  CHANGE-CAUSE\n1         <none>\n2         kubectl set image ...`
+      };
     }
 
     if (action === 'undo') {
@@ -1756,39 +1905,240 @@ class TerminalEngine {
   }
 
   kubectlLogs(subArgs, flags) {
-    const target = subArgs[0] || '';
+    let target = '';
+    let container = null;
+    let tail = null;
+
+    for (let i = 0; i < subArgs.length; i++) {
+      const a = subArgs[i];
+      if (a === '-c' || a === '--container') container = subArgs[++i];
+      else if (a.startsWith('-c=') || a.startsWith('--container=')) container = a.split('=')[1];
+      else if (a === '--tail') tail = parseInt(subArgs[++i], 10);
+      else if (a.startsWith('--tail=')) tail = parseInt(a.split('=')[1], 10);
+      else if (!a.startsWith('-') && !target) target = a;
+    }
+
+    if (!target) {
+      throw new Error('error: pod name required for logs');
+    }
+
     const pods = this.cluster.getResources('Pod', flags.namespace);
     const pod = pods.find((p) => p.metadata.name === target || p.metadata.name.startsWith(target.replace(/^deploy(ment)?\//, '')));
     if (!pod) {
       throw new Error(`Error from server (NotFound): pods "${target}" not found`);
     }
-    if (pod.status && pod.status.reason !== 'Running') {
+    if (pod.status && pod.status.reason && pod.status.reason !== 'Running') {
       return {
         exitCode: 0,
-        output: `[ERROR] ${new Date().toISOString()} Container failed startup check: ${pod.status.reason} - ${pod.status.message}`
+        output: `[ERROR] ${new Date().toISOString()} Container failed startup check: ${pod.status.reason} - ${pod.status.message || 'Error'}`
       };
     }
+    const cName = container || pod.spec?.containers?.[0]?.name || pod.metadata.name;
+    const now = new Date().toISOString();
+    const logLines = [
+      `[INFO] ${now} Starting ${pod.metadata.name} (container: ${cName})...`,
+      `[INFO] ${now} Listening on port 8080`,
+      `[INFO] ${now} Health check probe succeeded on /healthz`,
+      `[INFO] ${now} Serving requests in namespace ${flags.namespace}`
+    ];
+    const outputLines = tail ? logLines.slice(-tail) : logLines;
     return {
       exitCode: 0,
-      output: `[INFO] ${new Date().toISOString()} Server listening and healthy on pod ${pod.metadata.name} (${pod.status.podIP})`
+      output: outputLines.join('\n')
     };
+  }
+
+  kubectlExec(subArgs, flags, options = {}) {
+    let podTarget = '';
+    let container = null;
+    const dDash = subArgs.indexOf('--');
+    const flagArgs = dDash !== -1 ? subArgs.slice(0, dDash) : subArgs;
+    const cmdTokens = dDash !== -1 ? subArgs.slice(dDash + 1) : ['sh'];
+
+    for (let i = 0; i < flagArgs.length; i++) {
+      const a = flagArgs[i];
+      if (a === '-c' || a === '--container') container = flagArgs[++i];
+      else if (a.startsWith('-c=') || a.startsWith('--container=')) container = a.split('=')[1];
+      else if (a === '-it' || a === '-i' || a === '-t') { /* tty flags */ }
+      else if (!a.startsWith('-') && !podTarget) podTarget = a;
+    }
+
+    if (!podTarget) {
+      throw new Error('Usage: kubectl exec [flags] <pod-name> -- <command>');
+    }
+    const podName = podTarget.includes('/') ? podTarget.split('/')[1] : podTarget;
+    const pod = this.cluster.getResource('Pod', podName, flags.namespace);
+    if (!pod) {
+      throw createApiError('NotFound', { kind: 'Pod', name: podName });
+    }
+
+    const phase = pod.status?.phase || 'Running';
+    if (phase !== 'Running') {
+      throw new Error(`error: unable to upgrade connection: container not running (pod phase is ${phase})`);
+    }
+
+    const cmd = cmdTokens.join(' ');
+    const bin = cmdTokens[0] || 'sh';
+
+    if (bin === 'hostname') {
+      return { exitCode: 0, output: podName };
+    }
+    if (bin === 'whoami') {
+      return { exitCode: 0, output: 'root' };
+    }
+    if (bin === 'id') {
+      return { exitCode: 0, output: 'uid=0(root) gid=0(root) groups=0(root)' };
+    }
+    if (bin === 'uname' || cmd.startsWith('uname')) {
+      return { exitCode: 0, output: `Linux ${podName} 6.8.0-cloud-native #1 SMP PREEMPT_DYNAMIC x86_64 GNU/Linux` };
+    }
+    if (cmd === 'cat /etc/os-release') {
+      return {
+        exitCode: 0,
+        output: 'NAME="Alpine Linux"\nID=alpine\nVERSION_ID=3.20.0\nPRETTY_NAME="Alpine Linux v3.20"'
+      };
+    }
+    if (bin === 'env') {
+      const envLines = [`HOSTNAME=${podName}`, 'SHLVL=1', 'HOME=/root', 'PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'];
+      const containers = pod.spec?.containers || [];
+      for (const c of containers) {
+        for (const e of c.env || []) {
+          envLines.push(`${e.name}=${e.value}`);
+        }
+      }
+      return { exitCode: 0, output: envLines.join('\n') };
+    }
+    if (bin === 'ls') {
+      return { exitCode: 0, output: 'bin  dev  etc  home  lib  proc  root  sys  tmp  usr  var' };
+    }
+    if (bin === 'echo') {
+      const echoText = cmdTokens.slice(1).join(' ').replace(/^['"]|['"]$/g, '');
+      return { exitCode: 0, output: echoText };
+    }
+    if (bin === 'curl') {
+      return { exitCode: 0, output: 'HTTP/1.1 200 OK\nContent-Type: text/plain\n\nOK' };
+    }
+
+    return { exitCode: 0, output: `[pod ${podName}] ${cmd} completed successfully` };
+  }
+
+  kubectlDebug(subArgs, flags) {
+    const rawTarget = subArgs[0] || '';
+    if (!rawTarget) {
+      throw new Error('Usage: kubectl debug <node|pod>/<name> [--image=<image>]');
+    }
+    let kind = 'Pod';
+    let name = rawTarget;
+    if (rawTarget.includes('/')) {
+      const parts = rawTarget.split('/');
+      kind = normalizeKind(parts[0]);
+      name = parts[1];
+    } else if (subArgs.length >= 2 && !subArgs[1].startsWith('-')) {
+      kind = normalizeKind(subArgs[0]);
+      name = subArgs[1];
+    }
+
+    let image = 'busybox:latest';
+    for (const a of subArgs) {
+      if (a.startsWith('--image=')) image = a.split('=')[1];
+    }
+
+    if (kind === 'Pod') {
+      const pod = this.cluster.getResource('Pod', name, flags.namespace);
+      if (!pod) throw createApiError('NotFound', { kind: 'Pod', name });
+      pod.spec = pod.spec || {};
+      pod.spec.ephemeralContainers = pod.spec.ephemeralContainers || [];
+      pod.spec.ephemeralContainers.push({
+        name: 'debugger',
+        image,
+        stdin: true,
+        tty: true
+      });
+      this.cluster.reconcile();
+      return {
+        exitCode: 0,
+        output: 'Targeting container "debugger". If you don\'t see a command prompt, try pressing enter.'
+      };
+    }
+
+    if (kind === 'Node') {
+      const node = this.cluster.getResource('Node', name);
+      if (!node) throw createApiError('NotFound', { kind: 'Node', name });
+      const debugPodName = `node-debugger-${name.slice(0, 10)}`;
+      this.cluster.applyResource({
+        apiVersion: 'v1',
+        kind: 'Pod',
+        metadata: { name: debugPodName, namespace: flags.namespace || 'kube-system' },
+        spec: {
+          nodeName: name,
+          hostPID: true,
+          hostNetwork: true,
+          containers: [{ name: 'debugger', image }]
+        },
+        status: { phase: 'Running', ready: '1/1' }
+      });
+      return {
+        exitCode: 0,
+        output: `Creating debugging pod ${debugPodName} with container debugger on node ${name}.`
+      };
+    }
+
+    return { exitCode: 0, output: `Debugging started for ${rawTarget}` };
   }
 
   kubectlTop(subArgs, flags) {
     const target = subArgs[0] || 'pods';
     if (target.startsWith('no')) {
+      const targetNode = subArgs[1] || (target.includes('/') ? target.split('/')[1] : null);
+      let rows = [
+        ['kubelabs-control-plane', '310m', '7%', '1420Mi', '17%'],
+        ['kubelabs-worker-01', '640m', '8%', '3120Mi', '19%'],
+        ['kubelabs-worker-gpu-02', '890m', '11%', '6400Mi', '20%']
+      ];
+      if (this.cluster) {
+        const liveNodes = this.cluster.getResources('Node');
+        if (liveNodes.length > 0) {
+          rows = liveNodes.map((n, idx) => [
+            n.metadata?.name || `node-${idx}`,
+            `${250 + (idx * 80)}m`,
+            `${7 + (idx * 3)}%`,
+            `${1420 + (idx * 500)}Mi`,
+            `${17 + (idx * 5)}%`
+          ]);
+        }
+      }
+      if (targetNode) {
+        rows = rows.filter((r) => r[0] === targetNode);
+        if (rows.length === 0) {
+          throw createApiError('NotFound', { kind: 'Node', name: targetNode });
+        }
+      }
+      const formatted = [
+        'NAME                      CPU(cores)   CPU%   MEMORY(bytes)   MEMORY%',
+        ...rows.map((r) => `${padRight(r[0], 26)}${padRight(r[1], 13)}${padRight(r[2], 7)}${padRight(r[3], 16)}${r[4]}`)
+      ].join('\n');
+      return { exitCode: 0, output: formatted };
+    }
+
+    const nsQuery = flags.allNamespaces ? 'all' : flags.namespace;
+    const targetPod = subArgs[1] || (target.includes('/') ? target.split('/')[1] : null);
+    let pods = this.cluster.getResources('Pod', nsQuery);
+    if (targetPod) {
+      pods = pods.filter((p) => p.metadata?.name === targetPod);
+      if (pods.length === 0) {
+        throw createApiError('NotFound', { kind: 'Pod', name: targetPod });
+      }
+    }
+
+    if (flags.allNamespaces) {
+      const rows = pods.map((p) => `${padRight(p.metadata?.namespace || 'default', 14)}${padRight(p.metadata?.name, 34)}45m          128Mi`);
       return {
         exitCode: 0,
-        output: [
-          'NAME                      CPU(cores)   CPU%   MEMORY(bytes)   MEMORY%',
-          'kubelabs-control-plane    310m         7%     1420Mi          17%',
-          'kubelabs-worker-01        640m         8%     3120Mi          19%',
-          'kubelabs-worker-gpu-02    890m         11%    6400Mi          20%'
-        ].join('\n')
+        output: ['NAMESPACE     NAME                              CPU(cores)   MEMORY(bytes)', ...rows].join('\n')
       };
     }
-    const pods = this.cluster.getResources('Pod', flags.namespace);
-    const rows = pods.map((p) => `${padRight(p.metadata.name, 34)}45m          128Mi`);
+
+    const rows = pods.map((p) => `${padRight(p.metadata?.name, 34)}45m          128Mi`);
     return {
       exitCode: 0,
       output: ['NAME                              CPU(cores)   MEMORY(bytes)', ...rows].join('\n')
@@ -2440,6 +2790,15 @@ class TerminalEngine {
     if (sub === 'snapshot') {
       const action = args[1];
       const target = args[2] || '/var/lib/etcd/backup.db';
+      if (action === 'status') {
+        return {
+          exitCode: 0,
+          output: [
+            'HASH       REVISION   TOTAL KEYS   TOTAL SIZE',
+            '41fa2a87   34892      4520         26 MB'
+          ].join('\n')
+        };
+      }
       if (action === 'save') {
         if (this.vfs) {
           this.vfs.writeFile(target, 'etcd-snapshot-v3.5.15-binary-data');
@@ -2465,7 +2824,23 @@ class TerminalEngine {
         };
       }
     }
-    if (sub === 'endpoint' && args[1] === 'health') {
+    if (sub === 'member' && (args[1] === 'list' || !args[1])) {
+      return {
+        exitCode: 0,
+        output: 'b07e1c841a029f12, started, kubelabs-control-plane, https://192.168.1.10:2380, https://192.168.1.10:2379, false'
+      };
+    }
+    if (sub === 'endpoint') {
+      const action = args[1] || 'health';
+      if (action === 'status') {
+        return {
+          exitCode: 0,
+          output: [
+            'ENDPOINT                 ID                 VERSION   DB SIZE   IS LEADER   IS LEARNER   RAFT TERM   RAFT INDEX   RAFT APPLIED INDEX   ERRORS',
+            'https://127.0.0.1:2379   b07e1c841a029f12   3.5.15    28 MB     true        false        4           34892        34892                '
+          ].join('\n')
+        };
+      }
       return {
         exitCode: 0,
         output: 'https://127.0.0.1:2379 is healthy: successfully committed proposal: took = 1.942ms'
@@ -2479,6 +2854,103 @@ class TerminalEngine {
 
   handleKubeadm(args) {
     const sub = args[0];
+    if (sub === 'init') {
+      if (this.vfs) {
+        this.vfs.mkdir('/etc/kubernetes/pki');
+        this.vfs.mkdir('/etc/kubernetes/manifests');
+        this.vfs.mkdir('/home/learner/.kube');
+        this.vfs.writeFile('/etc/kubernetes/admin.conf', 'apiVersion: v1\nclusters:\n- cluster:\n    server: https://192.168.1.10:6443\n  name: kubernetes\ncontexts:\n- context:\n    cluster: kubernetes\n    user: kubernetes-admin\n  name: kubernetes-admin@kubernetes\ncurrent-context: kubernetes-admin@kubernetes\nkind: Config\n');
+        this.vfs.writeFile('/home/learner/.kube/config', 'apiVersion: v1\nclusters:\n- cluster:\n    server: https://192.168.1.10:6443\n  name: kubernetes\ncontexts:\n- context:\n    cluster: kubernetes\n    user: kubernetes-admin\n  name: kubernetes-admin@kubernetes\ncurrent-context: kubernetes-admin@kubernetes\nkind: Config\n');
+      }
+      if (this.cluster) {
+        const nodes = this.cluster.getResources('Node');
+        const cp = nodes.find((n) => n.metadata?.labels?.['node-role.kubernetes.io/control-plane'] !== undefined) || nodes[0];
+        if (cp) {
+          cp.metadata.labels = cp.metadata.labels || {};
+          cp.metadata.labels['node-role.kubernetes.io/control-plane'] = '';
+          this.cluster.reconcile();
+        }
+      }
+      return {
+        exitCode: 0,
+        output: [
+          '[init] Using Kubernetes version: v1.31.0',
+          '[preflight] Running pre-flight checks',
+          '[certs] Generating "ca" certificate and key',
+          '[certs] Generating "apiserver" certificate and key',
+          '[certs] apiserver serving cert is signed for DNS names [kubernetes kubernetes.default kubernetes.default.svc kubernetes.default.svc.cluster.local kubelabs-control-plane] and IPs [10.96.0.1 192.168.1.10]',
+          '[certs] Generating "apiserver-kubelet-client" certificate and key',
+          '[certs] Generating "front-proxy-ca" certificate and key',
+          '[certs] Generating "front-proxy-client" certificate and key',
+          '[certs] Generating "etcd/ca" certificate and key',
+          '[certs] Generating "etcd/server" certificate and key',
+          '[certs] Generating "etcd/peer" certificate and key',
+          '[certs] Generating "etcd/healthcheck-client" certificate and key',
+          '[certs] Generating "apiserver-etcd-client" certificate and key',
+          '[certs] Generating "sa" key and public key',
+          '[kubeconfig] Writing "admin.conf" kubeconfig file',
+          '[kubeconfig] Writing "kubelet.conf" kubeconfig file',
+          '[kubeconfig] Writing "controller-manager.conf" kubeconfig file',
+          '[kubeconfig] Writing "scheduler.conf" kubeconfig file',
+          '[control-plane] Using manifest folder "/etc/kubernetes/manifests"',
+          '[control-plane] Creating static Pod manifest for "kube-apiserver"',
+          '[control-plane] Creating static Pod manifest for "kube-controller-manager"',
+          '[control-plane] Creating static Pod manifest for "kube-scheduler"',
+          '[etcd] Creating static Pod manifest for local etcd in "/etc/kubernetes/manifests"',
+          '[wait-control-plane] Waiting for the kubelet to boot up the control plane as static Pods',
+          '[apiclient] All control plane components are healthy after 5.001 seconds',
+          '[upload-config] Storing the configuration used in ConfigMap "kubeadm-config" in the "kube-system" Namespace',
+          '[kubelet] Creating a ConfigMap "kubelet-config" in namespace kube-system with the configuration for the kubelets in the cluster',
+          '[mark-control-plane] Marking the node as control-plane by adding the labels: [node-role.kubernetes.io/control-plane]',
+          '[addons] Applied Essential Addon: CoreDNS',
+          '[addons] Applied Essential Addon: kube-proxy',
+          '',
+          'Your Kubernetes control-plane has initialized successfully!',
+          '',
+          'To start using your cluster, you need to run the following as a regular user:',
+          '',
+          '  mkdir -p $HOME/.kube',
+          '  sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config',
+          '  sudo chown $(id -u):$(id -g) $HOME/.kube/config',
+          '',
+          'Then you can join any number of worker nodes by running the following on each as root:',
+          '',
+          'kubeadm join 192.168.1.10:6443 --token 9a01ea.8018e4a547741478 \\',
+          '    --discovery-token-ca-cert-hash sha256:7c4a16198f121175654ebd310061e89df95b35c023d6a69efee52220d9f67a21'
+        ].join('\n')
+      };
+    }
+
+    if (sub === 'join') {
+      const endpoint = args[1] || '192.168.1.10:6443';
+      if (this.cluster) {
+        const workerNode = this.cluster.getResource('Node', 'kubelabs-worker-01');
+        if (workerNode) {
+          workerNode.status = workerNode.status || {};
+          workerNode.status.conditions = [{ type: 'Ready', status: 'True', reason: 'KubeletReady' }];
+          this.cluster.reconcile();
+        }
+      }
+      return {
+        exitCode: 0,
+        output: [
+          `[preflight] Running pre-flight checks to ${endpoint}`,
+          '[preflight] Reading configuration from the cluster...',
+          '[preflight] FYI: You can look at this config file with \'kubectl -n kube-system get cm kubeadm-config -o yaml\'',
+          '[kubelet-start] Writing kubelet configuration to file "/var/lib/kubelet/config.yaml"',
+          '[kubelet-start] Starting the kubelet',
+          '[kubelet-check] Waiting for a healthy kubelet. This can take up to 4m0s',
+          '[kubelet-check] The kubelet is healthy after 1.502s',
+          '',
+          'This node has joined the cluster:',
+          '* Certificate signing request was sent to apiserver and a response was received.',
+          '* The Kubelet was informed of the new secure connection details.',
+          '',
+          'Run \'kubectl get nodes\' on the control-plane to see this node join the cluster.'
+        ].join('\n')
+      };
+    }
+
     if (sub === 'upgrade') {
       const action = args[1] || 'plan';
       if (action === 'plan') {
@@ -2510,6 +2982,31 @@ class TerminalEngine {
         };
       }
     }
+
+    if (sub === 'token') {
+      const action = args[1] || 'list';
+      if (action === 'list') {
+        return {
+          exitCode: 0,
+          output: [
+            'TOKEN                     TTL         EXPIRES                USAGES                   DESCRIPTION                                                EXTRA GROUPS',
+            '9a01ea.8018e4a547741478   23h         2026-11-14T16:00:00Z   authentication,signing   The default bootstrap token generated by \'kubeadm init\'.   system:bootstrappers:kubeadm:default-node-token'
+          ].join('\n')
+        };
+      }
+      if (action === 'create') {
+        const printJoin = args.includes('--print-join-command');
+        const token = '9a01ea.8018e4a547741478';
+        if (printJoin) {
+          return {
+            exitCode: 0,
+            output: `kubeadm join 192.168.1.10:6443 --token ${token} --discovery-token-ca-cert-hash sha256:7c4a16198f121175654ebd310061e89df95b35c023d6a69efee52220d9f67a21`
+          };
+        }
+        return { exitCode: 0, output: token };
+      }
+    }
+
     if (sub === 'certs') {
       const action = args[1] || 'check-expiration';
       if (action === 'check-expiration') {

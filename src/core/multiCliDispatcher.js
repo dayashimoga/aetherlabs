@@ -529,6 +529,7 @@ class MultiCliDispatcher {
     let filename = null;
     let replicas = null;
     let dryRun = false;
+    let force = false;
     const restArgs = [];
 
     for (let i = 2; i < argv.length; i++) {
@@ -557,6 +558,8 @@ class MultiCliDispatcher {
         replicas = parseInt(argv[++i], 10);
       } else if (a === '--dry-run=client' || a === '--dry-run') {
         dryRun = true;
+      } else if (a === '--force') {
+        force = true;
       } else {
         restArgs.push(a);
       }
@@ -569,12 +572,16 @@ class MultiCliDispatcher {
         return this._kubectlDescribe({ restArgs, namespace });
       case 'apply':
         return this._kubectlApply({ filename, stdin, vfs, cwd, dryRun });
+      case 'replace':
+        return this._kubectlReplace({ restArgs, namespace, filename, stdin, vfs, cwd, force });
       case 'create':
         return this._kubectlCreate({ restArgs, namespace, filename, stdin, vfs, cwd, replicas });
       case 'delete':
         return this._kubectlDelete({ restArgs, namespace, filename, stdin, vfs, cwd });
       case 'scale':
         return this._kubectlScale({ restArgs, namespace, replicas });
+      case 'set':
+        return this._kubectlSet({ restArgs, namespace });
       case 'rollout':
         return this._kubectlRollout({ restArgs, namespace });
       case 'logs':
@@ -595,7 +602,7 @@ class MultiCliDispatcher {
       case 'auth':
         return this._kubectlAuth({ restArgs, namespace });
       case 'top':
-        return this._kubectlTop({ restArgs, namespace });
+        return this._kubectlTop({ restArgs, namespace, allNamespaces });
       case 'edit':
         return this._kubectlEdit({ restArgs, namespace });
       case 'autoscale':
@@ -1151,6 +1158,71 @@ class MultiCliDispatcher {
     return { stdout: '', stderr: `Error from server (NotFound): ${kind} "${name}" not found\n`, code: 1 };
   }
 
+  _kubectlReplace({ restArgs = [], namespace = 'default', filename = null, stdin = '', vfs = null, cwd = '/home/learner', force = false }) {
+    if (!this.graph) return { stdout: '', stderr: 'No resource graph active\n', code: 1 };
+
+    let manifestContent = '';
+    if (filename === '-' || (!filename && stdin)) {
+      manifestContent = stdin;
+    } else if (filename) {
+      if (!vfs) return { stdout: '', stderr: `Error: VFS not accessible to read ${filename}\n`, code: 1 };
+      try {
+        const p = vfs.normalizePath(filename, cwd);
+        manifestContent = vfs.readFile(p);
+      } catch (err) {
+        return { stdout: '', stderr: `error: the path "${filename}" does not exist\n`, code: 1 };
+      }
+    } else {
+      return { stdout: '', stderr: 'error: you must specify a filename or pass via stdin with -f -\n', code: 1 };
+    }
+
+    let parsedDocs = [];
+    try {
+      if (yamlParser.parseYaml) {
+        parsedDocs = yamlParser.parseYaml(manifestContent);
+      } else {
+        parsedDocs = [JSON.parse(manifestContent)];
+      }
+    } catch (err) {
+      return { stdout: '', stderr: `error: error parsing manifest: ${err.message}\n`, code: 1 };
+    }
+
+    const docs = Array.isArray(parsedDocs) ? parsedDocs : [parsedDocs];
+    const outputLines = [];
+
+    for (const doc of docs) {
+      if (!doc || !doc.kind || !doc.metadata?.name) continue;
+      const kind = normalizeKind(doc.kind);
+      const ns = doc.metadata?.namespace || namespace || 'default';
+      const name = doc.metadata.name;
+
+      const group = doc.apiVersion && doc.apiVersion.includes('/')
+        ? doc.apiVersion.split('/')[0]
+        : (kind === 'Deployment' || kind === 'ReplicaSet' || kind === 'StatefulSet' || kind === 'DaemonSet' ? 'apps' : '');
+      const resId = group ? `${kind.toLowerCase()}.${group}/${name}` : `${kind.toLowerCase()}/${name}`;
+
+      const existing = this.graph.get(kind, ns, name) || this.graph.get(kind, null, name);
+      if (!existing) {
+        return {
+          stdout: '',
+          stderr: `Error from server (NotFound): error when replacing "${filename || 'STDIN'}": ${kind.toLowerCase()}s${group ? '.' + group : ''} "${name}" not found\n`,
+          code: 1
+        };
+      }
+
+      if (force) {
+        this.graph.delete(kind, ns, name);
+        this.graph.create(doc);
+      } else {
+        this.graph.update(doc);
+      }
+      outputLines.push(`${resId} replaced`);
+    }
+
+    if (this.controllerManager) this.controllerManager.reconcile();
+    return { stdout: outputLines.join('\n') + '\n', stderr: '', code: 0 };
+  }
+
   _kubectlScale({ restArgs, namespace, replicas }) {
     const target = restArgs[0] || '';
     let kind = 'Deployment';
@@ -1182,6 +1254,195 @@ class MultiCliDispatcher {
     return { stdout: `${kind.toLowerCase()}.apps/${name} scaled\n`, stderr: '', code: 0 };
   }
 
+  _kubectlSet({ restArgs = [], namespace = 'default' }) {
+    if (!this.graph) return { stdout: '', stderr: 'No resource graph active\n', code: 1 };
+    const setType = restArgs[0];
+    if (!setType) {
+      return { stdout: '', stderr: 'error: you must specify a subcommand for set (image, env, resources, selector)\n', code: 1 };
+    }
+
+    function getContainers(targetRes) {
+      let list = null;
+      if (targetRes.kind === 'Pod') {
+        targetRes.spec = targetRes.spec || {};
+        if (Array.isArray(targetRes.spec.containers)) list = targetRes.spec.containers;
+        else if (targetRes.spec.containers && typeof targetRes.spec.containers === 'object') list = targetRes.spec.containers = Object.values(targetRes.spec.containers);
+        else if (targetRes.spec['- name']) list = targetRes.spec.containers = [{ name: targetRes.spec['- name'], image: targetRes.spec.image || 'nginx:latest' }];
+        else list = targetRes.spec.containers = [{ name: targetRes.metadata?.name || 'app', image: 'nginx:latest' }];
+      } else {
+        targetRes.spec = targetRes.spec || {};
+        targetRes.spec.template = targetRes.spec.template || {};
+        targetRes.spec.template.spec = targetRes.spec.template.spec || {};
+        const s = targetRes.spec.template.spec;
+        if (Array.isArray(s.containers)) list = s.containers;
+        else if (s.containers && typeof s.containers === 'object') list = s.containers = Object.values(s.containers);
+        else if (s['- name']) list = s.containers = [{ name: s['- name'], image: s.image || 'nginx:latest' }];
+        else list = s.containers = [{ name: targetRes.metadata?.name || 'app', image: 'nginx:latest' }];
+      }
+      return list;
+    }
+
+    if (setType === 'image') {
+      const target = restArgs[1];
+      const assign = restArgs[2];
+      if (!target || !assign) {
+        return { stdout: '', stderr: 'error: Usage: kubectl set image <type>/<name> <container>=<image>\n', code: 1 };
+      }
+      let kind = 'Deployment';
+      let name = target;
+      let kvToken = assign;
+      if (target.includes('/')) {
+        const parts = target.split('/');
+        kind = normalizeKind(parts[0]);
+        name = parts[1];
+      } else if (restArgs.length >= 4 && !restArgs[2].includes('=')) {
+        kind = normalizeKind(restArgs[1]);
+        name = restArgs[2];
+        kvToken = restArgs[3];
+      }
+      if (!kvToken || !kvToken.includes('=')) {
+        return { stdout: '', stderr: 'error: Usage: kubectl set image <type>/<name> <container>=<image>\n', code: 1 };
+      }
+      const [containerName, newImage] = kvToken.split('=');
+      const res = this.graph.get(kind, namespace, name);
+      if (!res) {
+        return { stdout: '', stderr: `Error from server (NotFound): ${kind} "${name}" not found\n`, code: 1 };
+      }
+      const containers = getContainers(res);
+      for (const c of containers) {
+        if (!containerName || containerName === '*' || c.name === containerName) {
+          c.image = newImage;
+        }
+      }
+      this.graph.update(res);
+      if (this.controllerManager) this.controllerManager.reconcile();
+      return { stdout: `${kind.toLowerCase()}.apps/${name} image updated\n`, stderr: '', code: 0 };
+    }
+
+    if (setType === 'env') {
+      const target = restArgs[1];
+      let kind = 'Deployment';
+      let name = target;
+      let kvStart = 2;
+      if (target.includes('/')) {
+        const parts = target.split('/');
+        kind = normalizeKind(parts[0]);
+        name = parts[1];
+      } else if (restArgs.length >= 3 && !restArgs[2].includes('=')) {
+        kind = normalizeKind(restArgs[1]);
+        name = restArgs[2];
+        kvStart = 3;
+      }
+      const assigns = restArgs.slice(kvStart);
+      if (!target || assigns.length === 0) {
+        return { stdout: '', stderr: 'error: Usage: kubectl set env <type>/<name> KEY=VAL ...\n', code: 1 };
+      }
+      const res = this.graph.get(kind, namespace, name);
+      if (!res) {
+        return { stdout: '', stderr: `Error from server (NotFound): ${kind} "${name}" not found\n`, code: 1 };
+      }
+      const containers = getContainers(res);
+      if (containers.length > 0) {
+        containers[0].env = containers[0].env || [];
+        for (const assign of assigns) {
+          if (!assign.includes('=')) continue;
+          const [k, v] = assign.split('=');
+          const existing = containers[0].env.find((e) => e.name === k);
+          if (existing) existing.value = v;
+          else containers[0].env.push({ name: k, value: v });
+        }
+      }
+      this.graph.update(res);
+      if (this.controllerManager) this.controllerManager.reconcile();
+      return { stdout: `${kind.toLowerCase()}.apps/${name} env updated\n`, stderr: '', code: 0 };
+    }
+
+    if (setType === 'resources') {
+      const target = restArgs[1];
+      let kind = 'Deployment';
+      let name = target;
+      if (target.includes('/')) {
+        const parts = target.split('/');
+        kind = normalizeKind(parts[0]);
+        name = parts[1];
+      } else if (restArgs.length >= 3 && !restArgs[2].startsWith('--')) {
+        kind = normalizeKind(restArgs[1]);
+        name = restArgs[2];
+      }
+      const res = this.graph.get(kind, namespace, name);
+      if (!res) {
+        return { stdout: '', stderr: `Error from server (NotFound): ${kind} "${name}" not found\n`, code: 1 };
+      }
+      const containers = getContainers(res);
+      if (containers.length > 0) {
+        containers[0].resources = containers[0].resources || {};
+        for (let i = 2; i < restArgs.length; i++) {
+          const a = restArgs[i];
+          if (a.startsWith('--limits=')) {
+            const pairs = a.slice(9).split(',');
+            containers[0].resources.limits = containers[0].resources.limits || {};
+            for (const p of pairs) {
+              const [k, v] = p.split('=');
+              if (k && v) containers[0].resources.limits[k] = v;
+            }
+          } else if (a.startsWith('--requests=')) {
+            const pairs = a.slice(11).split(',');
+            containers[0].resources.requests = containers[0].resources.requests || {};
+            for (const p of pairs) {
+              const [k, v] = p.split('=');
+              if (k && v) containers[0].resources.requests[k] = v;
+            }
+          }
+        }
+      }
+      this.graph.update(res);
+      if (this.controllerManager) this.controllerManager.reconcile();
+      return { stdout: `${kind.toLowerCase()}.apps/${name} resource requirements updated\n`, stderr: '', code: 0 };
+    }
+
+    if (setType === 'selector') {
+      const target = restArgs[1];
+      let kind = 'Service';
+      let name = target;
+      let assign = restArgs[2];
+      if (target.includes('/')) {
+        const parts = target.split('/');
+        kind = normalizeKind(parts[0]);
+        name = parts[1];
+      } else if (restArgs.length >= 4 && !restArgs[2].includes('=')) {
+        kind = normalizeKind(restArgs[1]);
+        name = restArgs[2];
+        assign = restArgs[3];
+      }
+      if (!assign || !assign.includes('=')) {
+        return { stdout: '', stderr: 'error: Usage: kubectl set selector <type>/<name> <key>=<val>\n', code: 1 };
+      }
+      const [k, v] = assign.split('=');
+      const res = this.graph.get(kind, namespace, name);
+      if (!res) {
+        return { stdout: '', stderr: `Error from server (NotFound): ${kind} "${name}" not found\n`, code: 1 };
+      }
+      if (normalizeKind(kind) === 'Service') {
+        res.spec = res.spec || {};
+        res.spec.selector = res.spec.selector || {};
+        res.spec.selector[k] = v;
+      } else {
+        res.spec = res.spec || {};
+        res.spec.selector = res.spec.selector || {};
+        res.spec.selector.matchLabels = res.spec.selector.matchLabels || {};
+        res.spec.selector.matchLabels[k] = v;
+        if (res.spec.template?.metadata?.labels) {
+          res.spec.template.metadata.labels[k] = v;
+        }
+      }
+      this.graph.update(res);
+      if (this.controllerManager) this.controllerManager.reconcile();
+      return { stdout: `${kind.toLowerCase()}/${name} selector updated\n`, stderr: '', code: 0 };
+    }
+
+    return { stdout: '', stderr: `error: unknown command "${setType}" for "kubectl set"\n`, code: 1 };
+  }
+
   _kubectlRollout({ restArgs, namespace }) {
     const sub = restArgs[0];
     const target = restArgs[1] || '';
@@ -1191,6 +1452,9 @@ class MultiCliDispatcher {
       const p = target.split('/');
       kind = normalizeKind(p[0]);
       name = p[1];
+    } else if (restArgs.length >= 3 && !restArgs[1].startsWith('-')) {
+      kind = normalizeKind(restArgs[1]);
+      name = restArgs[2];
     }
 
     const res = this.graph.get(kind, namespace, name);
@@ -1199,10 +1463,16 @@ class MultiCliDispatcher {
     }
 
     if (sub === 'status') {
-      return { stdout: `deployment "${name}" successfully rolled out\n`, stderr: '', code: 0 };
+      const ready = res.status?.readyReplicas || 0;
+      const desired = res.spec?.replicas || 1;
+      if (ready >= desired) {
+        return { stdout: `deployment "${name}" successfully rolled out\n`, stderr: '', code: 0 };
+      }
+      return { stdout: `Waiting for deployment "${name}" rollout to finish: ${ready} of ${desired} updated replicas are available...\n`, stderr: '', code: 0 };
     }
 
     if (sub === 'restart') {
+      res.spec.template = res.spec.template || {};
       res.spec.template.metadata = res.spec.template.metadata || {};
       res.spec.template.metadata.annotations = res.spec.template.metadata.annotations || {};
       res.spec.template.metadata.annotations['kubectl.kubernetes.io/restartedAt'] = new Date().toISOString();
@@ -1213,34 +1483,139 @@ class MultiCliDispatcher {
 
     if (sub === 'history') {
       return {
-        stdout: `deployment.apps/${name}\nREVISION  CHANGE-CAUSE\n1         <none>\n2         kubectl rollout restart\n`,
+        stdout: `deployment.apps/${name}\nREVISION  CHANGE-CAUSE\n1         <none>\n2         kubectl set image ...\n`,
         stderr: '',
         code: 0
       };
     }
 
     if (sub === 'undo') {
-      return { stdout: `deployment.apps/${name} rolled back\n`, stderr: '', code: 0 };
+      let rev = null;
+      for (const a of restArgs) {
+        if (a.startsWith('--to-revision=')) rev = a.split('=')[1];
+      }
+      const msg = rev
+        ? `deployment.apps/${name} rolled back to revision ${rev}\n`
+        : `deployment.apps/${name} rolled back\n`;
+      return { stdout: msg, stderr: '', code: 0 };
     }
 
     return { stdout: '', stderr: `error: unknown rollout subcommand "${sub}"\n`, code: 1 };
   }
 
   _kubectlLogs({ restArgs, namespace }) {
-    const podName = restArgs[0];
-    if (!podName) return { stdout: '', stderr: 'error: pod name required for logs\n', code: 1 };
+    let target = '';
+    let container = null;
+    let tail = null;
+
+    for (let i = 0; i < restArgs.length; i++) {
+      const a = restArgs[i];
+      if (a === '-c' || a === '--container') container = restArgs[++i];
+      else if (a.startsWith('-c=') || a.startsWith('--container=')) container = a.split('=')[1];
+      else if (a === '--tail') tail = parseInt(restArgs[++i], 10);
+      else if (a.startsWith('--tail=')) tail = parseInt(a.split('=')[1], 10);
+      else if (!a.startsWith('-') && !target) target = a;
+    }
+
+    if (!target) return { stdout: '', stderr: 'error: pod name required for logs\n', code: 1 };
+
+    let kind = 'Pod';
+    let podName = target;
+    if (target.includes('/')) {
+      const parts = target.split('/');
+      kind = normalizeKind(parts[0]);
+      podName = parts[1];
+    }
+
+    let pod = null;
+    if (kind === 'Pod') {
+      pod = this.graph.get('Pod', namespace, podName);
+    } else if (kind === 'Deployment') {
+      const pods = this.graph.list('Pod', namespace);
+      pod = pods.find((p) => p.metadata?.name?.startsWith(podName) || p.metadata?.labels?.app === podName);
+    }
+
+    if (!pod) return { stdout: '', stderr: `Error from server (NotFound): pods "${target}" not found\n`, code: 1 };
+
+    const cName = container || pod.spec?.containers?.[0]?.name || podName;
+    const now = new Date().toISOString();
+    const logLines = [
+      `[INFO] ${now} Starting ${pod.metadata?.name} (container: ${cName})...`,
+      `[INFO] ${now} Listening on port 8080`,
+      `[INFO] ${now} Health check probe succeeded on /healthz`,
+      `[INFO] ${now} Serving requests in namespace ${namespace}`
+    ];
+
+    const outputLines = tail ? logLines.slice(-tail) : logLines;
+    return { stdout: outputLines.join('\n') + '\n', stderr: '', code: 0 };
+  }
+
+  _kubectlExec({ restArgs, namespace }) {
+    let podName = '';
+    let container = null;
+    const dDash = restArgs.indexOf('--');
+    const flagArgs = dDash !== -1 ? restArgs.slice(0, dDash) : restArgs;
+    const cmdTokens = dDash !== -1 ? restArgs.slice(dDash + 1) : ['sh'];
+
+    for (let i = 0; i < flagArgs.length; i++) {
+      const a = flagArgs[i];
+      if (a === '-c' || a === '--container') container = flagArgs[++i];
+      else if (a.startsWith('-c=') || a.startsWith('--container=')) container = a.split('=')[1];
+      else if (a === '-it' || a === '-i' || a === '-t') { /* terminal flags */ }
+      else if (!a.startsWith('-') && !podName) podName = a;
+    }
+
+    if (!podName) return { stdout: '', stderr: 'error: pod name required for exec\n', code: 1 };
+    if (podName.includes('/')) podName = podName.split('/')[1];
 
     const pod = this.graph.get('Pod', namespace, podName);
     if (!pod) return { stdout: '', stderr: `Error from server (NotFound): pods "${podName}" not found\n`, code: 1 };
 
-    const sampleLog = `[INFO] 2026-11-12T16:00:00Z Starting ${podName}...\n[INFO] 2026-11-12T16:00:01Z Listening on port 8080\n[INFO] 2026-11-12T16:00:02Z Health checks passing.\n`;
-    return { stdout: sampleLog, stderr: '', code: 0 };
-  }
+    const phase = pod.status?.phase || 'Running';
+    if (phase !== 'Running') {
+      return { stdout: '', stderr: `error: unable to upgrade connection: container not running (pod phase is ${phase})\n`, code: 1 };
+    }
 
-  _kubectlExec({ restArgs, namespace }) {
-    const podName = restArgs[0];
-    const dDash = restArgs.indexOf('--');
-    const cmd = dDash !== -1 ? restArgs.slice(dDash + 1).join(' ') : 'sh';
+    const cmd = cmdTokens.join(' ');
+    const bin = cmdTokens[0] || 'sh';
+
+    if (bin === 'hostname') {
+      return { stdout: `${podName}\n`, stderr: '', code: 0 };
+    }
+    if (bin === 'whoami') {
+      return { stdout: 'root\n', stderr: '', code: 0 };
+    }
+    if (bin === 'id') {
+      return { stdout: 'uid=0(root) gid=0(root) groups=0(root)\n', stderr: '', code: 0 };
+    }
+    if (bin === 'uname' || cmd.startsWith('uname')) {
+      return { stdout: `Linux ${podName} 6.8.0-cloud-native #1 SMP PREEMPT_DYNAMIC x86_64 GNU/Linux\n`, stderr: '', code: 0 };
+    }
+    if (cmd === 'cat /etc/os-release') {
+      return {
+        stdout: 'NAME="Alpine Linux"\nID=alpine\nVERSION_ID=3.20.0\nPRETTY_NAME="Alpine Linux v3.20"\n',
+        stderr: '',
+        code: 0
+      };
+    }
+    if (bin === 'env') {
+      const lines = [`HOSTNAME=${podName}`, 'SHLVL=1', 'HOME=/root', 'PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'];
+      const containers = pod.spec?.containers || [];
+      for (const c of containers) {
+        for (const e of c.env || []) lines.push(`${e.name}=${e.value}`);
+      }
+      return { stdout: lines.join('\n') + '\n', stderr: '', code: 0 };
+    }
+    if (bin === 'ls') {
+      return { stdout: 'bin  dev  etc  home  lib  proc  root  sys  tmp  usr  var\n', stderr: '', code: 0 };
+    }
+    if (bin === 'echo') {
+      const text = cmdTokens.slice(1).join(' ').replace(/^['"]|['"]$/g, '');
+      return { stdout: `${text}\n`, stderr: '', code: 0 };
+    }
+    if (bin === 'curl') {
+      return { stdout: 'HTTP/1.1 200 OK\nContent-Type: text/plain\n\nOK\n', stderr: '', code: 0 };
+    }
 
     return { stdout: `Executing '${cmd}' in pod ${podName} (${namespace}):\nOK\n`, stderr: '', code: 0 };
   }
@@ -1251,6 +1626,7 @@ class MultiCliDispatcher {
     for (let i = 1; i < restArgs.length; i++) {
       if (restArgs[i] === '-p' || restArgs[i] === '--patch') patchJson = restArgs[++i];
       else if (restArgs[i].startsWith('-p=')) patchJson = restArgs[i].slice(3);
+      else if (restArgs[i].startsWith('--patch=')) patchJson = restArgs[i].slice(8);
     }
 
     let kind = 'Deployment';
@@ -1278,47 +1654,95 @@ class MultiCliDispatcher {
   }
 
   _kubectlLabel({ restArgs, namespace }) {
-    const target = restArgs[0];
-    const kv = restArgs[1];
-    if (!target || !kv || !kv.includes('=')) {
-      return { stdout: '', stderr: 'error: label requires target and key=val\n', code: 1 };
-    }
-    const [k, v] = kv.split('=');
     let kind = 'Pod';
-    let name = target;
+    let name = '';
+    let kvStartIndex = 1;
+    const target = restArgs[0] || '';
+
     if (target.includes('/')) {
       const p = target.split('/');
       kind = normalizeKind(p[0]);
       name = p[1];
+      kvStartIndex = 1;
+    } else if (restArgs.length >= 2 && !restArgs[1].includes('=') && !restArgs[1].endsWith('-') && !restArgs[1].startsWith('-')) {
+      kind = normalizeKind(restArgs[0]);
+      name = restArgs[1];
+      kvStartIndex = 2;
+    } else {
+      name = target;
+      kvStartIndex = 1;
     }
+
     const res = this.graph.get(kind, namespace, name);
     if (!res) return { stdout: '', stderr: `Error: ${kind} "${name}" not found\n`, code: 1 };
     res.metadata = res.metadata || {};
     res.metadata.labels = res.metadata.labels || {};
-    res.metadata.labels[k] = v;
+
+    let modified = 0;
+    for (let i = kvStartIndex; i < restArgs.length; i++) {
+      const token = restArgs[i];
+      if (token === '--overwrite' || token.startsWith('--')) continue;
+      if (token.endsWith('-')) {
+        delete res.metadata.labels[token.slice(0, -1)];
+        modified++;
+      } else if (token.includes('=')) {
+        const [k, v] = token.split('=');
+        res.metadata.labels[k] = v;
+        modified++;
+      }
+    }
+
+    if (modified === 0) {
+      return { stdout: '', stderr: 'error: label requires target and key=val or key-\n', code: 1 };
+    }
+
     this.graph.update(res);
     return { stdout: `${kind.toLowerCase()}/${name} labeled\n`, stderr: '', code: 0 };
   }
 
   _kubectlAnnotate({ restArgs, namespace }) {
-    const target = restArgs[0];
-    const kv = restArgs[1];
-    if (!target || !kv || !kv.includes('=')) {
-      return { stdout: '', stderr: 'error: annotate requires target and key=val\n', code: 1 };
-    }
-    const [k, v] = kv.split('=');
     let kind = 'Pod';
-    let name = target;
+    let name = '';
+    let kvStartIndex = 1;
+    const target = restArgs[0] || '';
+
     if (target.includes('/')) {
       const p = target.split('/');
       kind = normalizeKind(p[0]);
       name = p[1];
+      kvStartIndex = 1;
+    } else if (restArgs.length >= 2 && !restArgs[1].includes('=') && !restArgs[1].endsWith('-') && !restArgs[1].startsWith('-')) {
+      kind = normalizeKind(restArgs[0]);
+      name = restArgs[1];
+      kvStartIndex = 2;
+    } else {
+      name = target;
+      kvStartIndex = 1;
     }
+
     const res = this.graph.get(kind, namespace, name);
     if (!res) return { stdout: '', stderr: `Error: ${kind} "${name}" not found\n`, code: 1 };
     res.metadata = res.metadata || {};
     res.metadata.annotations = res.metadata.annotations || {};
-    res.metadata.annotations[k] = v;
+
+    let modified = 0;
+    for (let i = kvStartIndex; i < restArgs.length; i++) {
+      const token = restArgs[i];
+      if (token === '--overwrite' || token.startsWith('--')) continue;
+      if (token.endsWith('-')) {
+        delete res.metadata.annotations[token.slice(0, -1)];
+        modified++;
+      } else if (token.includes('=')) {
+        const eq = token.indexOf('=');
+        res.metadata.annotations[token.slice(0, eq)] = token.slice(eq + 1);
+        modified++;
+      }
+    }
+
+    if (modified === 0) {
+      return { stdout: '', stderr: 'error: annotate requires target and key=val or key-\n', code: 1 };
+    }
+
     this.graph.update(res);
     return { stdout: `${kind.toLowerCase()}/${name} annotated\n`, stderr: '', code: 0 };
   }
@@ -1418,24 +1842,66 @@ class MultiCliDispatcher {
     return { stdout: '', stderr: 'error: unknown auth command\n', code: 1 };
   }
 
-  _kubectlTop({ restArgs, namespace }) {
+  _kubectlTop({ restArgs, namespace, allNamespaces = false }) {
     const sub = restArgs[0] || 'node';
     if (sub === 'node' || sub === 'nodes') {
+      const targetNode = restArgs[1];
       const headers = ['NAME', 'CPU(cores)', 'CPU%', 'MEMORY(bytes)', 'MEMORY%'];
-      const rows = [
+      let rows = [
         ['control-plane-node', '250m', '12%', '1420Mi', '35%'],
         ['worker-node-1', '410m', '20%', '2100Mi', '52%'],
         ['worker-node-2', '320m', '16%', '1850Mi', '46%']
       ];
+      if (this.graph) {
+        const liveNodes = this.graph.list({ kind: 'Node' });
+        if (liveNodes.length > 0) {
+          rows = liveNodes.map((n, idx) => [
+            n.metadata?.name || `node-${idx}`,
+            `${250 + (idx * 80)}m`,
+            `${12 + (idx * 4)}%`,
+            `${1420 + (idx * 400)}Mi`,
+            `${35 + (idx * 6)}%`
+          ]);
+        }
+      }
+      if (targetNode) {
+        rows = rows.filter((r) => r[0] === targetNode);
+        if (rows.length === 0) {
+          return { stdout: '', stderr: `Error from server (NotFound): node "${targetNode}" not found\n`, code: 1 };
+        }
+      }
       return { stdout: this._formatTable(headers, rows) + '\n', stderr: '', code: 0 };
     }
     if (sub === 'pod' || sub === 'pods') {
-      const headers = ['NAME', 'CPU(cores)', 'MEMORY(bytes)'];
-      const rows = [
-        ['coredns-7c65d6cfc9-abc12', '4m', '18Mi'],
-        ['coredns-7c65d6cfc9-xyz99', '3m', '17Mi'],
-        ['kube-apiserver-control-plane', '45m', '310Mi']
-      ];
+      const targetPod = restArgs[1];
+      const headers = allNamespaces
+        ? ['NAMESPACE', 'NAME', 'CPU(cores)', 'MEMORY(bytes)']
+        : ['NAME', 'CPU(cores)', 'MEMORY(bytes)'];
+      let rows = [];
+      if (this.graph) {
+        const livePods = allNamespaces ? this.graph.list({ kind: 'Pod' }) : this.graph.list('Pod', namespace);
+        rows = livePods.map((p, idx) => {
+          const r = [p.metadata?.name || `pod-${idx}`, `${25 + (idx * 10)}m`, `${64 + (idx * 32)}Mi`];
+          if (allNamespaces) r.unshift(p.metadata?.namespace || 'default');
+          return r;
+        });
+      }
+      if (rows.length === 0) {
+        rows = [
+          ['coredns-7c65d6cfc9-abc12', '4m', '18Mi'],
+          ['coredns-7c65d6cfc9-xyz99', '3m', '17Mi'],
+          ['kube-apiserver-control-plane', '45m', '310Mi']
+        ];
+        if (allNamespaces) {
+          rows = rows.map((r) => ['kube-system', ...r]);
+        }
+      }
+      if (targetPod) {
+        rows = rows.filter((r) => (allNamespaces ? r[1] === targetPod : r[0] === targetPod));
+        if (rows.length === 0) {
+          return { stdout: '', stderr: `Error from server (NotFound): pods "${targetPod}" not found\n`, code: 1 };
+        }
+      }
       return { stdout: this._formatTable(headers, rows) + '\n', stderr: '', code: 0 };
     }
     return { stdout: '', stderr: 'error: top supports node or pod\n', code: 1 };
@@ -2539,9 +3005,17 @@ class MultiCliDispatcher {
   handleEtcdctl({ argv = [] }) {
     const sub = argv[1];
     if (sub === 'endpoint') {
+      const action = argv[2] || 'health';
+      if (action === 'status') {
+        const headers = ['ENDPOINT', 'ID', 'VERSION', 'DB SIZE', 'IS LEADER', 'IS LEARNER', 'RAFT TERM', 'RAFT INDEX', 'RAFT APPLIED INDEX', 'ERRORS'];
+        const rows = [
+          ['https://127.0.0.1:2379', 'b07e1c841a029f12', '3.5.15', '28 MB', 'true', 'false', '4', '34892', '34892', '']
+        ];
+        return { stdout: this._formatTable(headers, rows) + '\n', stderr: '', code: 0 };
+      }
       return { stdout: '127.0.0.1:2379 is healthy: successfully committed proposal: took = 1.2ms\n', stderr: '', code: 0 };
     }
-    if (sub === 'member' && argv[2] === 'list') {
+    if (sub === 'member' && (argv[2] === 'list' || !argv[2])) {
       return { stdout: 'b07e1c841a029f12, started, control-plane-node, https://192.168.1.10:2380, https://192.168.1.10:2379, false\n', stderr: '', code: 0 };
     }
     if (sub === 'snapshot') {
@@ -2558,6 +3032,14 @@ class MultiCliDispatcher {
         } else if (!arg.startsWith('-')) {
           target = arg;
         }
+      }
+
+      if (action === 'status') {
+        const headers = ['HASH', 'REVISION', 'TOTAL KEYS', 'TOTAL SIZE'];
+        const rows = [
+          ['41fa2a87', '34892', '4520', '26 MB']
+        ];
+        return { stdout: this._formatTable(headers, rows) + '\n', stderr: '', code: 0 };
       }
 
       if (action === 'restore') {
@@ -2596,13 +3078,157 @@ class MultiCliDispatcher {
           code: 0
         };
       }
-      return { stdout: `Snapshot saved at ${target}\n`, stderr: '', code: 0 };
+      return { stdout: `Snapshot saved at ${target}\n{"hash":1098273645,"revision":34892,"totalKey":4520,"totalSize":26843545}\n`, stderr: '', code: 0 };
     }
     return { stdout: 'etcdctl version: 3.5.15\n', stderr: '', code: 0 };
   }
 
   handleKubeadm({ argv = [] }) {
     const sub = argv[1];
+    if (sub === 'init') {
+      if (this.vfs) {
+        this.vfs.mkdir('/etc/kubernetes/pki');
+        this.vfs.mkdir('/etc/kubernetes/manifests');
+        this.vfs.mkdir('/home/learner/.kube');
+        this.vfs.writeFile('/etc/kubernetes/admin.conf', 'apiVersion: v1\nclusters:\n- cluster:\n    server: https://192.168.1.10:6443\n  name: kubernetes\ncontexts:\n- context:\n    cluster: kubernetes\n    user: kubernetes-admin\n  name: kubernetes-admin@kubernetes\ncurrent-context: kubernetes-admin@kubernetes\nkind: Config\n', { overwrite: true });
+        this.vfs.writeFile('/home/learner/.kube/config', 'apiVersion: v1\nclusters:\n- cluster:\n    server: https://192.168.1.10:6443\n  name: kubernetes\ncontexts:\n- context:\n    cluster: kubernetes\n    user: kubernetes-admin\n  name: kubernetes-admin@kubernetes\ncurrent-context: kubernetes-admin@kubernetes\nkind: Config\n', { overwrite: true });
+      }
+      if (this.graph) {
+        const nodes = this.graph.list({ kind: 'Node' });
+        const cpNode = nodes.find((n) => n.metadata?.labels?.['node-role.kubernetes.io/control-plane'] !== undefined) || nodes[0];
+        if (cpNode) {
+          cpNode.metadata = cpNode.metadata || {};
+          cpNode.metadata.labels = cpNode.metadata.labels || {};
+          cpNode.metadata.labels['node-role.kubernetes.io/control-plane'] = '';
+          this.graph.set(cpNode, { skipReconcileNotification: true });
+        }
+      }
+      const out = [
+        '[init] Using Kubernetes version: v1.31.0',
+        '[preflight] Running pre-flight checks',
+        '[certs] Generating "ca" certificate and key',
+        '[certs] Generating "apiserver" certificate and key',
+        '[certs] apiserver serving cert is signed for DNS names [kubernetes kubernetes.default kubernetes.default.svc kubernetes.default.svc.cluster.local kubelabs-control-plane] and IPs [10.96.0.1 192.168.1.10]',
+        '[certs] Generating "apiserver-kubelet-client" certificate and key',
+        '[certs] Generating "front-proxy-ca" certificate and key',
+        '[certs] Generating "front-proxy-client" certificate and key',
+        '[certs] Generating "etcd/ca" certificate and key',
+        '[certs] Generating "etcd/server" certificate and key',
+        '[certs] Generating "etcd/peer" certificate and key',
+        '[certs] Generating "etcd/healthcheck-client" certificate and key',
+        '[certs] Generating "apiserver-etcd-client" certificate and key',
+        '[certs] Generating "sa" key and public key',
+        '[kubeconfig] Writing "admin.conf" kubeconfig file',
+        '[kubeconfig] Writing "kubelet.conf" kubeconfig file',
+        '[kubeconfig] Writing "controller-manager.conf" kubeconfig file',
+        '[kubeconfig] Writing "scheduler.conf" kubeconfig file',
+        '[control-plane] Using manifest folder "/etc/kubernetes/manifests"',
+        '[control-plane] Creating static Pod manifest for "kube-apiserver"',
+        '[control-plane] Creating static Pod manifest for "kube-controller-manager"',
+        '[control-plane] Creating static Pod manifest for "kube-scheduler"',
+        '[etcd] Creating static Pod manifest for local etcd in "/etc/kubernetes/manifests"',
+        '[wait-control-plane] Waiting for the kubelet to boot up the control plane as static Pods',
+        '[apiclient] All control plane components are healthy after 5.001 seconds',
+        '[upload-config] Storing the configuration used in ConfigMap "kubeadm-config" in the "kube-system" Namespace',
+        '[kubelet] Creating a ConfigMap "kubelet-config" in namespace kube-system with the configuration for the kubelets in the cluster',
+        '[mark-control-plane] Marking the node as control-plane by adding the labels: [node-role.kubernetes.io/control-plane]',
+        '[addons] Applied Essential Addon: CoreDNS',
+        '[addons] Applied Essential Addon: kube-proxy',
+        '',
+        'Your Kubernetes control-plane has initialized successfully!',
+        '',
+        'To start using your cluster, you need to run the following as a regular user:',
+        '',
+        '  mkdir -p $HOME/.kube',
+        '  sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config',
+        '  sudo chown $(id -u):$(id -g) $HOME/.kube/config',
+        '',
+        'Then you can join any number of worker nodes by running the following on each as root:',
+        '',
+        'kubeadm join 192.168.1.10:6443 --token 9a01ea.8018e4a547741478 \\',
+        '    --discovery-token-ca-cert-hash sha256:7c4a16198f121175654ebd310061e89df95b35c023d6a69efee52220d9f67a21'
+      ].join('\n') + '\n';
+      return { stdout: out, stderr: '', code: 0 };
+    }
+
+    if (sub === 'join') {
+      const endpoint = argv[2] || '192.168.1.10:6443';
+      if (this.graph) {
+        const workerNode = this.graph.get('Node', null, 'kubelabs-worker-01') || this.graph.get('Node', null, 'worker-node-1');
+        if (workerNode) {
+          workerNode.status = workerNode.status || {};
+          workerNode.status.conditions = [{ type: 'Ready', status: 'True', reason: 'KubeletReady' }];
+          this.graph.set(workerNode, { skipReconcileNotification: true });
+        }
+      }
+      const out = [
+        `[preflight] Running pre-flight checks to ${endpoint}`,
+        '[preflight] Reading configuration from the cluster...',
+        '[preflight] FYI: You can look at this config file with \'kubectl -n kube-system get cm kubeadm-config -o yaml\'',
+        '[kubelet-start] Writing kubelet configuration to file "/var/lib/kubelet/config.yaml"',
+        '[kubelet-start] Starting the kubelet',
+        '[kubelet-check] Waiting for a healthy kubelet. This can take up to 4m0s',
+        '[kubelet-check] The kubelet is healthy after 1.502s',
+        '',
+        'This node has joined the cluster:',
+        '* Certificate signing request was sent to apiserver and a response was received.',
+        '* The Kubelet was informed of the new secure connection details.',
+        '',
+        'Run \'kubectl get nodes\' on the control-plane to see this node join the cluster.'
+      ].join('\n') + '\n';
+      return { stdout: out, stderr: '', code: 0 };
+    }
+
+    if (sub === 'upgrade') {
+      const action = argv[2] || 'plan';
+      if (action === 'plan') {
+        const out = [
+          '[upgrade/plan] Components that must be upgraded manually after you have upgraded the control plane with kubeadm upgrade apply:',
+          'COMPONENT     CURRENT       AVAILABLE',
+          'Kubelet       v1.31.0       v1.32.0',
+          '',
+          'Upgrade to the latest version in the v1.32 series:',
+          'COMPONENT            CURRENT   AVAILABLE',
+          'kube-apiserver       v1.31.0   v1.32.0',
+          'kube-controller-mgr  v1.31.0   v1.32.0',
+          'kube-scheduler       v1.31.0   v1.32.0',
+          'kube-proxy           v1.31.0   v1.32.0',
+          'CoreDNS              v1.11.1   v1.11.3',
+          'etcd                 3.5.14-0  3.5.15-0',
+          '',
+          'You can now apply the upgrade by executing: kubeadm upgrade apply v1.32.0'
+        ].join('\n') + '\n';
+        return { stdout: out, stderr: '', code: 0 };
+      }
+      if (action === 'apply') {
+        const ver = argv[3] || 'v1.32.0';
+        return { stdout: `[upgrade/apply] SUCCESS! Your cluster was upgraded to "${ver}". Enjoy!\n`, stderr: '', code: 0 };
+      }
+    }
+
+    if (sub === 'token') {
+      const action = argv[2] || 'list';
+      if (action === 'list') {
+        const headers = ['TOKEN', 'TTL', 'EXPIRES', 'USAGES', 'DESCRIPTION', 'EXTRA GROUPS'];
+        const rows = [
+          ['9a01ea.8018e4a547741478', '23h', '2026-11-14T16:00:00Z', 'authentication,signing', 'The default bootstrap token generated by \'kubeadm init\'.', 'system:bootstrappers:kubeadm:default-node-token']
+        ];
+        return { stdout: this._formatTable(headers, rows) + '\n', stderr: '', code: 0 };
+      }
+      if (action === 'create') {
+        const printJoin = argv.includes('--print-join-command');
+        const token = '9a01ea.8018e4a547741478';
+        if (printJoin) {
+          return {
+            stdout: `kubeadm join 192.168.1.10:6443 --token ${token} --discovery-token-ca-cert-hash sha256:7c4a16198f121175654ebd310061e89df95b35c023d6a69efee52220d9f67a21\n`,
+            stderr: '',
+            code: 0
+          };
+        }
+        return { stdout: `${token}\n`, stderr: '', code: 0 };
+      }
+    }
+
     if (sub === 'certs') {
       const action = argv[2];
       if (action === 'check-expiration') {
