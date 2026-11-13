@@ -857,6 +857,114 @@ body {
   cursor: text;
 }
 
+/* Multi-Tab Terminal Session Bar */
+.terminal-tab-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--border-subtle, #1e293b);
+  padding-bottom: 0.35rem;
+  margin-bottom: 0.45rem;
+  gap: 0.5rem;
+  user-select: none;
+}
+
+.terminal-tab-list {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.terminal-tab-list::-webkit-scrollbar {
+  display: none;
+}
+
+.terminal-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  background: rgba(15, 23, 42, 0.6);
+  border: 1px solid var(--border-subtle, #1e293b);
+  color: var(--text-muted, #94a3b8);
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  padding: 0.2rem 0.55rem;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.terminal-tab:hover {
+  background: rgba(30, 41, 59, 0.8);
+  color: var(--text-primary, #f8fafc);
+  border-color: rgba(56, 189, 248, 0.3);
+}
+
+.terminal-tab.active {
+  background: #1e293b;
+  border-color: #38bdf8;
+  color: #38bdf8;
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+
+.tab-indicator {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #64748b;
+  transition: background 0.15s ease;
+}
+
+.tab-indicator.active-dot {
+  background: #10b981;
+  box-shadow: 0 0 6px #10b981;
+}
+
+.tab-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  font-size: 0.85rem;
+  line-height: 1;
+  margin-left: 2px;
+  opacity: 0.6;
+  transition: all 0.15s ease;
+}
+
+.tab-close:hover {
+  background: rgba(239, 68, 68, 0.2);
+  color: #ef4444;
+  opacity: 1;
+}
+
+.terminal-tab-new {
+  display: inline-flex;
+  align-items: center;
+  background: transparent;
+  border: 1px dashed var(--border-subtle, #334155);
+  color: var(--text-muted, #94a3b8);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  padding: 0.18rem 0.5rem;
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s ease;
+}
+
+.terminal-tab-new:hover {
+  border-color: #38bdf8;
+  color: #38bdf8;
+  background: rgba(56, 189, 248, 0.08);
+}
+
 .inline-terminal-scrollback {
   flex: 1;
   overflow-y: auto;
