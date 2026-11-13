@@ -49,6 +49,13 @@ try {
 } catch {
   cliFormatterModule = (typeof globalThis !== 'undefined' && globalThis.cliFormatterModule) || {};
 }
+
+let GitEngine;
+try {
+  GitEngine = require('./gitEngine').GitEngine;
+} catch {
+  GitEngine = (typeof globalThis !== 'undefined' && globalThis.GitEngine);
+}
 const formatResourceTable = cliFormatterModule.formatResourceTable || function () { return ''; };
 const formatYaml = cliFormatterModule.formatYaml || JSON.stringify;
 const formatJson = cliFormatterModule.formatJson || JSON.stringify;
@@ -689,6 +696,15 @@ class TerminalEngine {
       }
       this._registerExtendedBuiltins();
     }
+
+    if (!this.multiCli && MultiCliDispatcher) {
+      this.multiCli = new MultiCliDispatcher({
+        graph: this.graph,
+        vfs: this.vfs
+      });
+    }
+
+    this.gitEngine = clusterOrOptions?.gitEngine || (this.multiCli && this.multiCli.gitEngine) || (GitEngine ? new GitEngine({ vfs: this.vfs, author: 'Learner <learner@kubelabs.local>' }) : null);
   }
 
   get history() {
@@ -1050,7 +1066,9 @@ class TerminalEngine {
         return this.handleHelm(args);
       case 'docker':
       case 'crictl':
-        return this.handleDocker(bin, args);
+        return this.handleDocker(bin, args, options);
+      case 'git':
+        return this.handleGit(args, options);
       case 'argocd':
         return this.handleArgoCD(args);
       case 'istioctl':
@@ -1097,6 +1115,7 @@ class TerminalEngine {
       case 'sysctl':
       case 'journalctl':
       case 'ps':
+      case 'kill':
       case 'top':
       case 'free':
       case 'df':
@@ -1109,13 +1128,28 @@ class TerminalEngine {
       case 'rm':
       case 'ls':
       case 'cat':
+      case 'cp':
+      case 'mv':
+      case 'cd':
+      case 'touch':
+      case 'chmod':
+      case 'chown':
+      case 'ln':
+      case 'find':
+      case 'env':
+      case 'export':
+      case 'unshare':
+      case 'iptables':
       case 'ip':
       case 'ss':
       case 'ping':
       case 'curl':
       case 'dig':
       case 'nslookup':
-        return this.handleLinuxAndNet(bin, args);
+      case 'traceroute':
+      case 'nc':
+      case 'netcat':
+        return this.handleLinuxAndNet(bin, args, options);
       default:
         return {
           exitCode: 127,
@@ -2268,10 +2302,34 @@ class TerminalEngine {
     return { exitCode: 0, output: 'Helm v3.16.2 package manager ready.' };
   }
 
-  handleDocker(bin, args) {
+  handleDocker(bin, args, options = {}) {
+    if (this.multiCli) {
+      const handler = bin === 'crictl' ? this.multiCli.handleCrictl.bind(this.multiCli) : this.multiCli.handleDocker.bind(this.multiCli);
+      const res = handler({ argv: [bin, ...args], cwd: this.cwd, vfs: this.vfs });
+      // Synchronize container state into cluster.state.containers if cluster exists
+      if (this.cluster && this.cluster.state && Array.isArray(this.multiCli.simulatedContainers)) {
+        this.cluster.state.containers = this.multiCli.simulatedContainers.map((c) => ({
+          id: c.id,
+          name: c.name,
+          image: c.image,
+          status: c.status,
+          ports: c.ports,
+          rootless: true
+        }));
+      }
+      const out = (res.stdout || '') + (res.stderr || '');
+      return {
+        exitCode: res.code !== undefined ? res.code : 0,
+        code: res.code !== undefined ? res.code : 0,
+        output: out.replace(/\n$/, ''),
+        stdout: res.stdout || '',
+        stderr: res.stderr || ''
+      };
+    }
+
     const sub = args[0] || 'ps';
     if (sub === 'ps') {
-      const rows = this.cluster.state.containers.map(
+      const rows = (this.cluster?.state?.containers || []).map(
         (c) => `${padRight(c.id, 16)}${padRight(c.image, 28)}${padRight(c.status, 16)}${padRight(c.ports, 14)}${c.name}`
       );
       return {
@@ -2279,32 +2337,30 @@ class TerminalEngine {
         output: ['CONTAINER ID    IMAGE                       STATUS          PORTS         NAMES', ...rows].join('\n')
       };
     }
-    if (sub === 'images') {
-      return {
-        exitCode: 0,
-        output: [
-          'REPOSITORY                        TAG            IMAGE ID       SIZE',
-          'nginx                             1.27-alpine    a928f7c1093d   18.4MB',
-          'gcr.io/distroless/static-debian12 nonroot        4d9e8a1b2c3f   2.4MB',
-          'postgres                          16-alpine      8f12c904e5a1   84.1MB'
-        ].join('\n')
-      };
+    return { exitCode: 0, output: `${bin} ${sub} ready` };
+  }
+
+  handleGit(args, options = {}) {
+    if (!this.gitEngine) {
+      if (GitEngine) {
+        this.gitEngine = new GitEngine({ vfs: this.vfs, author: 'Learner <learner@kubelabs.local>' });
+      } else if (this.multiCli && this.multiCli.gitEngine) {
+        this.gitEngine = this.multiCli.gitEngine;
+      }
     }
-    if (sub === 'run' || sub === 'build') {
-      const nameIdx = args.indexOf('--name');
-      const name = nameIdx > -1 ? args[nameIdx + 1] : `container-${this.cluster.state.containers.length + 1}`;
-      const image = args[args.length - 1] || 'gcr.io/distroless/static-debian12:nonroot';
-      this.cluster.state.containers.push({
-        id: 'f91a2e4b8c10',
-        name,
-        image,
-        status: 'Up 2 seconds',
-        ports: '8080/tcp',
-        rootless: true
-      });
-      return { exitCode: 0, output: `f91a2e4b8c10 (${name} running with ${image})` };
+    if (!this.gitEngine) {
+      return { exitCode: 1, code: 1, output: 'fatal: git engine unavailable', stdout: '', stderr: 'fatal: git engine unavailable\n' };
     }
-    return { exitCode: 0, output: `${bin} ${sub} completed successfully.` };
+    const res = this.gitEngine.execute(args, { vfs: this.vfs, cwd: this.cwd, ...options });
+    const output = (res.stdout || '') + (res.stderr || '');
+    return {
+      exitCode: res.code !== undefined ? res.code : 0,
+      code: res.code !== undefined ? res.code : 0,
+      output: output.replace(/\n$/, ''),
+      stdout: res.stdout || '',
+      stderr: res.stderr || '',
+      ...res
+    };
   }
 
   handleArgoCD(args) {
@@ -2620,163 +2676,173 @@ class TerminalEngine {
     };
   }
 
-  handleLinuxAndNet(bin, args) {
-    if (bin === 'systemctl') {
-      const action = args[0] || 'status';
-      const unit = (args[1] || 'kubelet').replace(/\.service$/, '');
-      if (action === 'restart' || action === 'start' || action === 'enable') {
-        this.cluster.state.systemdUnits[unit] = {
-          active: 'active',
-          enabled: true,
-          description: `Hardened ${unit} daemon`
-        };
-        if (unit === 'kubelet' || unit === 'containerd') {
-          const nodes = this.cluster.getResources('Node');
-          for (const node of nodes) {
-            node.status = node.status || {};
-            if (node.status.phase === 'NotReady') {
-              node.status.phase = 'Ready';
+  handleLinuxAndNet(bin, args, options = {}) {
+    if (!this.multiCli && MultiCliDispatcher) {
+      this.multiCli = new MultiCliDispatcher({
+        graph: this.graph,
+        vfs: this.vfs
+      });
+    }
+
+    if (this.multiCli) {
+      const argv = [bin, ...args];
+      let res;
+      switch (bin) {
+        case 'ls':
+          res = this.multiCli.handleLs({ argv, cwd: this.cwd, vfs: this.vfs });
+          break;
+        case 'cd':
+          res = this.multiCli.handleCd({ argv, cwd: this.cwd, vfs: this.vfs, env: this.env });
+          if (res.cwd) {
+            this.cwd = res.cwd;
+            this.env.PWD = res.cwd;
+            if (this.pipelineDriver) this.pipelineDriver.cwd = res.cwd;
+          }
+          break;
+        case 'pwd':
+          res = this.multiCli.handlePwd({ cwd: this.cwd });
+          break;
+        case 'cat':
+          res = this.multiCli.handleCat({ argv, stdin: options.stdin || '', cwd: this.cwd, vfs: this.vfs });
+          break;
+        case 'mkdir':
+          res = this.multiCli.handleMkdir({ argv, cwd: this.cwd, vfs: this.vfs });
+          break;
+        case 'rm':
+          res = this.multiCli.handleRm({ argv, cwd: this.cwd, vfs: this.vfs });
+          break;
+        case 'cp':
+          res = this.multiCli.handleCp({ argv, cwd: this.cwd, vfs: this.vfs });
+          break;
+        case 'mv':
+          res = this.multiCli.handleMv({ argv, cwd: this.cwd, vfs: this.vfs });
+          break;
+        case 'chmod':
+          res = this.multiCli.handleChmod({ argv, cwd: this.cwd, vfs: this.vfs });
+          break;
+        case 'chown':
+          res = this.multiCli.handleChown({ argv, cwd: this.cwd, vfs: this.vfs });
+          break;
+        case 'ln':
+          res = this.multiCli.handleLn({ argv, cwd: this.cwd, vfs: this.vfs });
+          break;
+        case 'find':
+          res = this.multiCli.handleFind({ argv, cwd: this.cwd, vfs: this.vfs });
+          break;
+        case 'touch':
+          res = this._handleTouch({ args, cwd: this.cwd });
+          break;
+        case 'env':
+          res = this.multiCli.handleEnv({ env: this.env });
+          break;
+        case 'export':
+          res = this.multiCli.handleExport({ argv, env: this.env });
+          break;
+        case 'echo':
+          res = this.multiCli.handleEcho({ argv });
+          break;
+        case 'systemctl':
+          res = this.multiCli.handleSystemctl({ argv });
+          if (this.cluster && this.cluster.state) {
+            const action = args[0] || 'status';
+            const unit = (args[1] || 'kubelet').replace(/\.service$/, '');
+            if (action === 'restart' || action === 'start' || action === 'enable') {
+              this.cluster.state.systemdUnits[unit] = { active: 'active', enabled: true, description: `Hardened ${unit} daemon` };
+              if (unit === 'kubelet' || unit === 'containerd') {
+                const nodes = this.cluster.getResources('Node');
+                for (const node of nodes) {
+                  node.status = node.status || {};
+                  if (node.status.phase === 'NotReady') node.status.phase = 'Ready';
+                }
+                this.cluster.reconcile();
+              }
+            } else if (action === 'stop' || action === 'disable') {
+              this.cluster.state.systemdUnits[unit] = { active: 'inactive', enabled: false, description: `Stopped ${unit} daemon` };
+              if (unit === 'kubelet') {
+                const nodes = this.cluster.getResources('Node');
+                for (const node of nodes) {
+                  node.status = node.status || {};
+                  node.status.phase = 'NotReady';
+                }
+              }
             }
           }
-          this.cluster.reconcile();
-        }
-        return { exitCode: 0, output: `● ${unit}.service - active (running) [restarted & enabled]` };
+          break;
+        case 'journalctl':
+          res = this.multiCli.handleJournalctl({ argv });
+          break;
+        case 'sysctl':
+          res = this.multiCli.handleSysctl({ argv });
+          if (this.cluster && this.cluster.state && args[0] === '-w' && args[1] && args[1].includes('=')) {
+            const [k, v] = args[1].split('=');
+            this.cluster.state.sysctls[k.trim()] = v.trim();
+          }
+          break;
+        case 'unshare':
+          res = this.multiCli.handleUnshare({ argv });
+          break;
+        case 'kill':
+          res = this.multiCli.handleKill({ argv });
+          break;
+        case 'iptables':
+          res = this.multiCli.handleIptables({ argv });
+          break;
+        case 'ip':
+          res = this.multiCli.handleIp({ argv });
+          break;
+        case 'ss':
+          res = this.multiCli.handleSs({ argv });
+          break;
+        case 'nc':
+        case 'netcat':
+          res = this.multiCli.handleNc({ argv });
+          break;
+        case 'dig':
+          res = this.multiCli.handleDig({ argv });
+          break;
+        case 'nslookup':
+          res = this.multiCli.handleNslookup({ argv });
+          break;
+        case 'curl':
+          res = this.multiCli.handleCurl({ argv });
+          break;
+        case 'ping':
+          res = this.multiCli.handlePing({ argv });
+          break;
+        case 'traceroute':
+          res = this.multiCli.handleTraceroute({ argv });
+          break;
+        case 'ps':
+        case 'top':
+          res = this.multiCli.handlePs({ argv });
+          break;
+        case 'df':
+          res = this.multiCli.handleDf({ argv });
+          break;
+        case 'free':
+          res = this.multiCli.handleFree({ argv });
+          break;
+        case 'uname':
+          res = this.multiCli.handleUname({ argv });
+          break;
+        case 'whoami':
+          res = { stdout: 'learner\n', stderr: '', code: 0 };
+          break;
+        case 'id':
+          res = { stdout: 'uid=1000(learner) gid=1000(learner) groups=1000(learner),27(sudo),999(docker)\n', stderr: '', code: 0 };
+          break;
+        default:
+          res = { stdout: 'Linux kubelabs-node 6.8.0-40-generic x86_64 GNU/Linux\n', stderr: '', code: 0 };
       }
-      const st = this.cluster.state.systemdUnits[unit] || { active: 'active', enabled: true };
+
+      const out = (res.stdout || '') + (res.stderr || '');
       return {
-        exitCode: 0,
-        output: `● ${unit}.service - Cloud-Native System Daemon\n   Loaded: loaded (/etc/systemd/system/${unit}.service; enabled)\n   Active: ${st.active} (running)`
+        exitCode: res.code !== undefined ? res.code : 0,
+        code: res.code !== undefined ? res.code : 0,
+        output: out.replace(/\n$/, ''),
+        stdout: res.stdout || '',
+        stderr: res.stderr || ''
       };
-    }
-
-    if (bin === 'sysctl') {
-      if (args[0] === '-w' && args[1] && args[1].includes('=')) {
-        const [k, v] = args[1].split('=');
-        this.cluster.state.sysctls[k] = v;
-        return { exitCode: 0, output: `${k} = ${v}` };
-      }
-      const entries = Object.entries(this.cluster.state.sysctls).map(([k, v]) => `${k} = ${v}`);
-      return { exitCode: 0, output: entries.join('\n') };
-    }
-
-    if (bin === 'ss') {
-      return {
-        exitCode: 0,
-        output: [
-          'Netid  State   Recv-Q  Send-Q  Local Address:Port   Peer Address:Port  Process',
-          'tcp    LISTEN  0       4096    0.0.0.0:6443         0.0.0.0:*          users:(("kube-apiserver",pid=1102))',
-          'tcp    LISTEN  0       4096    127.0.0.1:10248      0.0.0.0:*          users:(("kubelet",pid=1420))',
-          'tcp    LISTEN  0       4096    0.0.0.0:80           0.0.0.0:*          users:(("envoy",pid=2190))'
-        ].join('\n')
-      };
-    }
-
-    if (bin === 'ip') {
-      if (args[0] === 'route' || args[0] === 'r') {
-        return {
-          exitCode: 0,
-          output: 'default via 192.168.10.1 dev eth0 proto static\n10.244.0.0/16 via 10.244.0.1 dev cilium_host src 10.244.0.3'
-        };
-      }
-      return {
-        exitCode: 0,
-        output: '1: lo: <LOOPBACK,UP,LOWER_UP> inet 127.0.0.1/8\n2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> inet 192.168.10.10/24\n3: cilium_host: <UP,LOWER_UP> inet 10.244.0.3/32'
-      };
-    }
-
-    if (bin === 'df') {
-      return {
-        exitCode: 0,
-        output: 'Filesystem      Size  Used Avail Use% Mounted on\n/dev/nvme0n1p1  100G   18G   82G  18% /\noverlay         100G   18G   82G  18% /var/lib/containerd'
-      };
-    }
-
-    if (bin === 'free') {
-      return {
-        exitCode: 0,
-        output: '               total        used        free      shared  buff/cache   available\nMem:           16384        3120        9840         120        3424       12980'
-      };
-    }
-
-    if (bin === 'ps' || bin === 'top') {
-      return {
-        exitCode: 0,
-        output: [
-          'PID   USER     TIME  COMMAND',
-          '1     root     0:04  /sbin/init',
-          '1102  root     1:18  kube-apiserver --authorization-mode=Node,RBAC',
-          '1204  root     0:52  containerd',
-          '1420  root     1:05  kubelet --container-runtime-endpoint=unix:///run/containerd/containerd.sock'
-        ].join('\n')
-      };
-    }
-
-    if (bin === 'dig' || bin === 'nslookup' || bin === 'ping' || bin === 'curl') {
-      const target = args[args.length - 1] || 'kubernetes.default.svc.cluster.local';
-      return {
-        exitCode: 0,
-        output: `Resolved ${target} -> 10.96.0.1 (HTTP 200 OK / 0.4ms RTT)`
-      };
-    }
-
-    if (bin === 'pwd') {
-      return { exitCode: 0, output: '/home/learner' };
-    }
-
-    if (bin === 'echo') {
-      return { exitCode: 0, output: args.join(' ').replace(/^['"]|['"]$/g, '') };
-    }
-
-    if (bin === 'ls') {
-      const target = args.find((a) => !a.startsWith('-')) || '/home/learner';
-      if (this.vfs) {
-        try {
-          const files = this.vfs.listDir(target);
-          return { exitCode: 0, output: files.join('  ') || '(empty directory)' };
-        } catch (e) {
-          return { exitCode: 1, output: `ls: cannot access '${target}': ${e.message}` };
-        }
-      }
-      return { exitCode: 0, output: 'manifest.yaml  deployment.yaml  service.yaml' };
-    }
-
-    if (bin === 'cat') {
-      const target = args.find((a) => !a.startsWith('-'));
-      if (target && this.vfs) {
-        try {
-          const content = this.vfs.readFile(target);
-          return { exitCode: 0, output: content };
-        } catch (e) {
-          return { exitCode: 1, output: `cat: ${target}: ${e.message}` };
-        }
-      }
-      return { exitCode: 0, output: '' };
-    }
-
-    if (bin === 'mkdir') {
-      const target = args[args.length - 1];
-      if (target && this.vfs) {
-        try {
-          this.vfs.mkdir(target);
-          return { exitCode: 0, output: '' };
-        } catch (e) {
-          return { exitCode: 1, output: `mkdir: cannot create directory '${target}': ${e.message}` };
-        }
-      }
-      return { exitCode: 0, output: '' };
-    }
-
-    if (bin === 'rm') {
-      const target = args[args.length - 1];
-      if (target && this.vfs) {
-        try {
-          this.vfs.rm(target);
-          return { exitCode: 0, output: '' };
-        } catch (e) {
-          return { exitCode: 1, output: `rm: cannot remove '${target}': ${e.message}` };
-        }
-      }
-      return { exitCode: 0, output: '' };
     }
 
     return {
@@ -3231,8 +3297,8 @@ class TerminalEngine {
     this.pipelineDriver.registerCommand('openssl', (ctx) => opensslTool(ctx));
 
     // systemctl & journalctl
-    this.pipelineDriver.registerCommand('systemctl', (ctx) => systemctlTool(ctx));
-    this.pipelineDriver.registerCommand('journalctl', (ctx) => journalctlTool(ctx));
+    this.pipelineDriver.registerCommand('systemctl', (ctx) => (this.multiCli ? this.multiCli.handleSystemctl(ctx) : systemctlTool(ctx)));
+    this.pipelineDriver.registerCommand('journalctl', (ctx) => (this.multiCli ? this.multiCli.handleJournalctl(ctx) : journalctlTool(ctx)));
 
     // ls file lister
     this.pipelineDriver.registerCommand('ls', (ctx) => this._handleLs(ctx));
@@ -3446,38 +3512,53 @@ class TerminalEngine {
 
   _handleCp(ctx) {
     const { args, cwd } = unpackArgs(ctx);
-    if (args.length < 2) {
+    let recursive = false;
+    const paths = [];
+    for (let i = 0; i < args.length; i++) {
+      if (args[i] === '-r' || args[i] === '-R') recursive = true;
+      else if (!args[i].startsWith('-')) paths.push(args[i]);
+    }
+    if (paths.length < 2) {
       return { stdout: '', stderr: 'cp: missing file operand\n', code: 1 };
     }
     const currentCwd = cwd || this.cwd;
-    const src = this.vfs.normalizePath(args[0], currentCwd);
-    const dst = this.vfs.normalizePath(args[1], currentCwd);
+    const src = this.vfs.normalizePath(paths[0], currentCwd);
+    const dst = this.vfs.normalizePath(paths[1], currentCwd);
 
     try {
-      const content = this.vfs.readFile(src);
-      this.vfs.writeFile(dst, content);
+      if (typeof this.vfs.cp === 'function') {
+        this.vfs.cp(src, dst, { recursive });
+      } else {
+        const content = this.vfs.readFile(src);
+        this.vfs.writeFile(dst, content);
+      }
       return { stdout: '', stderr: '', code: 0 };
     } catch (err) {
-      return { stdout: '', stderr: `cp: cannot stat '${args[0]}': ${err.message}\n`, code: 1 };
+      return { stdout: '', stderr: `cp: cannot stat '${paths[0]}': ${err.message}\n`, code: 1 };
     }
   }
 
   _handleMv(ctx) {
     const { args, cwd } = unpackArgs(ctx);
-    if (args.length < 2) {
+    const paths = args.filter((a) => !a.startsWith('-'));
+    if (paths.length < 2) {
       return { stdout: '', stderr: 'mv: missing file operand\n', code: 1 };
     }
     const currentCwd = cwd || this.cwd;
-    const src = this.vfs.normalizePath(args[0], currentCwd);
-    const dst = this.vfs.normalizePath(args[1], currentCwd);
+    const src = this.vfs.normalizePath(paths[0], currentCwd);
+    const dst = this.vfs.normalizePath(paths[1], currentCwd);
 
     try {
-      const content = this.vfs.readFile(src);
-      this.vfs.writeFile(dst, content);
-      this.vfs.unlink(src);
+      if (typeof this.vfs.rename === 'function') {
+        this.vfs.rename(src, dst);
+      } else {
+        const content = this.vfs.readFile(src);
+        this.vfs.writeFile(dst, content);
+        this.vfs.unlink(src);
+      }
       return { stdout: '', stderr: '', code: 0 };
     } catch (err) {
-      return { stdout: '', stderr: `mv: cannot stat '${args[0]}': ${err.message}\n`, code: 1 };
+      return { stdout: '', stderr: `mv: cannot stat '${paths[0]}': ${err.message}\n`, code: 1 };
     }
   }
 

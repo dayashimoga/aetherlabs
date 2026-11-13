@@ -15,4 +15,6 @@ require('./stage1-session-binding.test');
 require('./stage1-terminal-emulator.test');
 require('./stage1-quick-keybar.test');
 require('./stage1-autocomplete.test');
+require('./stage1-cluster-ops.test');
+require('./stage1-linux-net-git.test');
 

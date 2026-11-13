@@ -105,6 +105,13 @@ try {
   IstioMeshController = (typeof globalThis !== 'undefined' && globalThis.IstioMeshController);
 }
 
+let GitEngine;
+try {
+  GitEngine = require('./gitEngine').GitEngine;
+} catch {
+  GitEngine = (typeof globalThis !== 'undefined' && globalThis.GitEngine);
+}
+
 // ---------------------------------------------------------------------------
 // Kind Alias & Normalization Map
 // ---------------------------------------------------------------------------
@@ -253,6 +260,37 @@ class MultiCliDispatcher {
     this.vpa = this.autoscaling ? this.autoscaling.vpa : null;
     this.karpenter = this.autoscaling ? this.autoscaling.karpenter : null;
     this.mesh = this.autoscaling ? this.autoscaling.istio : null;
+
+    // Initialize Git & Simulated Host/Runtime Subsystems
+    this.gitEngine = options.gitEngine || (GitEngine ? new GitEngine({ vfs: this.vfs }) : null);
+    this.systemdUnits = {
+      kubelet: { status: 'active', substate: 'running', pid: 1420, desc: 'kubelet: The Kubernetes Node Agent' },
+      containerd: { status: 'active', substate: 'running', pid: 1204, desc: 'containerd container runtime' },
+      etcd: { status: 'active', substate: 'running', pid: 940, desc: 'etcd distributed key-value store' },
+      docker: { status: 'active', substate: 'running', pid: 1150, desc: 'Docker Application Container Engine' },
+      'systemd-resolved': { status: 'active', substate: 'running', pid: 610, desc: 'Network Name Resolution' },
+      ssh: { status: 'active', substate: 'running', pid: 720, desc: 'OpenBSD Secure Shell server' }
+    };
+    this.sysctls = {
+      'net.ipv4.ip_forward': '1',
+      'net.bridge.bridge-nf-call-iptables': '1',
+      'net.bridge.bridge-nf-call-ip6tables': '1',
+      'vm.max_map_count': '262144',
+      'fs.inotify.max_user_watches': '524288'
+    };
+    this.simulatedContainers = [
+      { id: 'a1b2c3d4e5f6', name: 'k8s_kube-apiserver', image: 'registry.k8s.io/kube-apiserver:v1.31.0', status: 'Up 2 days', ports: '6443/tcp', command: '"kube-apiserver --..."', created: '2 days ago' },
+      { id: 'b2c3d4e5f6a1', name: 'k8s_etcd', image: 'registry.k8s.io/etcd:3.5.15-0', status: 'Up 2 days', ports: '2379-2380/tcp', command: '"etcd --..."', created: '2 days ago' },
+      { id: 'c3d4e5f6a1b2', name: 'web-gateway', image: 'nginx:1.27-alpine', status: 'Up 5 hours', ports: '0.0.0.0:80->80/tcp', command: '"/docker-entrypoint..."', created: '5 hours ago' }
+    ];
+    this.simulatedProcesses = [
+      { user: 'root', pid: 1, cpu: '0.0', mem: '0.1', vsz: '168920', rss: '12410', tty: '?', stat: 'Ss', start: 'Nov12', time: '0:04', command: '/sbin/init' },
+      { user: 'root', pid: 940, cpu: '0.8', mem: '2.1', vsz: '2104520', rss: '145200', tty: '?', stat: 'Ssl', start: 'Nov12', time: '2:15', command: 'etcd --data-dir=/var/lib/etcd' },
+      { user: 'root', pid: 1102, cpu: '1.4', mem: '3.4', vsz: '2840120', rss: '280140', tty: '?', stat: 'Ssl', start: 'Nov12', time: '5:42', command: 'kube-apiserver --authorization-mode=Node,RBAC' },
+      { user: 'root', pid: 1204, cpu: '0.5', mem: '1.8', vsz: '1940320', rss: '84200', tty: '?', stat: 'Ssl', start: 'Nov12', time: '1:12', command: 'containerd' },
+      { user: 'root', pid: 1420, cpu: '0.9', mem: '2.2', vsz: '2210450', rss: '104500', tty: '?', stat: 'Ssl', start: 'Nov12', time: '3:30', command: 'kubelet --container-runtime-endpoint=unix:///run/containerd/containerd.sock' },
+      { user: 'learner', pid: 3410, cpu: '0.0', mem: '0.1', vsz: '18420', rss: '4120', tty: 'pts/0', stat: 'Ss', start: '16:00', time: '0:00', command: 'bash' }
+    ];
 
     // Seed base cluster infrastructure if empty
     this._bootstrapDefaultResources();
@@ -412,7 +450,8 @@ class MultiCliDispatcher {
 
     pipelineDriver.registerCommand('helm', this.handleHelm.bind(this));
     pipelineDriver.registerCommand('docker', this.handleDocker.bind(this));
-    pipelineDriver.registerCommand('crictl', this.handleDocker.bind(this));
+    pipelineDriver.registerCommand('crictl', this.handleCrictl.bind(this));
+    pipelineDriver.registerCommand('git', this.handleGit.bind(this));
     pipelineDriver.registerCommand('argocd', this.handleArgoCD.bind(this));
     pipelineDriver.registerCommand('istioctl', this.handleIstioctl.bind(this));
     pipelineDriver.registerCommand('tofu', this.handleTofu.bind(this));
@@ -439,15 +478,38 @@ class MultiCliDispatcher {
     pipelineDriver.registerCommand('nslookup', this.handleNslookup.bind(this));
     pipelineDriver.registerCommand('traceroute', this.handleTraceroute.bind(this));
     pipelineDriver.registerCommand('ip', this.handleIp.bind(this));
+    pipelineDriver.registerCommand('iptables', this.handleIptables.bind(this));
     pipelineDriver.registerCommand('ss', this.handleSs.bind(this));
+    pipelineDriver.registerCommand('nc', this.handleNc.bind(this));
+    pipelineDriver.registerCommand('netcat', this.handleNc.bind(this));
     pipelineDriver.registerCommand('ping', this.handlePing.bind(this));
     pipelineDriver.registerCommand('ps', this.handlePs.bind(this));
+    pipelineDriver.registerCommand('kill', this.handleKill.bind(this));
+    pipelineDriver.registerCommand('systemctl', this.handleSystemctl.bind(this));
+    pipelineDriver.registerCommand('journalctl', this.handleJournalctl.bind(this));
+    pipelineDriver.registerCommand('sysctl', this.handleSysctl.bind(this));
+    pipelineDriver.registerCommand('unshare', this.handleUnshare.bind(this));
     pipelineDriver.registerCommand('top', this.handleTop.bind(this));
     pipelineDriver.registerCommand('df', this.handleDf.bind(this));
     pipelineDriver.registerCommand('free', this.handleFree.bind(this));
     pipelineDriver.registerCommand('uname', this.handleUname.bind(this));
     pipelineDriver.registerCommand('whoami', () => ({ stdout: 'learner\n', stderr: '', code: 0 }));
     pipelineDriver.registerCommand('id', () => ({ stdout: 'uid=1000(learner) gid=1000(learner) groups=1000(learner),27(sudo),999(docker)\n', stderr: '', code: 0 }));
+    pipelineDriver.registerCommand('ls', this.handleLs.bind(this));
+    pipelineDriver.registerCommand('cd', this.handleCd.bind(this));
+    pipelineDriver.registerCommand('pwd', this.handlePwd.bind(this));
+    pipelineDriver.registerCommand('cat', this.handleCat.bind(this));
+    pipelineDriver.registerCommand('mkdir', this.handleMkdir.bind(this));
+    pipelineDriver.registerCommand('rm', this.handleRm.bind(this));
+    pipelineDriver.registerCommand('cp', this.handleCp.bind(this));
+    pipelineDriver.registerCommand('mv', this.handleMv.bind(this));
+    pipelineDriver.registerCommand('chmod', this.handleChmod.bind(this));
+    pipelineDriver.registerCommand('chown', this.handleChown.bind(this));
+    pipelineDriver.registerCommand('ln', this.handleLn.bind(this));
+    pipelineDriver.registerCommand('find', this.handleFind.bind(this));
+    pipelineDriver.registerCommand('env', this.handleEnv.bind(this));
+    pipelineDriver.registerCommand('export', this.handleExport.bind(this));
+    pipelineDriver.registerCommand('echo', this.handleEcho.bind(this));
   }
 
   /**
@@ -462,7 +524,8 @@ class MultiCliDispatcher {
       k: this.handleKubectl.bind(this),
       helm: this.handleHelm.bind(this),
       docker: this.handleDocker.bind(this),
-      crictl: this.handleDocker.bind(this),
+      crictl: this.handleCrictl.bind(this),
+      git: this.handleGit.bind(this),
       argocd: this.handleArgoCD.bind(this),
       istioctl: this.handleIstioctl.bind(this),
       tofu: this.handleTofu.bind(this),
@@ -489,15 +552,38 @@ class MultiCliDispatcher {
       nslookup: this.handleNslookup.bind(this),
       traceroute: this.handleTraceroute.bind(this),
       ip: this.handleIp.bind(this),
+      iptables: this.handleIptables.bind(this),
       ss: this.handleSs.bind(this),
+      nc: this.handleNc.bind(this),
+      netcat: this.handleNc.bind(this),
       ping: this.handlePing.bind(this),
       ps: this.handlePs.bind(this),
+      kill: this.handleKill.bind(this),
+      systemctl: this.handleSystemctl.bind(this),
+      journalctl: this.handleJournalctl.bind(this),
+      sysctl: this.handleSysctl.bind(this),
+      unshare: this.handleUnshare.bind(this),
       top: this.handleTop.bind(this),
       df: this.handleDf.bind(this),
       free: this.handleFree.bind(this),
       uname: this.handleUname.bind(this),
       whoami: () => ({ stdout: 'learner\n', stderr: '', code: 0 }),
-      id: () => ({ stdout: 'uid=1000(learner) gid=1000(learner) groups=1000(learner),27(sudo),999(docker)\n', stderr: '', code: 0 })
+      id: () => ({ stdout: 'uid=1000(learner) gid=1000(learner) groups=1000(learner),27(sudo),999(docker)\n', stderr: '', code: 0 }),
+      ls: this.handleLs.bind(this),
+      cd: this.handleCd.bind(this),
+      pwd: this.handlePwd.bind(this),
+      cat: this.handleCat.bind(this),
+      mkdir: this.handleMkdir.bind(this),
+      rm: this.handleRm.bind(this),
+      cp: this.handleCp.bind(this),
+      mv: this.handleMv.bind(this),
+      chmod: this.handleChmod.bind(this),
+      chown: this.handleChown.bind(this),
+      ln: this.handleLn.bind(this),
+      find: this.handleFind.bind(this),
+      env: this.handleEnv.bind(this),
+      export: this.handleExport.bind(this),
+      echo: this.handleEcho.bind(this)
     };
 
     const handler = handlers[bin];
@@ -2464,18 +2550,16 @@ class MultiCliDispatcher {
   }
 
   // -------------------------------------------------------------------------
-  // 3. DOCKER / CRICTL HANDLER
+  // 3. DOCKER & CRICTL CONTAINER RUNTIME HANDLERS
   // -------------------------------------------------------------------------
 
-  handleDocker({ argv = [] }) {
+  handleDocker({ argv = [], cwd = '/home/learner', vfs = null }) {
     const sub = argv[1];
     if (!sub || sub === 'ps') {
+      const showAll = argv.includes('-a') || argv.includes('--all');
+      const containers = showAll ? this.simulatedContainers : this.simulatedContainers.filter((c) => c.status.startsWith('Up'));
       const headers = ['CONTAINER ID', 'IMAGE', 'COMMAND', 'CREATED', 'STATUS', 'PORTS', 'NAMES'];
-      const rows = [
-        ['a1b2c3d4e5f6', 'registry.k8s.io/kube-apiserver:v1.31.0', '"kube-apiserver --..."', '2 days ago', 'Up 2 days', '6443/tcp', 'k8s_kube-apiserver'],
-        ['b2c3d4e5f6a1', 'registry.k8s.io/etcd:3.5.15-0', '"etcd --..."', '2 days ago', 'Up 2 days', '2379-2380/tcp', 'k8s_etcd'],
-        ['c3d4e5f6a1b2', 'nginx:1.27-alpine', '"/docker-entrypoint..."', '5 hours ago', 'Up 5 hours', '0.0.0.0:80->80/tcp', 'web-gateway']
-      ];
+      const rows = containers.map((c) => [c.id, c.image, c.command, c.created, c.status, c.ports, c.name]);
       return { stdout: this._formatTable(headers, rows) + '\n', stderr: '', code: 0 };
     }
 
@@ -2484,23 +2568,235 @@ class MultiCliDispatcher {
       const rows = [
         ['nginx', '1.27-alpine', 'e78d910a2f', '2 weeks ago', '42.8MB'],
         ['redis', '7.2-alpine', 'f49a1b8c0e', '3 weeks ago', '38.4MB'],
-        ['registry.k8s.io/kube-apiserver', 'v1.31.0', '98a7b6c5d4', '1 month ago', '128MB']
+        ['registry.k8s.io/kube-apiserver', 'v1.31.0', '98a7b6c5d4', '1 month ago', '128MB'],
+        ['registry.k8s.io/etcd', '3.5.15-0', '8f12c904e5', '1 month ago', '95.2MB'],
+        ['gcr.io/distroless/static-debian12', 'nonroot', '4d9e8a1b2c', '3 weeks ago', '2.4MB']
       ];
       return { stdout: this._formatTable(headers, rows) + '\n', stderr: '', code: 0 };
     }
 
     if (sub === 'run') {
-      const img = argv[argv.length - 1];
+      let name = null;
+      let ports = '80/tcp';
+      let img = null;
+      for (let i = 2; i < argv.length; i++) {
+        if (argv[i] === '--name' && i + 1 < argv.length) {
+          name = argv[++i];
+        } else if (argv[i] === '-p' && i + 1 < argv.length) {
+          ports = argv[++i] + '/tcp';
+        } else if (!argv[i].startsWith('-') && !img) {
+          img = argv[i];
+        }
+      }
+      img = img || 'alpine:latest';
       const id = Math.random().toString(16).slice(2, 14);
+      name = name || `container-${id.slice(0, 6)}`;
+      this.simulatedContainers.push({
+        id,
+        name,
+        image: img,
+        status: 'Up 1 second',
+        ports,
+        command: '"/entrypoint.sh"',
+        created: '1 second ago'
+      });
       return { stdout: `${id}\n`, stderr: '', code: 0 };
     }
 
-    if (sub === 'stop' || sub === 'rm') {
-      const id = argv[2] || 'container';
-      return { stdout: `${id}\n`, stderr: '', code: 0 };
+    if (sub === 'build') {
+      let tag = 'app:latest';
+      for (let i = 2; i < argv.length; i++) {
+        if ((argv[i] === '-t' || argv[i] === '--tag') && i + 1 < argv.length) {
+          tag = argv[++i];
+        }
+      }
+      const lines = [
+        '[+] Building 1.1s (7/7) FINISHED                                docker:default',
+        ' => [internal] load build definition from Dockerfile                      0.0s',
+        ' => => transferring dockerfile: 312B                                      0.0s',
+        ' => [internal] load metadata for docker.io/library/alpine:latest          0.2s',
+        ' => [1/3] FROM docker.io/library/alpine:latest                            0.0s',
+        ' => [2/3] COPY . /app                                                     0.2s',
+        ' => [3/3] RUN chmod +x /app/entrypoint.sh                                 0.4s',
+        ' => exporting to image                                                    0.1s',
+        ' => => exporting layers                                                   0.1s',
+        ` => => naming to docker.io/library/${tag}                                   0.0s`
+      ];
+      return { stdout: lines.join('\n') + '\n', stderr: '', code: 0 };
+    }
+
+    if (sub === 'logs') {
+      const target = argv[2] || 'container';
+      return {
+        stdout: `2026-11-12T16:00:00.123Z [INFO] Initializing service container ${target}\n2026-11-12T16:00:01.456Z [INFO] Listening for HTTP connections on port 8080\n2026-11-12T16:00:02.789Z [INFO] Ready to receive traffic.\n`,
+        stderr: '',
+        code: 0
+      };
+    }
+
+    if (sub === 'exec') {
+      const cmdParts = argv.slice(3).filter((a) => !a.startsWith('-'));
+      const cmd = cmdParts.join(' ') || 'whoami';
+      if (cmd === 'whoami' || cmd === 'id') {
+        return { stdout: 'root\n', stderr: '', code: 0 };
+      }
+      if (cmd.includes('uname')) {
+        return { stdout: 'Linux container 6.8.0-40-generic x86_64 Linux\n', stderr: '', code: 0 };
+      }
+      return { stdout: `${cmd}: execution successful\n`, stderr: '', code: 0 };
+    }
+
+    if (sub === 'inspect') {
+      const target = argv[2] || 'container';
+      const c = this.simulatedContainers.find((x) => x.id.startsWith(target) || x.name === target) || this.simulatedContainers[0];
+      const doc = [{
+        Id: c.id,
+        Created: new Date().toISOString(),
+        Path: '/entrypoint.sh',
+        Args: [],
+        State: {
+          Status: c.status.startsWith('Up') ? 'running' : 'exited',
+          Running: c.status.startsWith('Up'),
+          Paused: false,
+          Restarting: false,
+          OOMKilled: false,
+          Dead: false,
+          Pid: 1204,
+          ExitCode: 0
+        },
+        Image: c.image,
+        NetworkSettings: {
+          IPAddress: '172.17.0.2',
+          Gateway: '172.17.0.1',
+          Ports: { [c.ports]: null }
+        }
+      }];
+      return { stdout: JSON.stringify(doc, null, 2) + '\n', stderr: '', code: 0 };
+    }
+
+    if (sub === 'network') {
+      const action = argv[2] || 'ls';
+      if (action === 'ls') {
+        const headers = ['NETWORK ID', 'NAME', 'DRIVER', 'SCOPE'];
+        const rows = [
+          ['8f12a3b4c5d6', 'bridge', 'bridge', 'local'],
+          ['1a2b3c4d5e6f', 'host', 'host', 'local'],
+          ['7e8d9c0b1a2f', 'none', 'null', 'local'],
+          ['4c5d6e7f8a9b', 'cilium-net', 'overlay', 'global']
+        ];
+        return { stdout: this._formatTable(headers, rows) + '\n', stderr: '', code: 0 };
+      }
+      return { stdout: `network ${action} succeeded\n`, stderr: '', code: 0 };
+    }
+
+    if (sub === 'stop') {
+      const target = argv[2] || 'container';
+      const c = this.simulatedContainers.find((x) => x.id.startsWith(target) || x.name === target);
+      if (c) c.status = 'Exited (0) 1 second ago';
+      return { stdout: `${target}\n`, stderr: '', code: 0 };
+    }
+
+    if (sub === 'rm') {
+      const target = argv[2] || 'container';
+      const idx = this.simulatedContainers.findIndex((x) => x.id.startsWith(target) || x.name === target);
+      if (idx !== -1) this.simulatedContainers.splice(idx, 1);
+      return { stdout: `${target}\n`, stderr: '', code: 0 };
+    }
+
+    if (sub === 'rmi') {
+      const img = argv[2] || 'image';
+      return { stdout: `Untagged: ${img}\nDeleted: sha256:4d9e8a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9\n`, stderr: '', code: 0 };
+    }
+
+    if (sub === 'version' || argv.includes('--version') || argv.includes('-v')) {
+      return { stdout: 'Docker version 26.1.4, build 5650f9b\n', stderr: '', code: 0 };
     }
 
     return { stdout: 'docker daemon active\n', stderr: '', code: 0 };
+  }
+
+  handleCrictl({ argv = [] }) {
+    const sub = argv[1] || 'pods';
+    if (sub === 'pods') {
+      const pods = this.graph ? this.graph.list({ kind: 'Pod' }) : [];
+      const headers = ['POD ID', 'CREATED', 'STATE', 'NAME', 'NAMESPACE', 'ATTEMPT', 'RUNTIME'];
+      const rows = pods.map((p) => {
+        const id = p.metadata?.uid?.slice(0, 13) || Math.random().toString(16).slice(2, 15);
+        const name = p.metadata?.name || 'pod';
+        const ns = p.metadata?.namespace || 'default';
+        const state = (p.status?.phase === 'Running' || !p.status?.phase) ? 'Ready' : 'NotReady';
+        return [id, '2 hours ago', state, name, ns, '0', '(default)'];
+      });
+      if (rows.length === 0) {
+        rows.push(['a1b2c3d4e5f6a', '2 hours ago', 'Ready', 'coredns-7d8899c99c-c8k7p', 'kube-system', '0', '(default)']);
+      }
+      return { stdout: this._formatTable(headers, rows) + '\n', stderr: '', code: 0 };
+    }
+
+    if (sub === 'ps') {
+      const headers = ['CONTAINER', 'IMAGE', 'CREATED', 'STATE', 'NAME', 'ATTEMPT', 'POD ID'];
+      const rows = [
+        ['a1b2c3d4e5f6', 'registry.k8s.io/kube-apiserver:v1.31.0', '2 days ago', 'Running', 'kube-apiserver', '0', 'f1e2d3c4b5a6'],
+        ['b2c3d4e5f6a1', 'registry.k8s.io/etcd:3.5.15-0', '2 days ago', 'Running', 'etcd', '0', 'e2d3c4b5a6f1'],
+        ['c3d4e5f6a1b2', 'nginx:1.27-alpine', '5 hours ago', 'Running', 'gateway', '0', 'd3c4b5a6f1e2']
+      ];
+      return { stdout: this._formatTable(headers, rows) + '\n', stderr: '', code: 0 };
+    }
+
+    if (sub === 'inspect' || sub === 'inspectp') {
+      const id = argv[2] || 'container';
+      const doc = {
+        status: {
+          id,
+          metadata: { name: id, attempt: 0 },
+          state: 'CONTAINER_RUNNING',
+          createdAt: new Date().toISOString(),
+          startedAt: new Date().toISOString(),
+          network: { ip: '10.244.1.15' }
+        },
+        info: { sandboxID: 'f1e2d3c4b5a6', pid: 1420 }
+      };
+      return { stdout: JSON.stringify(doc, null, 2) + '\n', stderr: '', code: 0 };
+    }
+
+    if (sub === 'logs') {
+      const id = argv[2] || 'container';
+      return { stdout: `time="2026-11-12T16:00:00Z" level=info msg="CRI container ${id} healthy"\n`, stderr: '', code: 0 };
+    }
+
+    if (sub === 'images') {
+      const headers = ['IMAGE', 'TAG', 'IMAGE ID', 'SIZE'];
+      const rows = [
+        ['registry.k8s.io/kube-apiserver', 'v1.31.0', '98a7b6c5d4', '128MB'],
+        ['registry.k8s.io/etcd', '3.5.15-0', '8f12c904e5', '95.2MB'],
+        ['registry.k8s.io/pause', '3.9', 'e78d910a2f', '750kB'],
+        ['nginx', '1.27-alpine', 'c1b2a3f4e5', '42.8MB']
+      ];
+      return { stdout: this._formatTable(headers, rows) + '\n', stderr: '', code: 0 };
+    }
+
+    if (sub === 'stats') {
+      const headers = ['CONTAINER', 'CPU %', 'MEM', 'DISK', 'INODES'];
+      const rows = [
+        ['a1b2c3d4e5f6', '1.42', '240MB', '4.2MB', '120'],
+        ['b2c3d4e5f6a1', '0.81', '145MB', '28MB', '450'],
+        ['c3d4e5f6a1b2', '0.12', '18MB', '1.1MB', '45']
+      ];
+      return { stdout: this._formatTable(headers, rows) + '\n', stderr: '', code: 0 };
+    }
+
+    return { stdout: 'crictl CRI connection active on /run/containerd/containerd.sock\n', stderr: '', code: 0 };
+  }
+
+  // -------------------------------------------------------------------------
+  // 3b. ISOMORPHIC GIT CLI HANDLER
+  // -------------------------------------------------------------------------
+
+  handleGit({ argv = [], cwd = '/home/learner', vfs = null }) {
+    if (!this.gitEngine) {
+      this.gitEngine = new GitEngine({ vfs: vfs || this.vfs });
+    }
+    return this.gitEngine.execute(argv.slice(1), { cwd, vfs: vfs || this.vfs });
   }
 
   // -------------------------------------------------------------------------
@@ -3333,6 +3629,9 @@ class MultiCliDispatcher {
   // -------------------------------------------------------------------------
 
   handleCurl({ argv = [] }) {
+    const isHead = argv.includes('-I') || argv.includes('--head');
+    const isInclude = argv.includes('-i') || argv.includes('--include');
+    const isVerbose = argv.includes('-v') || argv.includes('--verbose');
     const url = argv.find((a) => a.startsWith('http://') || a.startsWith('https://')) || 'http://kubernetes.default.svc';
 
     // Loki API integration
@@ -3379,13 +3678,54 @@ class MultiCliDispatcher {
       }
     }
 
+    if (url.includes('/livez') || url.includes('/readyz') || url.includes('/healthz')) {
+      if (isHead) {
+        const headers = [
+          'HTTP/1.1 200 OK',
+          'Audit-Id: 10a2b3c4-d5e6-7f8a-9b0c-1d2e3f4a5b6c',
+          'Cache-Control: no-cache, private',
+          'Content-Type: text/plain; charset=utf-8',
+          'X-Kubernetes-Pf-Flowschema-Uid: 8f12a3b4-c5d6-7e8f-9a0b-1c2d3e4f5a6b',
+          'X-Kubernetes-Pf-Prioritylevel-Uid: 2a3b4c5d-6e7f-8a9b-0c1d-2e3f4a5b6c7d',
+          'Date: ' + new Date().toUTCString(),
+          'Content-Length: 2'
+        ];
+        return { stdout: headers.join('\r\n') + '\r\n\r\n', stderr: '', code: 0 };
+      }
+      return {
+        stdout: (isInclude || isVerbose ? 'HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n' : '') + 'ok\n',
+        stderr: '',
+        code: 0
+      };
+    }
+
+    if (isHead) {
+      const headers = [
+        'HTTP/1.1 200 OK',
+        'Server: kubelabs-isomorphic-cluster/v4.0',
+        'Date: ' + new Date().toUTCString(),
+        'Content-Type: application/json'
+      ];
+      return { stdout: headers.join('\r\n') + '\r\n\r\n', stderr: '', code: 0 };
+    }
+
+    const payload = JSON.stringify({
+      status: '200 OK',
+      service: url,
+      server: 'kubelabs-isomorphic-cluster/v4.0',
+      timestamp: new Date().toISOString()
+    }, null, 2);
+
+    if (isInclude || isVerbose) {
+      return {
+        stdout: 'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n' + payload + '\n',
+        stderr: '',
+        code: 0
+      };
+    }
+
     return {
-      stdout: JSON.stringify({
-        status: '200 OK',
-        service: url,
-        server: 'kubelabs-isomorphic-cluster/v3.0',
-        timestamp: new Date().toISOString()
-      }, null, 2) + '\n',
+      stdout: payload + '\n',
       stderr: '',
       code: 0
     };
@@ -3602,7 +3942,7 @@ class MultiCliDispatcher {
       trace.hops.forEach((h, i) => {
         lines.push(` ${i + 1}  ${h.name} (${h.status}): ${h.details}`);
       });
-      return { stdout: lines.join('\n') + '\n', stderr: '', code: trace.allowed ? 0 : 1 };
+      return { stdout: lines.join('\n') + '\n', stderr: '', code: 0 };
     }
     return {
       stdout: `traceroute to ${target}, 30 hops max\n 1  10.244.0.1 (cbr0)  0.214 ms\n 2  ${target}  0.412 ms\n`,
@@ -3616,29 +3956,148 @@ class MultiCliDispatcher {
     if (sub === 'addr' || sub === 'a') {
       return {
         stdout: [
-          '1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN',
+          '1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN group default qlen 1000',
+          '    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00',
           '    inet 127.0.0.1/8 scope host lo',
-          '2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc mq state UP',
+          '       valid_lft forever preferred_lft forever',
+          '2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc mq state UP group default qlen 1000',
+          '    link/ether 02:42:ac:11:00:02 brd ff:ff:ff:ff:ff:ff',
           '    inet 192.168.1.10/24 brd 192.168.1.255 scope global eth0',
-          '3: cbr0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1450 qdisc noqueue state UP',
-          '    inet 10.244.0.1/24 scope global cbr0'
+          '       valid_lft forever preferred_lft forever',
+          '3: cilium_host: <UP,LOWER_UP> mtu 1500 qdisc noqueue state UP group default qlen 1000',
+          '    link/ether 26:95:67:3a:48:84 brd ff:ff:ff:ff:ff:ff',
+          '    inet 10.244.0.1/32 scope link cilium_host',
+          '       valid_lft forever preferred_lft forever'
         ].join('\n') + '\n',
         stderr: '',
         code: 0
       };
     }
-    return { stdout: 'default via 192.168.1.1 dev eth0 proto dhcp src 192.168.1.10 metric 100\n10.244.0.0/16 dev cbr0 proto kernel scope link src 10.244.0.1\n', stderr: '', code: 0 };
+
+    if (sub === 'route' || sub === 'r') {
+      return {
+        stdout: [
+          'default via 192.168.1.1 dev eth0 proto dhcp src 192.168.1.10 metric 100',
+          '10.244.0.0/16 via 10.244.0.1 dev cilium_host proto kernel src 10.244.0.1',
+          '192.168.1.0/24 dev eth0 proto kernel scope link src 192.168.1.10 metric 100'
+        ].join('\n') + '\n',
+        stderr: '',
+        code: 0
+      };
+    }
+
+    if (sub === 'link' || sub === 'l') {
+      return {
+        stdout: [
+          '1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN mode DEFAULT group default qlen 1000',
+          '    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00',
+          '2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc mq state UP mode DEFAULT group default qlen 1000',
+          '    link/ether 02:42:ac:11:00:02 brd ff:ff:ff:ff:ff:ff',
+          '3: cilium_host: <UP,LOWER_UP> mtu 1500 qdisc noqueue state UP mode DEFAULT group default qlen 1000',
+          '    link/ether 26:95:67:3a:48:84 brd ff:ff:ff:ff:ff:ff'
+        ].join('\n') + '\n',
+        stderr: '',
+        code: 0
+      };
+    }
+
+    if (sub === 'netns') {
+      const action = argv[2] || 'list';
+      if (action === 'list') {
+        return {
+          stdout: 'cni-0a1b2c3d4e (id: 0)\ncni-9f8e7d6c5b (id: 1)\n',
+          stderr: '',
+          code: 0
+        };
+      }
+      if (action === 'add' || action === 'del' || action === 'delete') {
+        return { stdout: '', stderr: '', code: 0 };
+      }
+      if (action === 'exec') {
+        const nsCmd = argv.slice(4).join(' ') || 'ip a';
+        return { stdout: `[netns ${argv[3]}] ${nsCmd}\n`, stderr: '', code: 0 };
+      }
+    }
+
+    return { stdout: 'default via 192.168.1.1 dev eth0 proto dhcp src 192.168.1.10 metric 100\n', stderr: '', code: 0 };
+  }
+
+  handleIptables({ argv = [] }) {
+    const isNat = argv.includes('-t') && (argv[argv.indexOf('-t') + 1] === 'nat');
+    const isList = argv.includes('-L') || argv.includes('--list') || argv.length <= 1;
+
+    if (isList) {
+      if (isNat) {
+        const lines = [
+          'Chain PREROUTING (policy ACCEPT 1420 packets, 85K bytes)',
+          ' pkts bytes target     prot opt in     out     source               destination',
+          ' 1420   85K KUBE-SERVICES  all  --  *      *       0.0.0.0/0            0.0.0.0/0            /* kubernetes service portals */',
+          '',
+          'Chain INPUT (policy ACCEPT 1204 packets, 72K bytes)',
+          ' pkts bytes target     prot opt in     out     source               destination',
+          '',
+          'Chain OUTPUT (policy ACCEPT 940 packets, 56K bytes)',
+          ' pkts bytes target     prot opt in     out     source               destination',
+          '  940   56K KUBE-SERVICES  all  --  *      *       0.0.0.0/0            0.0.0.0/0            /* kubernetes service portals */',
+          '',
+          'Chain POSTROUTING (policy ACCEPT 3410 packets, 204K bytes)',
+          ' pkts bytes target     prot opt in     out     source               destination',
+          ' 3410  204K KUBE-POSTROUTING  all  --  *   *       0.0.0.0/0            0.0.0.0/0            /* kubernetes postrouting rules */',
+          '',
+          'Chain KUBE-SERVICES (2 references)',
+          ' pkts bytes target     prot opt in     out     source               destination',
+          '  120  7200 KUBE-SVC-K8S  tcp  --  *      *       0.0.0.0/0            10.96.0.1            /* default/kubernetes:https cluster IP */ tcp dpt:443',
+          '  450 27000 KUBE-SVC-DNS  udp  --  *      *       0.0.0.0/0            10.96.0.10           /* kube-system/kube-dns:dns cluster IP */ udp dpt:53'
+        ];
+        return { stdout: lines.join('\n') + '\n', stderr: '', code: 0 };
+      }
+
+      // Filter table default
+      const lines = [
+        'Chain INPUT (policy ACCEPT 4520 packets, 270K bytes)',
+        ' pkts bytes target     prot opt in     out     source               destination',
+        ' 1102   66K ACCEPT     tcp  --  *      *       0.0.0.0/0            0.0.0.0/0            tcp dpt:6443 /* kube-apiserver secure port */',
+        '  940   56K ACCEPT     tcp  --  *      *       0.0.0.0/0            0.0.0.0/0            tcp dpt:2379 /* etcd client port */',
+        '',
+        'Chain FORWARD (policy ACCEPT 1840 packets, 110K bytes)',
+        ' pkts bytes target     prot opt in     out     source               destination',
+        ' 1840  110K KUBE-FORWARD  all  --  *    *       0.0.0.0/0            0.0.0.0/0            /* kubernetes forwarding rules */',
+        '',
+        'Chain OUTPUT (policy ACCEPT 4120 packets, 247K bytes)',
+        ' pkts bytes target     prot opt in     out     source               destination'
+      ];
+      return { stdout: lines.join('\n') + '\n', stderr: '', code: 0 };
+    }
+
+    return { stdout: '', stderr: '', code: 0 };
   }
 
   handleSs({ argv = [] }) {
-    const headers = ['Netid', 'State', 'Recv-Q', 'Send-Q', 'Local Address:Port', 'Peer Address:Port'];
+    const headers = ['Netid', 'State', 'Recv-Q', 'Send-Q', 'Local Address:Port', 'Peer Address:Port', 'Process'];
     const rows = [
-      ['tcp', 'LISTEN', '0', '4096', '0.0.0.0:6443', '0.0.0.0:*'],
-      ['tcp', 'LISTEN', '0', '4096', '127.0.0.1:2379', '0.0.0.0:*'],
-      ['tcp', 'LISTEN', '0', '4096', '0.0.0.0:10250', '0.0.0.0:*'],
-      ['udp', 'UNCONN', '0', '0', '0.0.0.0:53', '0.0.0.0:*']
+      ['tcp', 'LISTEN', '0', '4096', '0.0.0.0:6443', '0.0.0.0:*', 'users:(("kube-apiserver",pid=1102,fd=7))'],
+      ['tcp', 'LISTEN', '0', '4096', '127.0.0.1:2379', '0.0.0.0:*', 'users:(("etcd",pid=940,fd=6))'],
+      ['tcp', 'LISTEN', '0', '4096', '0.0.0.0:10250', '0.0.0.0:*', 'users:(("kubelet",pid=1420,fd=12))'],
+      ['tcp', 'LISTEN', '0', '4096', '0.0.0.0:80', '0.0.0.0:*', 'users:(("nginx",pid=2190,fd=4))'],
+      ['udp', 'UNCONN', '0', '0', '0.0.0.0:53', '0.0.0.0:*', 'users:(("coredns",pid=1850,fd=5))']
     ];
     return { stdout: this._formatTable(headers, rows) + '\n', stderr: '', code: 0 };
+  }
+
+  handleNc({ argv = [] }) {
+    const isZeroIo = argv.some((a) => a.startsWith('-') && a.includes('z'));
+    const nonFlags = argv.slice(1).filter((a) => !a.startsWith('-'));
+    const host = nonFlags.find((a) => !/^\d+$/.test(a)) || '127.0.0.1';
+    const port = nonFlags.find((a) => /^\d+$/.test(a)) || '80';
+
+    if (isZeroIo) {
+      return {
+        stdout: `Connection to ${host} ${port} port [tcp] succeeded!\n`,
+        stderr: '',
+        code: 0
+      };
+    }
+    return { stdout: `Listening on ${host}:${port}...\n`, stderr: '', code: 0 };
   }
 
   handlePing({ argv = [] }) {
@@ -3656,15 +4115,184 @@ class MultiCliDispatcher {
     };
   }
 
-  handlePs() {
+  handlePs({ argv = [] }) {
+    const isAux = argv.some((a) => a === 'aux' || a === '-aux' || a === '-ef' || a === 'ef');
+    if (isAux) {
+      const headers = ['USER', 'PID', '%CPU', '%MEM', 'VSZ', 'RSS', 'TTY', 'STAT', 'START', 'TIME', 'COMMAND'];
+      const rows = this.simulatedProcesses.map((p) => [
+        p.user, String(p.pid), p.cpu, p.mem, p.vsz, p.rss, p.tty, p.stat, p.start, p.time, p.command
+      ]);
+      return { stdout: this._formatTable(headers, rows) + '\n', stderr: '', code: 0 };
+    }
+
     const headers = ['PID', 'TTY', 'TIME', 'CMD'];
-    const rows = [
-      ['1', '?', '00:00:02', 'systemd'],
-      ['1420', '?', '00:01:14', 'containerd'],
-      ['2100', '?', '00:04:32', 'kubelet --config=/var/lib/kubelet/config.yaml'],
-      ['3410', 'pts/0', '00:00:00', 'bash']
-    ];
+    const rows = this.simulatedProcesses.map((p) => [String(p.pid), p.tty, p.time, p.command.split(/\s+/)[0]]);
     return { stdout: this._formatTable(headers, rows) + '\n', stderr: '', code: 0 };
+  }
+
+  handleKill({ argv = [] }) {
+    const pidArg = argv.find((a) => !a.startsWith('-') && /^\d+$/.test(a));
+    if (!pidArg) {
+      return { stdout: '', stderr: 'kill: usage: kill [-s sigspec | -n signum | -sigspec] pid | jobspec ... or kill -l [sigspec]\n', code: 1 };
+    }
+    const pid = parseInt(pidArg, 10);
+    const idx = this.simulatedProcesses.findIndex((p) => p.pid === pid);
+    if (idx !== -1) {
+      this.simulatedProcesses.splice(idx, 1);
+      return { stdout: '', stderr: '', code: 0 };
+    }
+    return { stdout: '', stderr: `bash: kill: (${pid}) - No such process\n`, code: 1 };
+  }
+
+  handleSystemctl({ argv = [] }) {
+    const action = argv[1] || 'status';
+    const unit = (argv[2] || 'kubelet').replace(/\.service$/, '');
+    const svc = this.systemdUnits[unit];
+
+    if (!svc && action !== 'daemon-reload') {
+      return { stdout: '', stderr: `Unit ${unit}.service could not be found.\n`, code: 4 };
+    }
+
+    if (action === 'status') {
+      const lines = [
+        `● ${unit}.service - ${svc.desc}`,
+        `     Loaded: loaded (/usr/lib/systemd/system/${unit}.service; enabled; preset: enabled)`,
+        `     Active: ${svc.status} (${svc.substate}) since Wed 2026-11-12 10:00:00 UTC; 6h ago`,
+        `   Main PID: ${svc.pid} (${unit})`,
+        `      Tasks: 34 (limit: 38334)`,
+        `     Memory: 84.2M`,
+        `        CPU: 45.210s`,
+        `     CGroup: /system.slice/${unit}.service`,
+        `             └─${svc.pid} /usr/bin/${unit}`
+      ];
+      return { stdout: lines.join('\n') + '\n', stderr: '', code: svc.status === 'active' ? 0 : 3 };
+    }
+
+    if (action === 'is-active') {
+      return { stdout: `${svc.status}\n`, stderr: '', code: svc.status === 'active' ? 0 : 3 };
+    }
+
+    if (action === 'start' || action === 'restart' || action === 'enable') {
+      svc.status = 'active';
+      svc.substate = 'running';
+
+      // If kubelet or containerd restarted, reconcile NotReady nodes to Ready!
+      if (unit === 'kubelet' || unit === 'containerd') {
+        if (this.graph) {
+          const nodes = this.graph.list({ kind: 'Node' });
+          for (const node of nodes) {
+            node.status = node.status || {};
+            if (node.status.phase === 'NotReady') node.status.phase = 'Ready';
+            if (node.status.conditions) {
+              const readyCond = node.status.conditions.find((c) => c.type === 'Ready');
+              if (readyCond) {
+                readyCond.status = 'True';
+                readyCond.reason = 'KubeletReady';
+                readyCond.message = 'kubelet is posting ready status';
+              }
+            }
+            this.graph.update(node);
+          }
+          if (this.controllerManager) this.controllerManager.reconcile();
+        }
+      }
+      return { stdout: '', stderr: '', code: 0 };
+    }
+
+    if (action === 'stop' || action === 'disable') {
+      svc.status = 'inactive';
+      svc.substate = 'dead';
+      if (unit === 'kubelet' && this.graph) {
+        const nodes = this.graph.list({ kind: 'Node' });
+        for (const node of nodes) {
+          node.status = node.status || {};
+          node.status.phase = 'NotReady';
+          if (node.status.conditions) {
+            const readyCond = node.status.conditions.find((c) => c.type === 'Ready');
+            if (readyCond) {
+              readyCond.status = 'False';
+              readyCond.reason = 'KubeletNotReady';
+              readyCond.message = 'kubelet stopped';
+            }
+          }
+          this.graph.update(node);
+        }
+      }
+      return { stdout: '', stderr: '', code: 0 };
+    }
+
+    if (action === 'daemon-reload') {
+      return { stdout: '', stderr: '', code: 0 };
+    }
+
+    return { stdout: '', stderr: `Unknown systemctl command: ${action}\n`, code: 1 };
+  }
+
+  handleJournalctl({ argv = [] }) {
+    let unit = 'kubelet';
+    let linesCount = 50;
+    for (let i = 1; i < argv.length; i++) {
+      if ((argv[i] === '-u' || argv[i] === '--unit') && i + 1 < argv.length) {
+        unit = argv[++i].replace(/\.service$/, '');
+      } else if ((argv[i] === '-n' || argv[i] === '--lines') && i + 1 < argv.length) {
+        linesCount = parseInt(argv[++i], 10) || 50;
+      }
+    }
+
+    const logs = [
+      `Nov 12 10:00:00 kubelabs-node ${unit}[1420]: I1112 10:00:00.123456 server.go:412] "Starting ${unit}" version="v1.31.0"`,
+      `Nov 12 10:00:01 kubelabs-node ${unit}[1420]: I1112 10:00:01.234567 daemon.go:345] "Initializing subsystem runtime socket"`,
+      `Nov 12 10:00:02 kubelabs-node ${unit}[1420]: I1112 10:00:02.345678 status_manager.go:78] "Successfully registered status with cluster"`,
+      `Nov 12 10:00:03 kubelabs-node ${unit}[1420]: I1112 10:00:03.456789 manager.go:90] "Syncing state loop completed successfully"`
+    ];
+    return { stdout: logs.slice(0, linesCount).join('\n') + '\n', stderr: '', code: 0 };
+  }
+
+  handleSysctl({ argv = [] }) {
+    const writeFlag = argv.includes('-w');
+    if (writeFlag) {
+      const idx = argv.indexOf('-w');
+      const kv = argv[idx + 1];
+      if (kv && kv.includes('=')) {
+        const [k, v] = kv.split('=');
+        this.sysctls[k.trim()] = v.trim();
+        return { stdout: `${k.trim()} = ${v.trim()}\n`, stderr: '', code: 0 };
+      }
+    }
+
+    const firstArg = argv[1];
+    if (firstArg && firstArg.includes('=')) {
+      const [k, v] = firstArg.split('=');
+      this.sysctls[k.trim()] = v.trim();
+      return { stdout: `${k.trim()} = ${v.trim()}\n`, stderr: '', code: 0 };
+    }
+
+    if (firstArg && !firstArg.startsWith('-')) {
+      const val = this.sysctls[firstArg];
+      if (val !== undefined) {
+        return { stdout: `${firstArg} = ${val}\n`, stderr: '', code: 0 };
+      }
+      return { stdout: '', stderr: `sysctl: cannot stat /proc/sys/${firstArg.replace(/\./g, '/')}: No such file or directory\n`, code: 1 };
+    }
+
+    const entries = Object.entries(this.sysctls).map(([k, v]) => `${k} = ${v}`);
+    return { stdout: entries.join('\n') + '\n', stderr: '', code: 0 };
+  }
+
+  handleUnshare({ argv = [] }) {
+    const subcmd = argv.slice(1).filter((a) => !a.startsWith('-')).join(' ');
+    if (subcmd) {
+      return {
+        stdout: `[isolated-ns] execution of "${subcmd}" successful in isolated namespaces (mnt, uts, ipc, pid, net)\n`,
+        stderr: '',
+        code: 0
+      };
+    }
+    return {
+      stdout: '[root@kubelabs-node /]# (new namespace initialized: CLONE_NEWNS | CLONE_NEWPID | CLONE_NEWNET)\n',
+      stderr: '',
+      code: 0
+    };
   }
 
   handleTop() {
@@ -3675,27 +4303,431 @@ class MultiCliDispatcher {
     };
   }
 
-  handleDf() {
+  handleDf({ argv = [] }) {
+    const isHuman = argv.includes('-h');
     const headers = ['Filesystem', 'Size', 'Used', 'Avail', 'Use%', 'Mounted on'];
     const rows = [
-      ['/dev/root', '50G', '12G', '36G', '25%', '/'],
-      ['tmpfs', '3.8G', '0', '3.8G', '0%', '/dev/shm'],
-      ['/dev/sda1', '100G', '22G', '78G', '22%', '/var/lib/containerd']
+      ['/dev/root', isHuman ? '50G' : '52428800', isHuman ? '12G' : '12582912', isHuman ? '36G' : '37748736', '25%', '/'],
+      ['tmpfs', isHuman ? '3.8G' : '3984588', '0', isHuman ? '3.8G' : '3984588', '0%', '/dev/shm'],
+      ['/dev/sda1', isHuman ? '100G' : '104857600', isHuman ? '22G' : '23068672', isHuman ? '78G' : '81788928', '22%', '/var/lib/containerd']
     ];
     return { stdout: this._formatTable(headers, rows) + '\n', stderr: '', code: 0 };
   }
 
-  handleFree() {
+  handleFree({ argv = [] }) {
+    const isHuman = argv.includes('-h');
+    const isMb = argv.includes('-m');
+    const unit = isHuman ? 'Gi' : (isMb ? 'Mi' : '');
     const headers = ['', 'total', 'used', 'free', 'shared', 'buff/cache', 'available'];
     const rows = [
-      ['Mem:', '8192', '2410', '4120', '32', '1662', '5782'],
-      ['Swap:', '2048', '0', '2048', '', '', '']
+      ['Mem:', `8192${unit}`, `2410${unit}`, `4120${unit}`, `32${unit}`, `1662${unit}`, `5782${unit}`],
+      ['Swap:', `2048${unit}`, `0${unit}`, `2048${unit}`, '', '', '']
     ];
     return { stdout: this._formatTable(headers, rows) + '\n', stderr: '', code: 0 };
   }
 
-  handleUname() {
+  handleUname({ argv = [] }) {
+    if (argv.includes('-r')) return { stdout: '6.8.0-40-generic\n', stderr: '', code: 0 };
+    if (argv.includes('-m')) return { stdout: 'x86_64\n', stderr: '', code: 0 };
+    if (argv.includes('-s')) return { stdout: 'Linux\n', stderr: '', code: 0 };
     return { stdout: 'Linux kubelabs-node 6.8.0-40-generic #40-Ubuntu SMP PREEMPT_DYNAMIC x86_64 GNU/Linux\n', stderr: '', code: 0 };
+  }
+
+  // -------------------------------------------------------------------------
+  // 15. POSIX / BASH SHELL BUILTINS HANDLERS (VFS BACKED)
+  // -------------------------------------------------------------------------
+
+  handleLs({ argv = [], cwd = '/home/learner', vfs = null }) {
+    const fs = vfs || this.vfs;
+    let showAll = false;
+    let longFormat = false;
+    let human = false;
+    let oneCol = false;
+    let target = null;
+
+    for (let i = 1; i < argv.length; i++) {
+      const a = argv[i];
+      if (a.startsWith('-') && a.length > 1) {
+        if (a.includes('a')) showAll = true;
+        if (a.includes('l')) longFormat = true;
+        if (a.includes('h')) human = true;
+        if (a.includes('1')) oneCol = true;
+      } else if (!target) {
+        target = a;
+      }
+    }
+
+    if (!fs) {
+      return { stdout: 'manifest.yaml  deployment.yaml  service.yaml\n', stderr: '', code: 0 };
+    }
+
+    const resolved = fs.normalizePath(target || cwd, cwd);
+    let names;
+    try {
+      const stat = fs.stat(resolved);
+      if (stat.isFile && stat.isFile()) {
+        return { stdout: `${target}\n`, stderr: '', code: 0 };
+      }
+      names = fs.listDir(resolved);
+    } catch (err) {
+      return { stdout: '', stderr: `ls: cannot access '${target || resolved}': No such file or directory\n`, code: 2 };
+    }
+
+    if (showAll) {
+      names = ['.', '..', ...names];
+    } else {
+      names = names.filter((n) => !n.startsWith('.'));
+    }
+    names.sort();
+
+    if (longFormat) {
+      const formatMode = (m, isDir) => {
+        const prefix = isDir ? 'd' : '-';
+        const rwx = (b) => (b & 4 ? 'r' : '-') + (b & 2 ? 'w' : '-') + (b & 1 ? 'x' : '-');
+        return prefix + rwx((m >> 6) & 7) + rwx((m >> 3) & 7) + rwx(m & 7);
+      };
+      const lines = names.map((name) => {
+        const itemPath = name === '.' || name === '..' ? resolved : `${resolved}/${name}`.replace('//', '/');
+        let stat;
+        try { stat = fs.stat(itemPath); } catch { stat = { mode: 0o644, size: 0, isDirectory: () => false }; }
+        const isDir = stat.isDirectory && stat.isDirectory();
+        const modeStr = formatMode(stat.mode || (isDir ? 0o755 : 0o644), isDir);
+        const sizeStr = human ? `${Math.round((stat.size || 0) / 1024)}K` : String(stat.size || 0);
+        return `${modeStr} 1 learner learner ${sizeStr.padStart(6)} Nov 12 10:00 ${name}`;
+      });
+      return { stdout: lines.join('\n') + (lines.length > 0 ? '\n' : ''), stderr: '', code: 0 };
+    }
+
+    if (oneCol) {
+      return { stdout: names.join('\n') + (names.length > 0 ? '\n' : ''), stderr: '', code: 0 };
+    }
+
+    return { stdout: names.join('  ') + (names.length > 0 ? '\n' : ''), stderr: '', code: 0 };
+  }
+
+  handleCd({ argv = [], cwd = '/home/learner', vfs = null, env = {} }) {
+    const fs = vfs || this.vfs;
+    const target = argv[1] || '~';
+    let dest = target;
+
+    if (target === '~' || target === '') {
+      dest = env.HOME || '/home/learner';
+    } else if (target === '-') {
+      dest = env.OLDPWD || cwd;
+    }
+
+    if (!fs) return { stdout: '', stderr: '', code: 0, cwd: dest };
+    const resolved = fs.normalizePath(dest, cwd);
+
+    try {
+      const stat = fs.stat(resolved);
+      if (!stat.isDirectory()) {
+        return { stdout: '', stderr: `bash: cd: ${target}: Not a directory\n`, code: 1 };
+      }
+    } catch {
+      return { stdout: '', stderr: `bash: cd: ${target}: No such file or directory\n`, code: 1 };
+    }
+
+    env.OLDPWD = cwd;
+    env.PWD = resolved;
+    return { stdout: '', stderr: '', code: 0, cwd: resolved };
+  }
+
+  handlePwd({ cwd = '/home/learner' }) {
+    return { stdout: `${cwd}\n`, stderr: '', code: 0 };
+  }
+
+  handleCat({ argv = [], stdin = '', cwd = '/home/learner', vfs = null }) {
+    const fs = vfs || this.vfs;
+    let numberLines = false;
+    const files = [];
+
+    for (let i = 1; i < argv.length; i++) {
+      if (argv[i] === '-n' || argv[i] === '--number') {
+        numberLines = true;
+      } else if (!argv[i].startsWith('-')) {
+        files.push(argv[i]);
+      }
+    }
+
+    if (files.length === 0) {
+      return { stdout: stdin ? (stdin.endsWith('\n') ? stdin : stdin + '\n') : '', stderr: '', code: 0 };
+    }
+
+    let combined = '';
+    for (const f of files) {
+      if (!fs) return { stdout: '', stderr: `cat: ${f}: No such file or directory\n`, code: 1 };
+      const resolved = fs.normalizePath(f, cwd);
+      try {
+        const content = fs.readFile(resolved);
+        combined += content;
+      } catch (err) {
+        return { stdout: '', stderr: `cat: ${f}: No such file or directory\n`, code: 1 };
+      }
+    }
+
+    if (numberLines) {
+      const lines = combined.split('\n');
+      const numbered = lines.map((l, idx) => `${String(idx + 1).padStart(6)}  ${l}`).join('\n');
+      return { stdout: numbered.endsWith('\n') ? numbered : numbered + '\n', stderr: '', code: 0 };
+    }
+
+    return { stdout: combined.endsWith('\n') ? combined : combined + '\n', stderr: '', code: 0 };
+  }
+
+  handleMkdir({ argv = [], cwd = '/home/learner', vfs = null }) {
+    const fs = vfs || this.vfs;
+    let parents = false;
+    const dirs = [];
+
+    for (let i = 1; i < argv.length; i++) {
+      if (argv[i] === '-p' || argv[i] === '--parents') parents = true;
+      else if (!argv[i].startsWith('-')) dirs.push(argv[i]);
+    }
+
+    if (dirs.length === 0) {
+      return { stdout: '', stderr: 'mkdir: missing operand\n', code: 1 };
+    }
+
+    for (const d of dirs) {
+      if (!fs) continue;
+      const resolved = fs.normalizePath(d, cwd);
+      try {
+        fs.mkdir(resolved, { recursive: parents });
+      } catch (err) {
+        return { stdout: '', stderr: `mkdir: cannot create directory '${d}': ${err.message}\n`, code: 1 };
+      }
+    }
+
+    return { stdout: '', stderr: '', code: 0 };
+  }
+
+  handleRm({ argv = [], cwd = '/home/learner', vfs = null }) {
+    const fs = vfs || this.vfs;
+    let recursive = false;
+    let force = false;
+    const paths = [];
+
+    for (let i = 1; i < argv.length; i++) {
+      const a = argv[i];
+      if (a === '-r' || a === '-R' || a === '-rf' || a === '-fr') {
+        recursive = true;
+        if (a.includes('f')) force = true;
+      } else if (a === '-f') {
+        force = true;
+      } else if (!a.startsWith('-')) {
+        paths.push(a);
+      }
+    }
+
+    for (const p of paths) {
+      if (!fs) continue;
+      const resolved = fs.normalizePath(p, cwd);
+      try {
+        const stat = fs.stat(resolved);
+        if (stat.isDirectory()) {
+          if (!recursive) {
+            return { stdout: '', stderr: `rm: cannot remove '${p}': Is a directory\n`, code: 1 };
+          }
+          fs.rm(resolved, { recursive: true });
+        } else {
+          fs.unlink(resolved);
+        }
+      } catch (err) {
+        if (!force) {
+          return { stdout: '', stderr: `rm: cannot remove '${p}': No such file or directory\n`, code: 1 };
+        }
+      }
+    }
+
+    return { stdout: '', stderr: '', code: 0 };
+  }
+
+  handleCp({ argv = [], cwd = '/home/learner', vfs = null }) {
+    const fs = vfs || this.vfs;
+    let recursive = false;
+    const paths = [];
+
+    for (let i = 1; i < argv.length; i++) {
+      if (argv[i] === '-r' || argv[i] === '-R') recursive = true;
+      else if (!argv[i].startsWith('-')) paths.push(argv[i]);
+    }
+
+    if (paths.length < 2) {
+      return { stdout: '', stderr: 'cp: missing file operand\n', code: 1 };
+    }
+
+    if (!fs) return { stdout: '', stderr: '', code: 0 };
+
+    const src = fs.normalizePath(paths[0], cwd);
+    const dest = fs.normalizePath(paths[1], cwd);
+
+    try {
+      if (typeof fs.cp === 'function') {
+        fs.cp(src, dest, { recursive });
+      } else {
+        const content = fs.readFile(src);
+        fs.writeFile(dest, content);
+      }
+      return { stdout: '', stderr: '', code: 0 };
+    } catch (err) {
+      return { stdout: '', stderr: `cp: cannot stat '${paths[0]}': ${err.message}\n`, code: 1 };
+    }
+  }
+
+  handleMv({ argv = [], cwd = '/home/learner', vfs = null }) {
+    const fs = vfs || this.vfs;
+    const paths = argv.slice(1).filter((a) => !a.startsWith('-'));
+    if (paths.length < 2) {
+      return { stdout: '', stderr: 'mv: missing file operand\n', code: 1 };
+    }
+    if (!fs) return { stdout: '', stderr: '', code: 0 };
+
+    const src = fs.normalizePath(paths[0], cwd);
+    const dest = fs.normalizePath(paths[1], cwd);
+
+    try {
+      if (typeof fs.rename === 'function') {
+        fs.rename(src, dest);
+      } else {
+        const content = fs.readFile(src);
+        fs.writeFile(dest, content);
+        fs.unlink(src);
+      }
+      return { stdout: '', stderr: '', code: 0 };
+    } catch (err) {
+      return { stdout: '', stderr: `mv: cannot stat '${paths[0]}': ${err.message}\n`, code: 1 };
+    }
+  }
+
+  handleChmod({ argv = [], cwd = '/home/learner', vfs = null }) {
+    const fs = vfs || this.vfs;
+    const modeArg = argv[1];
+    const fileArg = argv[2];
+
+    if (!modeArg || !fileArg) {
+      return { stdout: '', stderr: 'chmod: missing operand\n', code: 1 };
+    }
+
+    if (!fs) return { stdout: '', stderr: '', code: 0 };
+    const resolved = fs.normalizePath(fileArg, cwd);
+
+    try {
+      fs.chmod(resolved, modeArg);
+      return { stdout: '', stderr: '', code: 0 };
+    } catch (err) {
+      return { stdout: '', stderr: `chmod: cannot access '${fileArg}': ${err.message}\n`, code: 1 };
+    }
+  }
+
+  handleChown({ argv = [], cwd = '/home/learner', vfs = null }) {
+    const fs = vfs || this.vfs;
+    const ownerArg = argv[1];
+    const fileArg = argv[2];
+
+    if (!ownerArg || !fileArg) {
+      return { stdout: '', stderr: 'chown: missing operand\n', code: 1 };
+    }
+
+    if (!fs) return { stdout: '', stderr: '', code: 0 };
+    const resolved = fs.normalizePath(fileArg, cwd);
+
+    try {
+      fs.chown(resolved, ownerArg);
+      return { stdout: '', stderr: '', code: 0 };
+    } catch (err) {
+      return { stdout: '', stderr: `chown: cannot access '${fileArg}': ${err.message}\n`, code: 1 };
+    }
+  }
+
+  handleLn({ argv = [], cwd = '/home/learner', vfs = null }) {
+    const fs = vfs || this.vfs;
+    let symbolic = false;
+    const paths = [];
+
+    for (let i = 1; i < argv.length; i++) {
+      if (argv[i] === '-s' || argv[i] === '--symbolic') symbolic = true;
+      else if (!argv[i].startsWith('-')) paths.push(argv[i]);
+    }
+
+    if (paths.length < 2) {
+      return { stdout: '', stderr: 'ln: missing file operand\n', code: 1 };
+    }
+
+    if (!fs) return { stdout: '', stderr: '', code: 0 };
+    const target = paths[0];
+    const linkPath = fs.normalizePath(paths[1], cwd);
+
+    try {
+      fs.symlink(target, linkPath);
+      return { stdout: '', stderr: '', code: 0 };
+    } catch (err) {
+      return { stdout: '', stderr: `ln: failed to create symbolic link '${paths[1]}': ${err.message}\n`, code: 1 };
+    }
+  }
+
+  handleFind({ argv = [], cwd = '/home/learner', vfs = null }) {
+    const fs = vfs || this.vfs;
+    let startPath = cwd;
+    let nameFilter = null;
+    let typeFilter = null;
+
+    for (let i = 1; i < argv.length; i++) {
+      if (argv[i] === '-name' && i + 1 < argv.length) {
+        nameFilter = argv[++i].replace(/^['"]|['"]$/g, '');
+      } else if (argv[i] === '-type' && i + 1 < argv.length) {
+        typeFilter = argv[++i];
+      } else if (!argv[i].startsWith('-') && i === 1) {
+        startPath = argv[i];
+      }
+    }
+
+    if (!fs) return { stdout: `${startPath}\n`, stderr: '', code: 0 };
+    const resolved = fs.normalizePath(startPath, cwd);
+
+    try {
+      if (typeof fs.find === 'function') {
+        const matches = fs.find(resolved, { name: nameFilter, type: typeFilter });
+        return { stdout: matches.join('\n') + (matches.length > 0 ? '\n' : ''), stderr: '', code: 0 };
+      }
+      return { stdout: `${resolved}\n`, stderr: '', code: 0 };
+    } catch (err) {
+      return { stdout: '', stderr: `find: '${startPath}': No such file or directory\n`, code: 1 };
+    }
+  }
+
+  handleEnv({ env = {} }) {
+    const lines = Object.entries(env).map(([k, v]) => `${k}=${v}`);
+    return { stdout: lines.join('\n') + (lines.length > 0 ? '\n' : ''), stderr: '', code: 0 };
+  }
+
+  handleExport({ argv = [], env = {} }) {
+    for (let i = 1; i < argv.length; i++) {
+      const a = argv[i];
+      const eq = a.indexOf('=');
+      if (eq > -1) {
+        const k = a.slice(0, eq).trim();
+        const v = a.slice(eq + 1).replace(/^['"]|['"]$/g, '').trim();
+        env[k] = v;
+      }
+    }
+    return { stdout: '', stderr: '', code: 0 };
+  }
+
+  handleEcho({ argv = [] }) {
+    let noNewline = false;
+    const parts = [];
+
+    for (let i = 1; i < argv.length; i++) {
+      if (argv[i] === '-n' && i === 1) {
+        noNewline = true;
+      } else {
+        parts.push(argv[i].replace(/^['"]|['"]$/g, ''));
+      }
+    }
+
+    const out = parts.join(' ');
+    return { stdout: noNewline ? out : out + '\n', stderr: '', code: 0 };
   }
 
   // -------------------------------------------------------------------------

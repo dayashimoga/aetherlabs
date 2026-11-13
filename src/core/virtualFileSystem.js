@@ -360,7 +360,31 @@ class VirtualFileSystem {
     if (!res.node) {
       throw new Error(`ENOENT: no such file or directory, chmod '${cleanPath}'`);
     }
-    res.node.mode = Number(mode);
+
+    let parsedMode;
+    if (typeof mode === 'number') {
+      parsedMode = mode;
+    } else if (typeof mode === 'string') {
+      const trimmed = mode.trim();
+      if (/^[0-7]{3,4}$/.test(trimmed)) {
+        parsedMode = parseInt(trimmed, 8);
+      } else if (trimmed.includes('+') || trimmed.includes('-')) {
+        let currentMode = res.node.mode || 0o644;
+        const add = trimmed.includes('+');
+        const flag = trimmed.slice(trimmed.indexOf(add ? '+' : '-') + 1);
+        let bits = 0;
+        if (flag.includes('r')) bits |= 0o444;
+        if (flag.includes('w')) bits |= 0o222;
+        if (flag.includes('x')) bits |= 0o111;
+        parsedMode = add ? (currentMode | bits) : (currentMode & ~bits);
+      } else {
+        parsedMode = parseInt(trimmed, 8) || 0o644;
+      }
+    } else {
+      parsedMode = 0o644;
+    }
+
+    res.node.mode = parsedMode;
     res.node.mtime = new Date();
     this._notifyWatchers('change', res.canonicalPath, null);
     return true;
@@ -372,8 +396,28 @@ class VirtualFileSystem {
     if (!res.node) {
       throw new Error(`ENOENT: no such file or directory, chown '${cleanPath}'`);
     }
-    if (uid !== undefined && uid !== null) res.node.uid = Number(uid);
-    if (gid !== undefined && gid !== null) res.node.gid = Number(gid);
+
+    const parseId = (val, defaultVal = 0) => {
+      if (val === undefined || val === null) return defaultVal;
+      if (typeof val === 'number') return val;
+      const str = String(val).trim();
+      if (str === 'root') return 0;
+      if (str === 'learner' || str === 'ubuntu' || str === 'node') return 1000;
+      const parsed = parseInt(str, 10);
+      return isNaN(parsed) ? defaultVal : parsed;
+    };
+
+    let targetUid = uid;
+    let targetGid = gid;
+
+    if (typeof uid === 'string' && uid.includes(':')) {
+      const parts = uid.split(':');
+      targetUid = parts[0];
+      targetGid = parts[1];
+    }
+
+    if (targetUid !== undefined && targetUid !== null) res.node.uid = parseId(targetUid, 0);
+    if (targetGid !== undefined && targetGid !== null) res.node.gid = parseId(targetGid, 0);
     res.node.mtime = new Date();
     this._notifyWatchers('change', res.canonicalPath, null);
     return true;
@@ -434,6 +478,72 @@ class VirtualFileSystem {
       uid: srcStat.uid,
       gid: srcStat.gid
     });
+  }
+
+  cp(srcPath, destPath, options = {}) {
+    const recursive = options.recursive !== false;
+    const cleanSrc = this.normalizePath(srcPath);
+    let cleanDest = this.normalizePath(destPath);
+
+    const srcStat = this.stat(cleanSrc);
+    if (srcStat.isDirectory()) {
+      if (!recursive) {
+        throw new Error(`EISDIR: -r not specified; omitting directory '${cleanSrc}'`);
+      }
+      if (this.exists(cleanDest) && this.stat(cleanDest).isDirectory()) {
+        const srcBase = cleanSrc.split('/').filter(Boolean).pop();
+        cleanDest = this.normalizePath(srcBase, cleanDest);
+      }
+      this.mkdir(cleanDest, { recursive: true, mode: srcStat.mode, uid: srcStat.uid, gid: srcStat.gid });
+      const entries = this.listDir(cleanSrc);
+      for (const entry of entries) {
+        this.cp(`${cleanSrc}/${entry}`, `${cleanDest}/${entry}`, { recursive: true });
+      }
+      return true;
+    }
+
+    if (this.exists(cleanDest) && this.stat(cleanDest).isDirectory()) {
+      const srcBase = cleanSrc.split('/').filter(Boolean).pop();
+      cleanDest = this.normalizePath(srcBase, cleanDest);
+    }
+    return this.copyFile(cleanSrc, cleanDest);
+  }
+
+  find(startPath = '/', options = {}) {
+    const cleanStart = this.normalizePath(startPath);
+    if (!this.exists(cleanStart)) {
+      throw new Error(`ENOENT: no such file or directory, find '${cleanStart}'`);
+    }
+    const results = [];
+    const namePattern = options.name ? new RegExp('^' + options.name.replace(/\./g, '\\.').replace(/\*/g, '.*') + '$') : null;
+    const typeFilter = options.type;
+
+    const traverse = (p) => {
+      const stat = this.stat(p);
+      const isDir = stat.isDirectory();
+      const base = p.split('/').filter(Boolean).pop() || '/';
+
+      let match = true;
+      if (typeFilter === 'f' && isDir) match = false;
+      if (typeFilter === 'd' && !isDir) match = false;
+      if (namePattern && !namePattern.test(base)) match = false;
+
+      if (match) results.push(p);
+
+      if (isDir) {
+        try {
+          const children = this.listDir(p);
+          for (const c of children) {
+            traverse(p === '/' ? `/${c}` : `${p}/${c}`);
+          }
+        } catch {
+          // ignore
+        }
+      }
+    };
+
+    traverse(cleanStart);
+    return results;
   }
 
   rename(oldPath, newPath) {

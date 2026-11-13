@@ -937,6 +937,7 @@ class SchedulerEngine {
     }
 
     // Phase 6: Binding
+    pod.spec = pod.spec || {};
     pod.spec.nodeName = bestNode.metadata.name;
     pod.status = pod.status || {};
     pod.status.phase = 'Running';
