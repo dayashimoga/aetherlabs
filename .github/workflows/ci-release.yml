@@ -37,23 +37,35 @@ jobs:
           node --check src/db/database.js
           node --check src/db/storageAdapter.js
           node --check src/core/admissionController.js
+          node --check src/core/aiMentor.js
+          node --check src/core/architectureEngine.js
+          node --check src/core/autoscalingAndMeshEngine.js
+          node --check src/core/certificationEngine.js
+          node --check src/core/cloudExtensions.js
           node --check src/core/controllerManager.js
+          node --check src/core/incidentEngine.js
+          node --check src/core/jsonPath.js
+          node --check src/core/multiCliDispatcher.js
           node --check src/core/networkingEngine.js
+          node --check src/core/networkTracer.js
+          node --check src/core/observabilityEngine.js
+          node --check src/core/pipelineDriver.js
+          node --check src/core/projectEngine.js
           node --check src/core/resourceGraph.js
           node --check src/core/schedulerEngine.js
+          node --check src/core/sessionManager.js
           node --check src/core/shellParser.js
+          node --check src/core/storageAdapter.js
+          node --check src/core/storageAndSecurityEngine.js
           node --check src/core/terminalEngine.js
           node --check src/core/validationEngine.js
+          node --check src/core/virtualCluster.js
           node --check src/core/virtualFileSystem.js
           node --check src/core/yamlParser.js
-          node --check src/core/jsonPath.js
-          node --check src/core/incidentEngine.js
-          node --check src/core/projectEngine.js
-          node --check src/core/architectureEngine.js
-          node --check src/core/aiMentor.js
-          node --check src/core/certificationEngine.js
           node --check public/js/app.js
           node --check public/js/offlineEngine.js
+          node --check public/js/quickKeyEngine.js
+          node --check public/js/terminalView.js
 
       - name: 11-Agent Self-Audit Gate (50 Quality Checks)
         run: npm run audit:self
@@ -95,7 +107,7 @@ jobs:
         run: |
           DEPS_COUNT=$(node -e 'const pkg = require("./package.json"); console.log(Object.keys(pkg.dependencies || {}).length);')
           if [ "$DEPS_COUNT" -ne 0 ]; then
-            console.error("VIOLATION: package.json has external runtime dependencies!");
+            echo "VIOLATION: package.json has external runtime dependencies!" >&2
             exit 1
           fi
           echo "Verified: Zero external runtime dependencies."

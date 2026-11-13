@@ -111,12 +111,27 @@ test('Subphase 5.2.1: Health & Observability Probes (/livez, /readyz, /api/healt
   const port = app.server.address().port;
 
   try {
-    // 1. Liveness probe
+    // 1. Liveness probe (both /livez, /api/livez, and /healthz)
     const liveRes = await fetch(`http://127.0.0.1:${port}/api/livez`);
     assert.equal(liveRes.status, 200);
     const liveBody = await liveRes.json();
     assert.equal(liveBody.status, 'ok');
     assert.ok(liveBody.uptimeSeconds >= 0);
+
+    const healthzRes = await fetch(`http://127.0.0.1:${port}/healthz`);
+    assert.equal(healthzRes.status, 200);
+    const healthzBody = await healthzRes.json();
+    assert.equal(healthzBody.status, 'ok');
+
+    // Probes remain accessible even if rate limiter tokens are exhausted
+    app.router.rateLimiter.maxTokens = 0;
+    app.router.rateLimiter.refillRatePerSec = 0;
+    app.router.rateLimiter.reset();
+    const probeUnderLoad = await fetch(`http://127.0.0.1:${port}/livez`);
+    assert.equal(probeUnderLoad.status, 200, 'Liveness probe must not be gated by rate limiter');
+    app.router.rateLimiter.maxTokens = 180;
+    app.router.rateLimiter.refillRatePerSec = 3;
+    app.router.rateLimiter.reset();
 
     // 2. Readiness probe
     const readyRes = await fetch(`http://127.0.0.1:${port}/api/readyz`);

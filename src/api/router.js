@@ -272,7 +272,7 @@ class ApiRouter {
       }
 
       // Kubernetes Liveness Probe
-      if (method === 'GET' && (pathname === '/livez' || pathname === '/api/livez')) {
+      if (method === 'GET' && (pathname === '/healthz' || pathname === '/livez' || pathname === '/api/livez')) {
         return sendJson(res, 200, {
           status: 'ok',
           uptimeSeconds: process.uptime(),
