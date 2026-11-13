@@ -40,7 +40,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: kubelabs
-          image: ghcr.io/kubelabs-io/kubelabs:2.0.0
+          image: ghcr.io/kubelabs-io/kubelabs:3.0.0
           ports:
             - containerPort: 4100
               name: http
@@ -72,6 +72,11 @@ spec:
           volumeMounts:
             - name: sqlite-data
               mountPath: /app/data
+            - name: tmp-dir
+              mountPath: /tmp
+      volumes:
+        - name: tmp-dir
+          emptyDir: {}
   volumeClaimTemplates:
     - metadata:
         name: sqlite-data

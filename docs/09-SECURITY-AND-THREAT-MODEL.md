@@ -1,7 +1,7 @@
 # Security Architecture, STRIDE Threat Model & Compliance Matrix
 
 **Document ID**: SEC-KUBELABS-2026-001  
-**Version**: 1.0.0  
+**Version**: 3.0.0  
 **Owner**: Security Reviewer Agent (`agent-security`)
 
 ---

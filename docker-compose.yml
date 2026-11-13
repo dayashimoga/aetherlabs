@@ -3,7 +3,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: ghcr.io/kubelabs-io/kubelabs:1.0.0
+    image: ghcr.io/kubelabs-io/kubelabs:3.0.0
     container_name: kubelabs-platform
     ports:
       - "4100:4100"
@@ -13,6 +13,8 @@ services:
       - PORT=4100
     volumes:
       - kubelabs_sqlite_data:/app/data
+    tmpfs:
+      - /tmp
     read_only: true
     security_opt:
       - no-new-privileges:true
