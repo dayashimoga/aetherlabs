@@ -11,4 +11,5 @@ require('./stage3-validation.test');
 require('./stage3-control-plane.test');
 require('./stage3-workloads.test');
 require('./stage3-observability-cli.test');
+require('./stage3-autoscaling-integration.test');
 

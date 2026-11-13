@@ -150,9 +150,8 @@ class HorizontalPodAutoscalerEngine {
 
         if (targetType === 'Utilization') {
           targetVal = res.target.averageUtilization || 80;
-          currentVal = (resName === 'cpu')
-            ? (metricsSnapshot.cpuUtilization !== undefined ? metricsSnapshot.cpuUtilization : 50)
-            : (metricsSnapshot.memoryUtilization !== undefined ? metricsSnapshot.memoryUtilization : 50);
+          const providedVal = (resName === 'cpu') ? metricsSnapshot.cpuUtilization : metricsSnapshot.memoryUtilization;
+          currentVal = providedVal !== undefined ? providedVal : targetVal;
 
           ratio = currentVal / targetVal;
           metricSummary = {
@@ -164,9 +163,10 @@ class HorizontalPodAutoscalerEngine {
           };
         } else if (targetType === 'AverageValue') {
           const targetAvgBytes = parseMemory(res.target.averageValue) || parseCpu(res.target.averageValue) || 1;
-          const currentAvgBytes = (resName === 'cpu')
-            ? parseCpu(metricsSnapshot.cpuAverageValue || '100m')
-            : parseMemory(metricsSnapshot.memoryAverageValue || '128Mi');
+          const providedAvg = (resName === 'cpu')
+            ? (metricsSnapshot.cpuAverageValue !== undefined ? parseCpu(metricsSnapshot.cpuAverageValue) : undefined)
+            : (metricsSnapshot.memoryAverageValue !== undefined ? parseMemory(metricsSnapshot.memoryAverageValue) : undefined);
+          const currentAvgBytes = providedAvg !== undefined ? providedAvg : targetAvgBytes;
 
           currentVal = currentAvgBytes;
           targetVal = targetAvgBytes;

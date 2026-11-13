@@ -89,6 +89,22 @@ try {
   SloBurnRateCalculator = (typeof globalThis !== 'undefined' && globalThis.SloBurnRateCalculator);
 }
 
+let AutoscalingAndMeshEngine, HorizontalPodAutoscalerEngine, VerticalPodAutoscalerEngine, KarpenterEngine, IstioMeshController;
+try {
+  const asMod = require('./autoscalingAndMeshEngine');
+  AutoscalingAndMeshEngine = asMod.AutoscalingAndMeshEngine;
+  HorizontalPodAutoscalerEngine = asMod.HorizontalPodAutoscalerEngine;
+  VerticalPodAutoscalerEngine = asMod.VerticalPodAutoscalerEngine;
+  KarpenterEngine = asMod.KarpenterEngine;
+  IstioMeshController = asMod.IstioMeshController;
+} catch {
+  AutoscalingAndMeshEngine = (typeof globalThis !== 'undefined' && globalThis.AutoscalingAndMeshEngine);
+  HorizontalPodAutoscalerEngine = (typeof globalThis !== 'undefined' && globalThis.HorizontalPodAutoscalerEngine);
+  VerticalPodAutoscalerEngine = (typeof globalThis !== 'undefined' && globalThis.VerticalPodAutoscalerEngine);
+  KarpenterEngine = (typeof globalThis !== 'undefined' && globalThis.KarpenterEngine);
+  IstioMeshController = (typeof globalThis !== 'undefined' && globalThis.IstioMeshController);
+}
+
 // ---------------------------------------------------------------------------
 // Kind Alias & Normalization Map
 // ---------------------------------------------------------------------------
@@ -163,6 +179,32 @@ const KIND_ALIASES = {
   serviceaccounts: 'ServiceAccount',
   hpa: 'HorizontalPodAutoscaler',
   horizontalpodautoscaler: 'HorizontalPodAutoscaler',
+  horizontalpodautoscalers: 'HorizontalPodAutoscaler',
+  vpa: 'VerticalPodAutoscaler',
+  verticalpodautoscaler: 'VerticalPodAutoscaler',
+  verticalpodautoscalers: 'VerticalPodAutoscaler',
+  nodepool: 'NodePool',
+  nodepools: 'NodePool',
+  ec2nodeclass: 'EC2NodeClass',
+  ec2nodeclasses: 'EC2NodeClass',
+  virtualservice: 'VirtualService',
+  virtualservices: 'VirtualService',
+  vs: 'VirtualService',
+  destinationrule: 'DestinationRule',
+  destinationrules: 'DestinationRule',
+  dr: 'DestinationRule',
+  peerauthentication: 'PeerAuthentication',
+  peerauthentications: 'PeerAuthentication',
+  pa: 'PeerAuthentication',
+  serviceprofile: 'ServiceProfile',
+  serviceprofiles: 'ServiceProfile',
+  sp: 'ServiceProfile',
+  trafficsplit: 'TrafficSplit',
+  trafficsplits: 'TrafficSplit',
+  ts: 'TrafficSplit',
+  servicesplitter: 'ServiceSplitter',
+  servicesplitters: 'ServiceSplitter',
+  serviceintentions: 'ServiceIntentions',
   pdb: 'PodDisruptionBudget',
   poddisruptionbudget: 'PodDisruptionBudget'
 };
@@ -204,6 +246,13 @@ class MultiCliDispatcher {
     this.promql = options.promql || (PromQLEngine ? new PromQLEngine() : null);
     this.logql = options.logql || (LogQLEngine ? new LogQLEngine() : null);
     this.jaeger = options.jaeger || (JaegerTraceGenerator ? new JaegerTraceGenerator() : null);
+
+    // Initialize Autoscaling & Service Mesh
+    this.autoscaling = options.autoscaling || (AutoscalingAndMeshEngine && this.graph ? new AutoscalingAndMeshEngine(this.graph) : null);
+    this.hpa = this.autoscaling ? this.autoscaling.hpa : null;
+    this.vpa = this.autoscaling ? this.autoscaling.vpa : null;
+    this.karpenter = this.autoscaling ? this.autoscaling.karpenter : null;
+    this.mesh = this.autoscaling ? this.autoscaling.istio : null;
 
     // Seed base cluster infrastructure if empty
     this._bootstrapDefaultResources();
@@ -401,6 +450,63 @@ class MultiCliDispatcher {
     pipelineDriver.registerCommand('id', () => ({ stdout: 'uid=1000(learner) gid=1000(learner) groups=1000(learner),27(sudo),999(docker)\n', stderr: '', code: 0 }));
   }
 
+  /**
+   * Directly executes a command string against registered CLI handlers
+   */
+  executeCommand(cmdStr, options = {}) {
+    if (!cmdStr || typeof cmdStr !== 'string') return { stdout: '', stderr: 'Empty command\n', code: 1 };
+    const parts = cmdStr.trim().split(/\s+/);
+    const bin = parts[0];
+    const handlers = {
+      kubectl: this.handleKubectl.bind(this),
+      k: this.handleKubectl.bind(this),
+      helm: this.handleHelm.bind(this),
+      docker: this.handleDocker.bind(this),
+      crictl: this.handleDocker.bind(this),
+      argocd: this.handleArgoCD.bind(this),
+      istioctl: this.handleIstioctl.bind(this),
+      tofu: this.handleTofu.bind(this),
+      terraform: this.handleTofu.bind(this),
+      aws: this.handleAws.bind(this),
+      az: this.handleAzure.bind(this),
+      gcloud: this.handleGcloud.bind(this),
+      trivy: this.handleTrivy.bind(this),
+      falco: this.handleFalco.bind(this),
+      cosign: this.handleCosign.bind(this),
+      aiops: this.handleAiOps.bind(this),
+      etcdctl: this.handleEtcdctl.bind(this),
+      kubeadm: this.handleKubeadm.bind(this),
+      cilium: this.handleCilium.bind(this),
+      linkerd: this.handleLinkerd.bind(this),
+      flux: this.handleFlux.bind(this),
+      velero: this.handleVelero.bind(this),
+      vcluster: this.handleVcluster.bind(this),
+      promtool: this.handlePromtool.bind(this),
+      logcli: this.handleLogcli.bind(this),
+      otelcol: this.handleOtelcol.bind(this),
+      curl: this.handleCurl.bind(this),
+      dig: this.handleDig.bind(this),
+      nslookup: this.handleNslookup.bind(this),
+      traceroute: this.handleTraceroute.bind(this),
+      ip: this.handleIp.bind(this),
+      ss: this.handleSs.bind(this),
+      ping: this.handlePing.bind(this),
+      ps: this.handlePs.bind(this),
+      top: this.handleTop.bind(this),
+      df: this.handleDf.bind(this),
+      free: this.handleFree.bind(this),
+      uname: this.handleUname.bind(this),
+      whoami: () => ({ stdout: 'learner\n', stderr: '', code: 0 }),
+      id: () => ({ stdout: 'uid=1000(learner) gid=1000(learner) groups=1000(learner),27(sudo),999(docker)\n', stderr: '', code: 0 })
+    };
+
+    const handler = handlers[bin];
+    if (handler) {
+      return handler({ argv: parts, stdin: options.stdin || '', vfs: this.vfs, cwd: options.cwd || '/' });
+    }
+    return { stdout: '', stderr: `command not found: ${bin}\n`, code: 127 };
+  }
+
   // -------------------------------------------------------------------------
   // 1. KUBECTL / K CLI HANDLER
   // -------------------------------------------------------------------------
@@ -493,7 +599,7 @@ class MultiCliDispatcher {
       case 'edit':
         return this._kubectlEdit({ restArgs, namespace });
       case 'autoscale':
-        return this._kubectlAutoscale({ restArgs, namespace });
+        return this._kubectlAutoscale({ restArgs, namespace, dryRun, outputFormat });
       case 'diff':
         return this._kubectlDiff({ filename, stdin, vfs, cwd });
       case 'wait':
@@ -677,6 +783,112 @@ class MultiCliDispatcher {
         return [n.metadata?.name, status, roles, '30d', n.status?.nodeInfo?.kubeletVersion || 'v1.31.0'];
       });
       table = this._formatTable(headers, rows);
+    } else if (kind === 'HorizontalPodAutoscaler') {
+      const headers = allNamespaces
+        ? ['NAMESPACE', 'NAME', 'REFERENCE', 'TARGETS', 'MINPODS', 'MAXPODS', 'REPLICAS', 'AGE']
+        : ['NAME', 'REFERENCE', 'TARGETS', 'MINPODS', 'MAXPODS', 'REPLICAS', 'AGE'];
+
+      const rows = resources.map((h) => {
+        const ref = h.spec?.scaleTargetRef
+          ? `${h.spec.scaleTargetRef.kind}/${h.spec.scaleTargetRef.name}`
+          : '<none>';
+
+        let targets = '<unknown>';
+        const specMetric = h.spec?.metrics?.[0];
+        const statusMetric = h.status?.currentMetrics?.[0];
+
+        if (specMetric?.type === 'Resource' && specMetric.resource?.target?.averageUtilization !== undefined) {
+          const targetUtil = `${specMetric.resource.target.averageUtilization}%`;
+          const curUtil = statusMetric?.resource?.current?.averageUtilization !== undefined
+            ? `${statusMetric.resource.current.averageUtilization}%`
+            : '<unknown>';
+          targets = `${curUtil}/${targetUtil}`;
+        } else if (specMetric?.type === 'Resource' && specMetric.resource?.target?.averageValue) {
+          const targetAvg = specMetric.resource.target.averageValue;
+          const curAvg = statusMetric?.resource?.current?.averageValue || '<unknown>';
+          targets = `${curAvg}/${targetAvg}`;
+        } else if (specMetric?.type === 'Pods') {
+          const targetAvg = specMetric.pods?.target?.averageValue || '100';
+          const curAvg = statusMetric?.pods?.current?.averageValue || '<unknown>';
+          targets = `${curAvg}/${targetAvg}`;
+        }
+
+        const minPods = String(h.spec?.minReplicas !== undefined ? h.spec.minReplicas : 1);
+        const maxPods = String(h.spec?.maxReplicas !== undefined ? h.spec.maxReplicas : 10);
+        const replicas = String(h.status?.currentReplicas !== undefined ? h.status.currentReplicas : (h.status?.desiredReplicas || 0));
+        const row = [h.metadata?.name, ref, targets, minPods, maxPods, replicas, '1d'];
+        if (allNamespaces) row.unshift(h.metadata?.namespace || 'default');
+        return row;
+      });
+
+      table = this._formatTable(headers, rows);
+    } else if (kind === 'VerticalPodAutoscaler') {
+      const headers = allNamespaces
+        ? ['NAMESPACE', 'NAME', 'MODE', 'CPU', 'MEM', 'PROVIDED', 'AGE']
+        : ['NAME', 'MODE', 'CPU', 'MEM', 'PROVIDED', 'AGE'];
+
+      const rows = resources.map((v) => {
+        const mode = v.spec?.updatePolicy?.updateMode || 'Auto';
+        const rec = v.status?.recommendation?.containerRecommendations?.[0];
+        const cpu = rec?.target?.cpu || '<unknown>';
+        const mem = rec?.target?.memory || '<unknown>';
+        const cond = (v.status?.conditions || []).find((c) => c.type === 'RecommendationProvided');
+        const provided = cond?.status === 'True' ? 'True' : 'False';
+        const row = [v.metadata?.name, mode, cpu, mem, provided, '1d'];
+        if (allNamespaces) row.unshift(v.metadata?.namespace || 'default');
+        return row;
+      });
+
+      table = this._formatTable(headers, rows);
+    } else if (kind === 'NodePool') {
+      const headers = ['NAME', 'NODECLASS', 'NODES', 'READY', 'AGE'];
+      const rows = resources.map((np) => {
+        const nodeClass = np.spec?.template?.spec?.nodeClassRef?.name || 'default';
+        const nodesCount = '1';
+        const ready = 'True';
+        return [np.metadata?.name, nodeClass, nodesCount, ready, '2d'];
+      });
+      table = this._formatTable(headers, rows);
+    } else if (kind === 'VirtualService') {
+      const headers = allNamespaces
+        ? ['NAMESPACE', 'NAME', 'GATEWAYS', 'HOSTS', 'AGE']
+        : ['NAME', 'GATEWAYS', 'HOSTS', 'AGE'];
+
+      const rows = resources.map((vs) => {
+        const gws = (vs.spec?.gateways || ['mesh']).join(',');
+        const hosts = (vs.spec?.hosts || ['*']).join(',');
+        const row = [vs.metadata?.name, gws, hosts, '1d'];
+        if (allNamespaces) row.unshift(vs.metadata?.namespace || 'default');
+        return row;
+      });
+
+      table = this._formatTable(headers, rows);
+    } else if (kind === 'DestinationRule') {
+      const headers = allNamespaces
+        ? ['NAMESPACE', 'NAME', 'HOST', 'AGE']
+        : ['NAME', 'HOST', 'AGE'];
+
+      const rows = resources.map((dr) => {
+        const host = dr.spec?.host || '<none>';
+        const row = [dr.metadata?.name, host, '1d'];
+        if (allNamespaces) row.unshift(dr.metadata?.namespace || 'default');
+        return row;
+      });
+
+      table = this._formatTable(headers, rows);
+    } else if (kind === 'PeerAuthentication') {
+      const headers = allNamespaces
+        ? ['NAMESPACE', 'NAME', 'MODE', 'AGE']
+        : ['NAME', 'MODE', 'AGE'];
+
+      const rows = resources.map((pa) => {
+        const mode = pa.spec?.mtls?.mode || 'PERMISSIVE';
+        const row = [pa.metadata?.name, mode, '1d'];
+        if (allNamespaces) row.unshift(pa.metadata?.namespace || 'default');
+        return row;
+      });
+
+      table = this._formatTable(headers, rows);
     } else {
       // Generic resource table
       const headers = allNamespaces ? ['NAMESPACE', 'NAME', 'AGE'] : ['NAME', 'AGE'];
@@ -708,6 +920,78 @@ class MultiCliDispatcher {
     const labels = Object.entries(res.metadata?.labels || {})
       .map(([k, v]) => `${k}=${v}`)
       .join('\n                            ') || '<none>';
+
+    if (kind === 'HorizontalPodAutoscaler') {
+      const ref = res.spec?.scaleTargetRef
+        ? `${res.spec.scaleTargetRef.kind}/${res.spec.scaleTargetRef.name}`
+        : '<none>';
+      const minPods = res.spec?.minReplicas !== undefined ? res.spec.minReplicas : 1;
+      const maxPods = res.spec?.maxReplicas !== undefined ? res.spec.maxReplicas : 10;
+      const curReplicas = res.status?.currentReplicas !== undefined ? res.status.currentReplicas : 0;
+      const desReplicas = res.status?.desiredReplicas !== undefined ? res.status.desiredReplicas : curReplicas;
+
+      const lines = [
+        `Name:                                                  ${res.metadata?.name}`,
+        `Namespace:                                             ${res.metadata?.namespace || 'default'}`,
+        `Labels:                                                ${labels}`,
+        `Annotations:                                           <none>`,
+        `CreationTimestamp:                                     ${res.metadata?.creationTimestamp || 'Mon, 01 Jan 2026 00:00:00 +0000'}`,
+        `Reference:                                             ${ref}`,
+        `Metrics:                                               ( current / target )`,
+        `  resource cpu on pods  (as a percentage of request):  ${res.status?.currentMetrics?.[0]?.resource?.current?.averageUtilization !== undefined ? res.status.currentMetrics[0].resource.current.averageUtilization + '%' : '<unknown>'} / ${res.spec?.metrics?.[0]?.resource?.target?.averageUtilization || 80}%`,
+        `Min replicas:                                          ${minPods}`,
+        `Max replicas:                                          ${maxPods}`,
+        `Deployment pods:                                       ${curReplicas} current / ${desReplicas} desired`,
+        `Conditions:`
+      ];
+      if (Array.isArray(res.status?.conditions) && res.status.conditions.length > 0) {
+        lines.push('  Type            Status  Reason              Message');
+        lines.push('  ----            ------  ------              -------');
+        for (const c of res.status.conditions) {
+          lines.push(`  ${c.type.padEnd(15)} ${c.status.padEnd(7)} ${(c.reason || '').padEnd(19)} ${c.message || ''}`);
+        }
+      }
+      lines.push('Events:           <none>');
+      return { stdout: lines.join('\n') + '\n', stderr: '', code: 0 };
+    }
+
+    if (kind === 'VerticalPodAutoscaler') {
+      const mode = res.spec?.updatePolicy?.updateMode || 'Auto';
+      const lines = [
+        `Name:         ${res.metadata?.name}`,
+        `Namespace:    ${res.metadata?.namespace || 'default'}`,
+        `Labels:       ${labels}`,
+        `Annotations:  <none>`,
+        `API Version:  autoscaling.k8s.io/v1`,
+        `Kind:         VerticalPodAutoscaler`,
+        `Spec:`,
+        `  Target Ref:`,
+        `    Kind:  ${res.spec?.targetRef?.kind || 'Deployment'}`,
+        `    Name:  ${res.spec?.targetRef?.name || '<none>'}`,
+        `  Update Policy:`,
+        `    Update Mode:  ${mode}`,
+        `Status:`,
+        `  Recommendation:`
+      ];
+      const recs = res.status?.recommendation?.containerRecommendations || [];
+      if (recs.length > 0) {
+        lines.push('    Container Recommendations:');
+        for (const r of recs) {
+          lines.push(`      Container Name:  ${r.containerName}`);
+          lines.push(`      Target:`);
+          lines.push(`        Cpu:     ${r.target?.cpu}`);
+          lines.push(`        Memory:  ${r.target?.memory}`);
+          lines.push(`      Lower Bound:`);
+          lines.push(`        Cpu:     ${r.lowerBound?.cpu}`);
+          lines.push(`        Memory:  ${r.lowerBound?.memory}`);
+          lines.push(`      Upper Bound:`);
+          lines.push(`        Cpu:     ${r.upperBound?.cpu}`);
+          lines.push(`        Memory:  ${r.upperBound?.memory}`);
+        }
+      }
+      lines.push('Events:  <none>');
+      return { stdout: lines.join('\n') + '\n', stderr: '', code: 0 };
+    }
 
     const out = [
       `Name:         ${res.metadata?.name}`,
@@ -1181,7 +1465,7 @@ class MultiCliDispatcher {
     return { stdout: `${rawKind.toLowerCase()}/${targetName} edited\n`, stderr: '', code: 0 };
   }
 
-  _kubectlAutoscale({ restArgs, namespace }) {
+  _kubectlAutoscale({ restArgs, namespace, dryRun: initialDryRun = false, outputFormat: initialOutput = null }) {
     if (!this.graph) return { stdout: '', stderr: 'No resource graph active\n', code: 1 };
     let rawTarget = restArgs[0];
     let targetKind = 'Deployment';
@@ -1203,6 +1487,9 @@ class MultiCliDispatcher {
     let min = 1;
     let max = 5;
     let cpuPercent = 80;
+    let hpaName = null;
+    let dryRun = initialDryRun;
+    let outputFormat = initialOutput;
 
     for (let i = 0; i < restArgs.length; i++) {
       const a = restArgs[i];
@@ -1212,18 +1499,30 @@ class MultiCliDispatcher {
       else if (a === '--max') max = parseInt(restArgs[++i], 10);
       else if (a.startsWith('--cpu-percent=')) cpuPercent = parseInt(a.split('=')[1], 10);
       else if (a === '--cpu-percent') cpuPercent = parseInt(restArgs[++i], 10);
+      else if (a.startsWith('--name=')) hpaName = a.split('=')[1];
+      else if (a === '--name') hpaName = restArgs[++i];
+      else if (a.startsWith('--dry-run')) dryRun = true;
+      else if (a.startsWith('-o=')) outputFormat = a.split('=')[1];
+      else if (a === '-o') outputFormat = restArgs[++i];
     }
+
+    hpaName = hpaName || targetName;
 
     const targetResource = this.graph.get(targetKind, namespace, targetName);
     if (!targetResource) {
       return { stdout: '', stderr: `Error from server (NotFound): ${targetKind} "${targetName}" not found in namespace "${namespace}"\n`, code: 1 };
     }
 
+    const existingHpa = this.graph.get('HorizontalPodAutoscaler', namespace, hpaName);
+    if (existingHpa && !dryRun) {
+      return { stdout: '', stderr: `Error from server (AlreadyExists): horizontalpodautoscalers.autoscaling "${hpaName}" already exists\n`, code: 1 };
+    }
+
     const hpa = {
       apiVersion: 'autoscaling/v2',
       kind: 'HorizontalPodAutoscaler',
       metadata: {
-        name: targetName,
+        name: hpaName,
         namespace,
         creationTimestamp: new Date().toISOString()
       },
@@ -1249,8 +1548,22 @@ class MultiCliDispatcher {
       }
     };
 
+    if (dryRun) {
+      if (outputFormat === 'yaml') {
+        const y = yamlParser.stringifyYaml ? yamlParser.stringifyYaml(hpa) : JSON.stringify(hpa, null, 2);
+        return { stdout: y + '\n', stderr: '', code: 0 };
+      }
+      if (outputFormat === 'json') {
+        return { stdout: JSON.stringify(hpa, null, 2) + '\n', stderr: '', code: 0 };
+      }
+      return { stdout: `horizontalpodautoscaler.autoscaling/${hpaName} autoscaled (server dry run)\n`, stderr: '', code: 0 };
+    }
+
     this.graph.set(hpa);
-    return { stdout: `horizontalpodautoscaler.autoscaling/${targetName} autoscaled\n`, stderr: '', code: 0 };
+    if (this.controllerManager) {
+      this.controllerManager.reconcile();
+    }
+    return { stdout: `horizontalpodautoscaler.autoscaling/${hpaName} autoscaled\n`, stderr: '', code: 0 };
   }
 
   _kubectlDiff({ filename, stdin, vfs, cwd }) {
@@ -1770,8 +2083,102 @@ class MultiCliDispatcher {
   handleIstioctl({ argv = [] }) {
     const sub = argv[1];
     if (sub === 'analyze') {
-      return { stdout: '✔ No validation issues found when analyzing namespace: default.\n', stderr: '', code: 0 };
+      let targetNs = 'default';
+      let allNs = false;
+      for (let i = 2; i < argv.length; i++) {
+        if (argv[i] === '-n' || argv[i] === '--namespace') targetNs = argv[++i];
+        else if (argv[i].startsWith('-n=')) targetNs = argv[i].split('=')[1];
+        else if (argv[i].startsWith('--namespace=')) targetNs = argv[i].split('=')[1];
+        else if (argv[i] === '-A' || argv[i] === '--all-namespaces') allNs = true;
+      }
+
+      const issues = [];
+      if (this.graph) {
+        const vses = allNs
+          ? this.graph.list('VirtualService')
+          : this.graph.list('VirtualService', targetNs);
+        const drs = this.graph.list('DestinationRule');
+        const services = this.graph.list('Service');
+
+        for (const vs of vses) {
+          const vsNs = vs.metadata?.namespace || 'default';
+          const vsName = vs.metadata?.name;
+
+          for (const rule of (vs.spec?.http || [])) {
+            let totalWeight = 0;
+            const routes = rule.route || [];
+            for (const r of routes) {
+              const dest = r.destination || {};
+              const host = dest.host;
+              const subset = dest.subset;
+              const weight = r.weight !== undefined ? r.weight : 100;
+              totalWeight += weight;
+
+              if (host) {
+                const svcExists = services.some((s) => {
+                  const sName = s.metadata?.name;
+                  const sNs = s.metadata?.namespace || 'default';
+                  return host === sName || host === `${sName}.${sNs}` || host === `${sName}.${sNs}.svc.cluster.local`;
+                });
+
+                if (!svcExists && !host.includes('.')) {
+                  issues.push({
+                    level: 'Warn',
+                    code: 'IST0101',
+                    target: `VirtualService ${vsName}.${vsNs}`,
+                    message: `Referenced host not found: "${host}"`
+                  });
+                }
+
+                if (subset) {
+                  const dr = drs.find((d) => {
+                    const dHost = d.spec?.host;
+                    return dHost === host || dHost?.startsWith(host);
+                  });
+                  const subsetDefined = dr?.spec?.subsets?.some((s) => s.name === subset);
+                  if (!dr || !subsetDefined) {
+                    issues.push({
+                      level: 'Error',
+                      code: 'IST0101',
+                      target: `VirtualService ${vsName}.${vsNs}`,
+                      message: `Referenced host+subset not found: "${host}" subset: "${subset}"`
+                    });
+                  }
+                }
+              }
+            }
+
+            if (routes.length > 1 && totalWeight !== 100) {
+              issues.push({
+                level: 'Warn',
+                code: 'IST0102',
+                target: `VirtualService ${vsName}.${vsNs}`,
+                message: `Total weight of routes across destinations should sum to 100, found: ${totalWeight}`
+              });
+            }
+          }
+        }
+      }
+
+      if (issues.length > 0) {
+        const out = issues.map((iss) => `${iss.level} [${iss.code}] (${iss.target}) ${iss.message}`).join('\n') + '\n';
+        const hasErrors = issues.some((i) => i.level === 'Error');
+        return { stdout: out, stderr: '', code: hasErrors ? 1 : 0 };
+      }
+
+      const scope = allNs ? 'all namespaces' : `namespace: ${targetNs}`;
+      return { stdout: `✔ No validation issues found when analyzing ${scope}.\n`, stderr: '', code: 0 };
     }
+
+    if (sub === 'authn' && argv[2] === 'tls-check') {
+      const headers = ['HOST:PORT', 'STATUS', 'SERVER', 'CLIENT', 'AUTHN POLICY', 'DESTINATION RULE'];
+      const rows = [
+        ['details.default.svc.cluster.local:9080', 'OK', 'mTLS', 'mTLS', 'default/default', 'details/default'],
+        ['ratings.default.svc.cluster.local:9080', 'OK', 'mTLS', 'mTLS', 'default/default', 'ratings/default']
+      ];
+      return { stdout: this._formatTable(headers, rows) + '\n', stderr: '', code: 0 };
+    }
+
     if (sub === 'proxy-status') {
       const headers = ['NAME', 'CDS', 'LDS', 'EDS', 'RDS', 'ISTIOD', 'VERSION'];
       const rows = [

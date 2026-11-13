@@ -15,6 +15,16 @@ try {
   yamlParser = (typeof globalThis !== 'undefined' && globalThis.yamlParser) || {};
 }
 
+let HorizontalPodAutoscalerEngine, VerticalPodAutoscalerEngine;
+try {
+  const autoscalingMod = require('./autoscalingAndMeshEngine');
+  HorizontalPodAutoscalerEngine = autoscalingMod.HorizontalPodAutoscalerEngine;
+  VerticalPodAutoscalerEngine = autoscalingMod.VerticalPodAutoscalerEngine;
+} catch {
+  HorizontalPodAutoscalerEngine = (typeof globalThis !== 'undefined' && globalThis.HorizontalPodAutoscalerEngine);
+  VerticalPodAutoscalerEngine = (typeof globalThis !== 'undefined' && globalThis.VerticalPodAutoscalerEngine);
+}
+
 // Simple isomorphic hash generator for pod templates
 function hashTemplate(template) {
   const str = JSON.stringify(template || {});
@@ -54,6 +64,11 @@ class ControllerManager {
     this.clusterIpCounter = 100;
     this.nodePortCounter = 30000;
     this.isReconciling = false;
+
+    this.hpaEngine = HorizontalPodAutoscalerEngine ? new HorizontalPodAutoscalerEngine(this.graph) : null;
+    this.vpaEngine = VerticalPodAutoscalerEngine ? new VerticalPodAutoscalerEngine(this.graph) : null;
+    this._metricsSnapshot = {};
+    this._vpaUsageData = {};
 
     // Auto-subscribe to ResourceGraph events
     this._unsubAdded = this.graph.on('Added', () => this.scheduleReconcile());
@@ -106,6 +121,14 @@ class ControllerManager {
     this.reconcile();
   }
 
+  setMetricsSnapshot(snapshot) {
+    this._metricsSnapshot = snapshot || {};
+  }
+
+  setVpaUsageData(usageData) {
+    this._vpaUsageData = usageData || {};
+  }
+
   /**
    * Main reconciliation convergence loop
    * Runs controllers until cluster graph reaches steady state (max 10 iterations)
@@ -115,6 +138,9 @@ class ControllerManager {
     this.isReconciling = true;
 
     try {
+      this.reconcileHpa(this._metricsSnapshot);
+      this.reconcileVpa(this._vpaUsageData);
+
       let iterations = 0;
       const maxIterations = 10;
 
@@ -340,6 +366,75 @@ class ControllerManager {
         };
         this.graph.set(pvc, { skipReconcileNotification: true });
       }
+    }
+  }
+
+  // -------------------------------------------------------------
+  // 2b. HorizontalPodAutoscaler Controller (HPA v2)
+  // -------------------------------------------------------------
+  reconcileHpa(metricsSnapshot = {}) {
+    if (!this.hpaEngine) {
+      if (HorizontalPodAutoscalerEngine) {
+        this.hpaEngine = new HorizontalPodAutoscalerEngine(this.graph);
+      } else {
+        return;
+      }
+    }
+    const hpas = this.graph.list({ kind: 'HorizontalPodAutoscaler' });
+    for (const hpa of hpas) {
+      if (hpa.metadata && hpa.metadata.deletionTimestamp) continue;
+      const ns = (hpa.metadata && hpa.metadata.namespace) || 'default';
+      const name = hpa.metadata && hpa.metadata.name;
+      const targetRef = hpa.spec && hpa.spec.scaleTargetRef;
+      const targetName = targetRef && targetRef.name;
+
+      let snap = metricsSnapshot[`${ns}/${name}`]
+        || metricsSnapshot[name]
+        || (targetName ? (metricsSnapshot[`${ns}/${targetName}`] || metricsSnapshot[targetName]) : null);
+
+      if (!snap && hpa.metadata && hpa.metadata.annotations) {
+        const annoCpu = hpa.metadata.annotations['metrics.k8s.io/cpu-utilization'];
+        const annoMem = hpa.metadata.annotations['metrics.k8s.io/memory-utilization'];
+        if (annoCpu || annoMem) {
+          snap = {};
+          if (annoCpu) snap.cpuUtilization = parseFloat(annoCpu);
+          if (annoMem) snap.memoryUtilization = parseFloat(annoMem);
+        }
+      }
+
+      if (!snap) {
+        snap = metricsSnapshot;
+      }
+
+      this.hpaEngine.reconcileHpa(hpa, snap || {});
+    }
+  }
+
+  // -------------------------------------------------------------
+  // 2c. VerticalPodAutoscaler Controller (VPA)
+  // -------------------------------------------------------------
+  reconcileVpa(usageData = {}) {
+    if (!this.vpaEngine) {
+      if (VerticalPodAutoscalerEngine) {
+        this.vpaEngine = new VerticalPodAutoscalerEngine(this.graph);
+      } else {
+        return;
+      }
+    }
+    const vpas = this.graph.list({ kind: 'VerticalPodAutoscaler' });
+    for (const vpa of vpas) {
+      if (vpa.metadata && vpa.metadata.deletionTimestamp) continue;
+      const ns = (vpa.metadata && vpa.metadata.namespace) || 'default';
+      const name = vpa.metadata && vpa.metadata.name;
+      const targetRef = vpa.spec && vpa.spec.targetRef;
+      const targetName = targetRef && targetRef.name;
+
+      const usage = usageData[`${ns}/${name}`]
+        || usageData[name]
+        || (targetName ? (usageData[`${ns}/${targetName}`] || usageData[targetName]) : null)
+        || usageData;
+
+      this.vpaEngine.reconcileVpa(vpa, usage || {});
     }
   }
 

@@ -159,3 +159,4 @@ test('Subphase 3.2.1: curl endpoint queries against Prometheus and Loki APIs', (
   assert.equal(lokiJson.status, 'success');
   assert.ok(lokiJson.data.result[0].values[0][1].includes('Database failover initiated'));
 });
+
