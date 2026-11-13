@@ -1217,6 +1217,25 @@
     appendTerminalLine(`=== [ALERT] INJECTED PRODUCTION INCIDENT: ${data.incident.title} ===`);
   }
 
+  const NODE_TYPE_ICONS = {
+    waf: '🌐',
+    ingress: '🚪',
+    service: '⚡',
+    deployment: '📦',
+    database: '🗄️',
+    storage: '💾',
+    networkpolicy: '🛡️',
+    mesh: '🕸️',
+    gitops: '🐙',
+    observability: '📊',
+    'gpu-pool': '🎮',
+    cache: '⚡',
+    iac: '🏗️'
+  };
+
+  let archCanvasZoom = 1.0;
+  let connectingPortState = null;
+
   function initArchitectureDesigner() {
     const select = document.getElementById('arch-blueprint-select');
     if (!select || !state.overview) return;
@@ -1229,23 +1248,182 @@
 
     select.onchange = () => loadReferenceBlueprint(select.value);
 
+    // Component Palette Buttons
     document.querySelectorAll('.arch-add-btn').forEach((btn) => {
       btn.addEventListener('click', () => {
         const id = `n-${Date.now().toString().slice(-4)}`;
+        const type = btn.dataset.type;
+        const count = state.activeArch.nodes.length;
         const newNode = {
           id,
-          type: btn.dataset.type,
-          label: btn.dataset.label,
+          type,
+          label: btn.dataset.label || `${type.toUpperCase()} Component`,
           namespace: 'production',
-          replicas: 2
+          replicas: 2,
+          x: 40 + (count % 4) * 190,
+          y: 40 + Math.floor(count / 4) * 140
         };
+
         if (state.activeArch.nodes.length > 0) {
           const prev = state.activeArch.nodes[state.activeArch.nodes.length - 1];
           state.activeArch.edges.push({ from: prev.id, to: id, protocol: 'TCP/mTLS' });
         }
+
         state.activeArch.nodes.push(newNode);
         refreshArchitectureAnalysis();
       });
+    });
+
+    // Clear Canvas
+    const clearBtn = document.getElementById('btn-arch-clear');
+    if (clearBtn) {
+      clearBtn.addEventListener('click', () => {
+        state.activeArch = {
+          name: 'Custom Cloud-Native Architecture',
+          nodes: [],
+          edges: []
+        };
+        document.getElementById('arch-current-title').textContent = state.activeArch.name;
+        refreshArchitectureAnalysis();
+      });
+    }
+
+    // Fault Injection Simulator (toggles failure on first critical node)
+    const faultBtn = document.getElementById('btn-arch-fault-inject');
+    if (faultBtn) {
+      faultBtn.addEventListener('click', () => {
+        const targetNode = state.activeArch.nodes.find(
+          (n) => n.type === 'deployment' || n.type === 'database' || n.type === 'gpu-pool' || n.type === 'ingress'
+        ) || state.activeArch.nodes[0];
+        if (!targetNode) return;
+        targetNode.killed = !targetNode.killed;
+        refreshArchitectureAnalysis();
+      });
+    }
+
+    // Zoom Controls
+    const zoomInBtn = document.getElementById('btn-arch-zoom-in');
+    const zoomOutBtn = document.getElementById('btn-arch-zoom-out');
+    const zoomResetBtn = document.getElementById('btn-arch-zoom-reset');
+
+    function applyZoom() {
+      const nodesLayer = document.getElementById('arch-nodes-canvas');
+      const svg = document.getElementById('arch-canvas-svg');
+      if (nodesLayer) {
+        nodesLayer.style.transform = `scale(${archCanvasZoom})`;
+        nodesLayer.style.transformOrigin = '0 0';
+      }
+      if (svg) {
+        svg.style.transform = `scale(${archCanvasZoom})`;
+        svg.style.transformOrigin = '0 0';
+      }
+      if (zoomResetBtn) zoomResetBtn.textContent = `${Math.round(archCanvasZoom * 100)}%`;
+    }
+
+    if (zoomInBtn) {
+      zoomInBtn.addEventListener('click', () => {
+        if (archCanvasZoom < 1.6) {
+          archCanvasZoom = Math.min(1.6, archCanvasZoom + 0.15);
+          applyZoom();
+        }
+      });
+    }
+    if (zoomOutBtn) {
+      zoomOutBtn.addEventListener('click', () => {
+        if (archCanvasZoom > 0.5) {
+          archCanvasZoom = Math.max(0.5, archCanvasZoom - 0.15);
+          applyZoom();
+        }
+      });
+    }
+    if (zoomResetBtn) {
+      zoomResetBtn.addEventListener('click', () => {
+        archCanvasZoom = 1.0;
+        applyZoom();
+      });
+    }
+
+    // Inspector Tabs Switcher
+    document.querySelectorAll('.arch-tab-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const targetTab = btn.dataset.tab;
+        document.querySelectorAll('.arch-tab-btn').forEach((b) => {
+          b.classList.toggle('active', b === btn);
+          b.setAttribute('aria-selected', b === btn ? 'true' : 'false');
+        });
+        document.querySelectorAll('.arch-tab-content').forEach((c) => {
+          const isActive = c.id === targetTab;
+          c.classList.toggle('active', isActive);
+          c.style.display = isActive ? 'flex' : 'none';
+        });
+      });
+    });
+
+    // Copy YAML button
+    const copyYamlBtn = document.getElementById('btn-copy-arch-yaml');
+    if (copyYamlBtn) {
+      copyYamlBtn.addEventListener('click', async () => {
+        const val = document.getElementById('arch-yaml-out').value;
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          try {
+            await navigator.clipboard.writeText(val);
+            const orig = copyYamlBtn.textContent;
+            copyYamlBtn.textContent = '✓ Copied!';
+            setTimeout(() => { copyYamlBtn.textContent = orig; }, 1500);
+          } catch {}
+        }
+      });
+    }
+
+    // Copy HCL button
+    const copyHclBtn = document.getElementById('btn-copy-arch-hcl');
+    if (copyHclBtn) {
+      copyHclBtn.addEventListener('click', async () => {
+        const val = document.getElementById('arch-hcl-out').value;
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          try {
+            await navigator.clipboard.writeText(val);
+            const orig = copyHclBtn.textContent;
+            copyHclBtn.textContent = '✓ Copied!';
+            setTimeout(() => { copyHclBtn.textContent = orig; }, 1500);
+          } catch {}
+        }
+      });
+    }
+
+    // Direct Apply Manifest from YAML tab
+    const applyYamlTabBtn = document.getElementById('btn-arch-apply-yaml');
+    if (applyYamlTabBtn) {
+      applyYamlTabBtn.addEventListener('click', () => {
+        const deployBtn = document.getElementById('btn-arch-deploy');
+        if (deployBtn) deployBtn.click();
+      });
+    }
+  }
+
+  function computeBlueprintLayout(nodes) {
+    const typeCols = {
+      waf: 0,
+      ingress: 1,
+      mesh: 1,
+      service: 2,
+      networkpolicy: 2,
+      deployment: 3,
+      'gpu-pool': 3,
+      database: 4,
+      storage: 4,
+      cache: 4,
+      gitops: 0,
+      iac: 1,
+      observability: 4
+    };
+    const colCounters = {};
+    nodes.forEach((n, idx) => {
+      const col = typeCols[n.type] !== undefined ? typeCols[n.type] : (idx % 5);
+      const row = colCounters[col] || 0;
+      colCounters[col] = row + 1;
+      n.x = 25 + col * 185;
+      n.y = 25 + row * 135;
     });
   }
 
@@ -1258,25 +1436,13 @@
       nodes: JSON.parse(JSON.stringify(found.nodes)),
       edges: JSON.parse(JSON.stringify(found.edges))
     };
+    computeBlueprintLayout(state.activeArch.nodes);
     document.getElementById('arch-current-title').textContent = found.name;
     refreshArchitectureAnalysis();
   }
 
   async function refreshArchitectureAnalysis() {
-    const canvas = document.getElementById('arch-nodes-canvas');
-    if (canvas) {
-      canvas.innerHTML = state.activeArch.nodes
-        .map(
-          (n) => `
-          <div class="arch-node">
-            <div style="font-size:0.7rem; text-transform:uppercase; color:var(--accent-blue); font-weight:700;">${n.type}</div>
-            <div style="font-weight:700; margin:0.2rem 0;">${n.label}</div>
-            <div style="font-size:0.74rem; color:var(--text-muted);">ns: ${n.namespace || 'production'} | replicas: ${n.replicas || 1}</div>
-          </div>
-        `
-        )
-        .join('');
-    }
+    renderArchitectureCanvas();
 
     const res = await apiCall('/api/architectures/analyze', {
       method: 'POST',
@@ -1287,14 +1453,307 @@
     document.getElementById('arch-hcl-out').value = res.opentofuHcl || '';
 
     const a = res.analysis;
-    document.getElementById('arch-score-badge').textContent =
-      `Well-Architected Score: ${a.overallScore}/100 | Est. $${a.estimatedMonthlyCostUsd}/mo`;
+    const hasKilled = state.activeArch.nodes.some((n) => n.killed);
+    const displayScore = hasKilled ? Math.max(30, a.overallScore - 35) : a.overallScore;
 
+    document.getElementById('arch-score-badge').textContent =
+      `Well-Architected Score: ${displayScore}/100 | Est. $${a.estimatedMonthlyCostUsd}/mo`;
+
+    // Render findings
     const findingsEl = document.getElementById('arch-review-findings');
-    findingsEl.innerHTML = `
-      <div><strong>Pillar Scores:</strong> Reliability ${a.pillars.reliability}% | Security ${a.pillars.security}% | Observability ${a.pillars.observability}% | Ops Excellence ${a.pillars.operationalExcellence}%</div>
-      ${a.spofs.length > 0 ? `<div style="color:#fca5a5; margin-top:0.25rem;">${a.spofs.join(' | ')}</div>` : '<div style="color:var(--accent-green); margin-top:0.25rem;">Zero Single Points of Failure (SPOFs) detected.</div>'}
+    if (findingsEl) {
+      findingsEl.innerHTML = `
+        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.4rem;">
+          <div><strong>4 Pillars:</strong> Reliability ${hasKilled ? Math.max(20, a.pillars.reliability - 40) : a.pillars.reliability}% | Security ${a.pillars.security}% | Observability ${a.pillars.observability}% | Ops ${a.pillars.operationalExcellence}%</div>
+          <span style="font-weight:700; color:var(--accent-blue);">${state.activeArch.nodes.length} Components &bull; ${state.activeArch.edges.length} Connections</span>
+        </div>
+        ${hasKilled ? `<div style="color:#fca5a5; margin-top:0.3rem; font-weight:700;">🔥 SIMULATED PRODUCTION OUTAGE: Single Point of Failure triggered. Downstream traffic blocked.</div>` : ''}
+        ${a.spofs.length > 0 ? `<div style="color:#fde047; margin-top:0.25rem;">⚠️ ${escapeHtml(a.spofs.join(' | '))}</div>` : '<div style="color:var(--accent-green); margin-top:0.25rem;">✓ Zero Single Points of Failure (SPOFs) detected across active topology.</div>'}
+      `;
+    }
+
+    // Render Tab 3 Well-Architected & CIS Review
+    renderArchitectureReviewTab(a, hasKilled);
+  }
+
+  function renderArchitectureCanvas() {
+    const nodesLayer = document.getElementById('arch-nodes-canvas');
+    if (!nodesLayer) return;
+
+    // Render HTML Nodes
+    nodesLayer.innerHTML = state.activeArch.nodes
+      .map((n) => {
+        const isSpof = (n.type === 'deployment' || n.type === 'database' || n.type === 'ingress' || n.type === 'gpu-pool') && Number(n.replicas || 1) < 2;
+        const icon = NODE_TYPE_ICONS[n.type] || '📦';
+        return `
+          <div class="arch-canvas-node ${isSpof ? 'spof-node' : ''} ${n.killed ? 'killed-node' : ''}" id="arch-node-${n.id}" data-id="${n.id}" style="left:${n.x || 30}px; top:${n.y || 30}px;">
+            <div class="arch-node-port input-port" data-id="${n.id}" data-port="in" title="Click to connect cable in"></div>
+            <div class="arch-node-header">
+              <span class="arch-node-type-badge">${icon} ${escapeHtml(n.type)}</span>
+              <button type="button" class="arch-node-remove-btn" data-id="${n.id}" title="Remove Component">&times;</button>
+            </div>
+            <div class="arch-node-body">
+              <div class="arch-node-title" title="${escapeHtml(n.label)}">${escapeHtml(n.label)}</div>
+              <div class="arch-node-meta">
+                <span>ns: ${escapeHtml(n.namespace || 'production')}</span>
+                <div class="arch-node-stepper">
+                  <button type="button" class="arch-step-btn btn-rep-down" data-id="${n.id}" title="Decrease replicas">-</button>
+                  <span style="font-weight:700; min-width:14px; text-align:center;">${n.replicas || 1}</span>
+                  <button type="button" class="arch-step-btn btn-rep-up" data-id="${n.id}" title="Increase replicas">+</button>
+                </div>
+              </div>
+              <span class="arch-node-status-badge ${n.killed ? 'killed' : isSpof ? 'spof' : 'healthy'}">
+                ${n.killed ? '🔥 Outage (Killed)' : isSpof ? '⚠️ SPOF (1 Replica)' : '✓ Multi-AZ Active'}
+              </span>
+            </div>
+            <div class="arch-node-port output-port" data-id="${n.id}" data-port="out" title="Click to connect cable out"></div>
+          </div>
+        `;
+      })
+      .join('');
+
+    // Wire Node Dragging
+    nodesLayer.querySelectorAll('.arch-canvas-node').forEach((nodeEl) => {
+      setupNodeDrag(nodeEl);
+    });
+
+    // Wire Remove Node Buttons
+    nodesLayer.querySelectorAll('.arch-node-remove-btn').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const id = btn.dataset.id;
+        state.activeArch.nodes = state.activeArch.nodes.filter((n) => n.id !== id);
+        state.activeArch.edges = state.activeArch.edges.filter((ed) => ed.from !== id && ed.to !== id);
+        refreshArchitectureAnalysis();
+      });
+    });
+
+    // Wire Replicas Steppers
+    nodesLayer.querySelectorAll('.btn-rep-up').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const id = btn.dataset.id;
+        const target = state.activeArch.nodes.find((n) => n.id === id);
+        if (target) {
+          target.replicas = (Number(target.replicas) || 1) + 1;
+          refreshArchitectureAnalysis();
+        }
+      });
+    });
+    nodesLayer.querySelectorAll('.btn-rep-down').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const id = btn.dataset.id;
+        const target = state.activeArch.nodes.find((n) => n.id === id);
+        if (target && Number(target.replicas) > 1) {
+          target.replicas = Number(target.replicas) - 1;
+          refreshArchitectureAnalysis();
+        }
+      });
+    });
+
+    // Wire Connection Ports
+    nodesLayer.querySelectorAll('.arch-node-port').forEach((portEl) => {
+      portEl.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const nodeId = portEl.dataset.id;
+        const portType = portEl.dataset.port;
+
+        if (portType === 'out') {
+          connectingPortState = { fromId: nodeId };
+          nodesLayer.querySelectorAll('.arch-node-port').forEach((p) => p.classList.remove('connecting'));
+          portEl.classList.add('connecting');
+        } else if (portType === 'in' && connectingPortState && connectingPortState.fromId !== nodeId) {
+          const fromId = connectingPortState.fromId;
+          const exists = state.activeArch.edges.some((ed) => ed.from === fromId && ed.to === nodeId);
+          if (!exists) {
+            state.activeArch.edges.push({ from: fromId, to: nodeId, protocol: 'TCP/mTLS' });
+          }
+          connectingPortState = null;
+          nodesLayer.querySelectorAll('.arch-node-port').forEach((p) => p.classList.remove('connecting'));
+          refreshArchitectureAnalysis();
+        }
+      });
+    });
+
+    renderCablesAndPulses();
+  }
+
+  function renderCablesAndPulses() {
+    const cablesGroup = document.getElementById('arch-cables-group');
+    const pulsesGroup = document.getElementById('arch-pulses-group');
+    if (!cablesGroup || !pulsesGroup) return;
+
+    let cablesSvg = '';
+    let pulsesSvg = '';
+
+    state.activeArch.edges.forEach((edge, idx) => {
+      const fromNode = state.activeArch.nodes.find((n) => n.id === edge.from);
+      const toNode = state.activeArch.nodes.find((n) => n.id === edge.to);
+      if (!fromNode || !toNode) return;
+
+      const x1 = (fromNode.x || 30) + 170;
+      const y1 = (fromNode.y || 30) + 55;
+      const x2 = (toNode.x || 30);
+      const y2 = (toNode.y || 30) + 55;
+
+      const dx = Math.max(45, Math.abs(x2 - x1) * 0.5);
+      const pathD = `M ${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}`;
+
+      const isKilled = fromNode.killed || toNode.killed;
+      const isSpof = (fromNode.replicas || 1) < 2 || (toNode.replicas || 1) < 2;
+
+      cablesSvg += `
+        <path class="arch-cable ${isKilled ? 'killed' : isSpof ? 'spof' : ''}" d="${pathD}" marker-end="url(${isKilled ? '#cable-arrow-killed' : '#cable-arrow'})" data-edge-idx="${idx}" />
+      `;
+
+      if (!isKilled) {
+        pulsesSvg += `
+          <circle class="arch-packet-pulse" r="3.5">
+            <animateMotion path="${pathD}" dur="2.4s" repeatCount="indefinite" />
+          </circle>
+        `;
+      }
+    });
+
+    cablesGroup.innerHTML = cablesSvg;
+    pulsesGroup.innerHTML = pulsesSvg;
+  }
+
+  function setupNodeDrag(nodeEl) {
+    let startX = 0;
+    let startY = 0;
+    let initialNodeX = 0;
+    let initialNodeY = 0;
+    let isDragging = false;
+    const nodeId = nodeEl.dataset.id;
+    const nodeObj = state.activeArch.nodes.find((n) => n.id === nodeId);
+
+    function onPointerDown(e) {
+      if (e.target.closest('button') || e.target.closest('.arch-node-port')) return;
+      isDragging = true;
+      nodeEl.classList.add('dragging');
+      startX = e.clientX || (e.touches && e.touches[0] ? e.touches[0].clientX : 0);
+      startY = e.clientY || (e.touches && e.touches[0] ? e.touches[0].clientY : 0);
+      initialNodeX = nodeObj ? (nodeObj.x || 30) : parseInt(nodeEl.style.left || '30', 10);
+      initialNodeY = nodeObj ? (nodeObj.y || 30) : parseInt(nodeEl.style.top || '30', 10);
+
+      window.addEventListener('mousemove', onPointerMove);
+      window.addEventListener('mouseup', onPointerUp);
+      window.addEventListener('touchmove', onPointerMove, { passive: false });
+      window.addEventListener('touchend', onPointerUp);
+    }
+
+    function onPointerMove(e) {
+      if (!isDragging) return;
+      if (e.cancelable && e.type === 'touchmove') e.preventDefault();
+      const clientX = e.clientX || (e.touches && e.touches[0] ? e.touches[0].clientX : 0);
+      const clientY = e.clientY || (e.touches && e.touches[0] ? e.touches[0].clientY : 0);
+      const dx = (clientX - startX) / archCanvasZoom;
+      const dy = (clientY - startY) / archCanvasZoom;
+
+      const newX = Math.max(10, Math.min(1800, initialNodeX + dx));
+      const newY = Math.max(10, Math.min(1200, initialNodeY + dy));
+
+      if (nodeObj) {
+        nodeObj.x = newX;
+        nodeObj.y = newY;
+      }
+      nodeEl.style.left = `${newX}px`;
+      nodeEl.style.top = `${newY}px`;
+
+      renderCablesAndPulses();
+    }
+
+    function onPointerUp() {
+      if (!isDragging) return;
+      isDragging = false;
+      nodeEl.classList.remove('dragging');
+      window.removeEventListener('mousemove', onPointerMove);
+      window.removeEventListener('mouseup', onPointerUp);
+      window.removeEventListener('touchmove', onPointerMove);
+      window.removeEventListener('touchend', onPointerUp);
+    }
+
+    nodeEl.addEventListener('mousedown', onPointerDown);
+    nodeEl.addEventListener('touchstart', onPointerDown, { passive: true });
+  }
+
+  function renderArchitectureReviewTab(analysis, hasKilled) {
+    const summaryEl = document.getElementById('arch-pillars-summary');
+    const spofsEl = document.getElementById('arch-spofs-list');
+    const recsEl = document.getElementById('arch-recommendations-list');
+    if (!summaryEl || !analysis) return;
+
+    const rel = hasKilled ? Math.max(20, analysis.pillars.reliability - 40) : analysis.pillars.reliability;
+    const sec = analysis.pillars.security;
+    const obs = analysis.pillars.observability;
+    const ops = analysis.pillars.operationalExcellence;
+
+    summaryEl.innerHTML = `
+      <div style="background:var(--bg-secondary); border:1px solid var(--border-subtle); border-radius:6px; padding:0.65rem;">
+        <div style="font-weight:700; font-size:0.86rem; color:var(--text-primary); margin-bottom:0.35rem;">
+          Well-Architected Framework Pillars (AWS &amp; CIS Benchmarks)
+        </div>
+        <div class="arch-pillar-grid">
+          <div class="arch-pillar-item">
+            <div class="arch-pillar-label"><span>Reliability &amp; HA</span><strong>${rel}%</strong></div>
+            <div class="arch-pillar-meter"><div class="arch-pillar-fill" style="width:${rel}%; background:var(--accent-blue);"></div></div>
+          </div>
+          <div class="arch-pillar-item">
+            <div class="arch-pillar-label"><span>Zero-Trust Security</span><strong>${sec}%</strong></div>
+            <div class="arch-pillar-meter"><div class="arch-pillar-fill" style="width:${sec}%; background:var(--accent-green);"></div></div>
+          </div>
+          <div class="arch-pillar-item">
+            <div class="arch-pillar-label"><span>Observability &amp; SLO</span><strong>${obs}%</strong></div>
+            <div class="arch-pillar-meter"><div class="arch-pillar-fill" style="width:${obs}%; background:var(--accent-purple);"></div></div>
+          </div>
+          <div class="arch-pillar-item">
+            <div class="arch-pillar-label"><span>Ops Excellence &amp; GitOps</span><strong>${ops}%</strong></div>
+            <div class="arch-pillar-meter"><div class="arch-pillar-fill" style="width:${ops}%; background:var(--accent-amber);"></div></div>
+          </div>
+        </div>
+      </div>
     `;
+
+    if (spofsEl) {
+      if (analysis.spofs.length === 0 && !hasKilled) {
+        spofsEl.innerHTML = `
+          <div style="background:rgba(34,197,94,0.1); border:1px solid rgba(34,197,94,0.3); border-radius:6px; padding:0.5rem; font-size:0.76rem; color:#86efac;">
+            ✓ High Availability Guaranteed: All critical components configured with 2+ replicas across independent availability zones.
+          </div>
+        `;
+      } else {
+        spofsEl.innerHTML = (analysis.spofs || [])
+          .map(
+            (spof) => `
+            <div class="arch-spof-item">
+              <span>⚠️ ${escapeHtml(spof)}</span>
+              <button type="button" class="btn btn-xs btn-primary btn-spof-fix" style="font-size:0.7rem; padding:0.15rem 0.45rem;">Remediate</button>
+            </div>
+          `
+          )
+          .join('');
+
+        spofsEl.querySelectorAll('.btn-spof-fix').forEach((btn) => {
+          btn.addEventListener('click', () => {
+            const spofNode = state.activeArch.nodes.find(
+              (n) => (n.type === 'deployment' || n.type === 'database' || n.type === 'ingress' || n.type === 'gpu-pool') && Number(n.replicas || 1) < 2
+            );
+            if (spofNode) {
+              spofNode.replicas = 2;
+              refreshArchitectureAnalysis();
+            }
+          });
+        });
+      }
+    }
+
+    if (recsEl) {
+      recsEl.innerHTML = (analysis.recommendations || [])
+        .map((rec) => `<div class="arch-rec-item">💡 ${escapeHtml(rec)}</div>`)
+        .join('');
+    }
   }
 
   function renderCertificationsAndExams() {

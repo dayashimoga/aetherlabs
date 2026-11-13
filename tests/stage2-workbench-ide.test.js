@@ -153,3 +153,4 @@ test('Subphase 2.1.2: app.js wires workbench tabs, editor gutter, diff view, ste
   assert.ok(js.includes('renderCisChecklist'), 'app.js must define renderCisChecklist');
   assert.ok(js.includes('topology-search-input'), 'app.js must wire topology search input');
 });
+

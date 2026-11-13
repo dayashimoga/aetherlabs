@@ -376,28 +376,32 @@
 
     <!-- VIEW 4: UI-BASED ARCHITECTURE DESIGNER & ENTERPRISE REFERENCE ARCHITECTURES -->
     <section id="view-architect" class="view-panel" aria-labelledby="architect-heading">
-      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.75rem; margin-bottom:1rem;">
+      <div class="arch-top-bar" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.75rem; margin-bottom:0.75rem;">
         <div>
-          <h1 id="architect-heading" style="font-size:1.35rem;">UI Cloud-Native Architecture Designer &amp; Enterprise Reference Blueprints</h1>
-          <p style="color:var(--text-secondary); font-size:0.86rem;">
-            Design visual topologies, run automated Well-Architected &amp; SPOF reviews, compile to Kubernetes YAML + OpenTofu HCL, and deploy directly to the virtual cluster.
+          <h1 id="architect-heading" style="font-size:1.35rem; margin:0;">UI Cloud-Native Architecture Designer &amp; Enterprise Reference Blueprints</h1>
+          <p style="color:var(--text-secondary); font-size:0.84rem; margin:0.25rem 0 0 0;">
+            Interactive drag-and-drop node-graph studio, live packet flows, automated SPOF &amp; Well-Architected reviews, and bi-directional YAML/HCL synchronization.
           </p>
         </div>
-        <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
+        <div style="display:flex; gap:0.5rem; flex-wrap:wrap; align-items:center;">
           <select id="arch-blueprint-select" aria-label="Load Enterprise Reference Architecture"
             style="background:var(--bg-card); color:var(--text-primary); border:1px solid var(--border-subtle); border-radius:6px; padding:0.45rem 0.75rem; font-size:0.84rem;"></select>
-          <button class="btn btn-primary" id="btn-arch-deploy" type="button">Deploy Topology to Virtual Cluster</button>
+          <button class="btn btn-warning" id="btn-arch-fault-inject" type="button" title="Simulate a Single Point of Failure (SPOF) component outage">⚡ Fault Injection</button>
+          <button class="btn" id="btn-arch-clear" type="button">Clear Canvas</button>
           <button class="btn btn-success" id="btn-arch-save" type="button">Save Architecture</button>
+          <button class="btn btn-primary" id="btn-arch-deploy" type="button">Deploy Topology to Virtual Cluster</button>
         </div>
       </div>
 
-      <div style="display:flex; gap:0.45rem; flex-wrap:wrap; margin-bottom:1rem;">
-        <span style="font-size:0.8rem; color:var(--text-muted); align-self:center; margin-right:0.3rem;">Add Component Node:</span>
-        <button class="btn arch-add-btn" data-type="waf" data-label="Cloud WAF & Edge Shield" type="button">+ WAF</button>
+      <!-- Component Palette Bar -->
+      <div class="arch-palette-bar" style="display:flex; gap:0.4rem; flex-wrap:wrap; margin-bottom:0.75rem; align-items:center; background:var(--bg-secondary); padding:0.5rem 0.75rem; border-radius:6px; border:1px solid var(--border-subtle);">
+        <span style="font-size:0.78rem; font-weight:700; color:var(--accent-blue); margin-right:0.3rem;">Component Palette:</span>
+        <button class="btn arch-add-btn" data-type="waf" data-label="Cloud WAF &amp; Edge Shield" type="button">+ WAF</button>
         <button class="btn arch-add-btn" data-type="ingress" data-label="Gateway API / Ingress" type="button">+ Ingress</button>
         <button class="btn arch-add-btn" data-type="service" data-label="ClusterIP Service" type="button">+ Service</button>
         <button class="btn arch-add-btn" data-type="deployment" data-label="Microservice Deployment (HA)" type="button">+ Deployment</button>
         <button class="btn arch-add-btn" data-type="database" data-label="CloudNativePG HA Database" type="button">+ Database</button>
+        <button class="btn arch-add-btn" data-type="storage" data-label="CSI Persistent Volume Claim" type="button">+ PVC Storage</button>
         <button class="btn arch-add-btn" data-type="networkpolicy" data-label="Zero-Trust NetworkPolicy" type="button">+ NetworkPolicy</button>
         <button class="btn arch-add-btn" data-type="mesh" data-label="Istio Strict mTLS Mesh" type="button">+ Service Mesh</button>
         <button class="btn arch-add-btn" data-type="gitops" data-label="Argo CD GitOps Controller" type="button">+ Argo CD</button>
@@ -405,26 +409,94 @@
         <button class="btn arch-add-btn" data-type="gpu-pool" data-label="NVIDIA GPU Inference Pool" type="button">+ GPU Pool</button>
       </div>
 
-      <div class="grid-2" style="margin-bottom:1rem;">
-        <div class="card">
-          <div class="card-header">
-            <h2 class="card-title" id="arch-current-title">Active Architecture Topology Canvas</h2>
-            <span class="badge" id="arch-score-badge">Well-Architected Score: 95/100</span>
+      <!-- Studio Grid: Left Canvas (60%) | Right Inspector Tabs (40%) -->
+      <div class="arch-studio-layout" id="arch-studio-layout">
+        <!-- Left: Interactive Node-Graph Canvas -->
+        <div class="card arch-canvas-card">
+          <div class="card-header" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem;">
+            <div>
+              <h2 class="card-title" id="arch-current-title" style="margin:0; font-size:1.05rem;">Active Architecture Topology Canvas</h2>
+              <div style="font-size:0.74rem; color:var(--text-muted); margin-top:0.2rem;">Drag nodes to reposition &bull; Click ports to connect &bull; Live packet pulse simulation</div>
+            </div>
+            <div style="display:flex; gap:0.4rem; align-items:center;">
+              <span class="badge" id="arch-score-badge">Well-Architected Score: 95/100</span>
+              <button class="btn btn-xs" id="btn-arch-zoom-out" type="button" title="Zoom canvas out">&minus;</button>
+              <button class="btn btn-xs" id="btn-arch-zoom-reset" type="button" title="Reset zoom">100%</button>
+              <button class="btn btn-xs" id="btn-arch-zoom-in" type="button" title="Zoom canvas in">&plus;</button>
+            </div>
           </div>
-          <div id="arch-nodes-canvas" class="arch-canvas-grid"></div>
-          <div id="arch-review-findings" style="font-size:0.8rem; color:var(--text-secondary); margin-top:0.5rem;"></div>
+
+          <!-- Canvas Viewport -->
+          <div id="arch-canvas-viewport" class="arch-canvas-viewport" tabindex="0" role="region" aria-label="Interactive Cloud Architecture Node-Graph Canvas">
+            <svg id="arch-canvas-svg" class="arch-canvas-svg" width="100%" height="100%">
+              <defs>
+                <pattern id="arch-grid-pattern" width="24" height="24" patternUnits="userSpaceOnUse">
+                  <circle cx="2" cy="2" r="1" fill="rgba(255, 255, 255, 0.08)" />
+                </pattern>
+                <marker id="cable-arrow" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                  <path d="M 0 1 L 8 5 L 0 9 z" fill="#38bdf8" />
+                </marker>
+                <marker id="cable-arrow-killed" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                  <path d="M 0 1 L 8 5 L 0 9 z" fill="#ef4444" />
+                </marker>
+              </defs>
+              <rect width="100%" height="100%" fill="url(#arch-grid-pattern)" />
+              <g id="arch-cables-group"></g>
+              <g id="arch-pulses-group"></g>
+            </svg>
+            <div id="arch-nodes-canvas" class="arch-nodes-layer"></div>
+          </div>
+
+          <div id="arch-review-findings" class="arch-review-findings" style="font-size:0.79rem; color:var(--text-secondary); margin-top:0.5rem; padding:0.5rem; background:var(--bg-secondary); border-radius:6px; border:1px solid var(--border-subtle);"></div>
         </div>
 
-        <div class="card">
-          <h2 class="card-title">Bi-Directional Generated Kubernetes YAML &amp; OpenTofu HCL</h2>
-          <div style="display:grid; grid-template-columns:1fr 1fr; gap:0.75rem;">
-            <div>
-              <label for="arch-yaml-out" style="font-size:0.78rem; color:var(--accent-blue);">Kubernetes Manifests (YAML)</label>
-              <textarea id="arch-yaml-out" class="code-editor" style="min-height:250px;" readonly></textarea>
+        <!-- Right: Inspector & Bi-Directional Compiler -->
+        <div class="card arch-inspector-card">
+          <div class="pane-tab-bar" role="tablist" aria-label="Architecture Studio Tabs" style="margin-bottom:0.5rem;">
+            <button type="button" class="pane-tab-btn arch-tab-btn active" data-tab="arch-tab-yaml" role="tab" aria-selected="true" id="arch-tab-btn-yaml">
+              <span>📄 Kubernetes YAML</span>
+            </button>
+            <button type="button" class="pane-tab-btn arch-tab-btn" data-tab="arch-tab-hcl" role="tab" aria-selected="false" id="arch-tab-btn-hcl">
+              <span>🏗️ OpenTofu HCL</span>
+            </button>
+            <button type="button" class="pane-tab-btn arch-tab-btn" data-tab="arch-tab-review" role="tab" aria-selected="false" id="arch-tab-btn-review">
+              <span>🛡️ Well-Architected &amp; CIS</span>
+            </button>
+          </div>
+
+          <!-- Tab 1: Kubernetes YAML Compiler -->
+          <div class="arch-tab-content active" id="arch-tab-yaml" role="tabpanel" aria-labelledby="arch-tab-btn-yaml">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.4rem;">
+              <span style="font-size:0.78rem; font-weight:600; color:var(--accent-blue);">Live Compiled Kubernetes Manifests (YAML)</span>
+              <div style="display:flex; gap:0.35rem;">
+                <button class="btn btn-xs" id="btn-copy-arch-yaml" type="button">📋 Copy YAML</button>
+                <button class="btn btn-primary btn-xs" id="btn-arch-apply-yaml" type="button">▶ Apply to Cluster</button>
+              </div>
             </div>
-            <div>
-              <label for="arch-hcl-out" style="font-size:0.78rem; color:var(--accent-green);">OpenTofu / Terraform (HCL)</label>
-              <textarea id="arch-hcl-out" class="code-editor" style="min-height:250px;" readonly></textarea>
+            <textarea id="arch-yaml-out" class="code-editor arch-code-editor" spellcheck="false" readonly></textarea>
+          </div>
+
+          <!-- Tab 2: OpenTofu / Terraform HCL Compiler -->
+          <div class="arch-tab-content" id="arch-tab-hcl" role="tabpanel" aria-labelledby="arch-tab-btn-hcl" style="display:none;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.4rem;">
+              <span style="font-size:0.78rem; font-weight:600; color:var(--accent-green);">Live Compiled OpenTofu / Terraform (HCL v1.9+)</span>
+              <div style="display:flex; gap:0.35rem;">
+                <button class="btn btn-xs" id="btn-copy-arch-hcl" type="button">📋 Copy HCL</button>
+              </div>
+            </div>
+            <textarea id="arch-hcl-out" class="code-editor arch-code-editor" spellcheck="false" readonly></textarea>
+          </div>
+
+          <!-- Tab 3: Well-Architected Framework & CIS Security Pillars -->
+          <div class="arch-tab-content" id="arch-tab-review" role="tabpanel" aria-labelledby="arch-tab-btn-review" style="display:none; overflow-y:auto;">
+            <div id="arch-pillars-summary" class="arch-pillars-summary"></div>
+            <div style="margin-top:0.75rem;">
+              <h3 style="font-size:0.86rem; color:var(--accent-amber); margin:0 0 0.4rem 0;">SPOF Vulnerability &amp; Risk Matrix</h3>
+              <div id="arch-spofs-list" class="arch-spofs-list"></div>
+            </div>
+            <div style="margin-top:0.75rem;">
+              <h3 style="font-size:0.86rem; color:var(--accent-blue); margin:0 0 0.4rem 0;">Architectural Optimization Recommendations</h3>
+              <div id="arch-recommendations-list" class="arch-recommendations-list"></div>
             </div>
           </div>
         </div>
