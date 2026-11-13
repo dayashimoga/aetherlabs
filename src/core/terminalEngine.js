@@ -56,6 +56,13 @@ try {
 } catch {
   GitEngine = (typeof globalThis !== 'undefined' && globalThis.GitEngine);
 }
+
+let AutocompletionEngine;
+try {
+  AutocompletionEngine = require('./autocompletionEngine').AutocompletionEngine;
+} catch {
+  AutocompletionEngine = (typeof globalThis !== 'undefined' && globalThis.AutocompletionEngine);
+}
 const formatResourceTable = cliFormatterModule.formatResourceTable || function () { return ''; };
 const formatYaml = cliFormatterModule.formatYaml || JSON.stringify;
 const formatJson = cliFormatterModule.formatJson || JSON.stringify;
@@ -707,6 +714,16 @@ class TerminalEngine {
     }
 
     this.gitEngine = clusterOrOptions?.gitEngine || (this.multiCli && this.multiCli.gitEngine) || (GitEngine ? new GitEngine({ vfs: this.vfs, author: 'Learner <learner@kubelabs.local>' }) : null);
+
+    if (AutocompletionEngine) {
+      this.autocompletionEngine = new AutocompletionEngine({
+        graph: this.graph,
+        vfs: this.vfs,
+        cluster: this.cluster,
+        pipelineDriver: this.pipelineDriver,
+        cwd: this.cwd
+      });
+    }
   }
 
   get history() {
@@ -3927,6 +3944,16 @@ class TerminalEngine {
    * @returns {{ prefix: string, completions: string[], replacement?: string, line: string, cursor: number }}
    */
   autocomplete(line, cursor = line.length) {
+    if (this.autocompletionEngine) {
+      this.autocompletionEngine.setContext({
+        graph: this.graph,
+        vfs: this.vfs,
+        cluster: this.cluster,
+        cwd: this.cwd
+      });
+      return this.autocompletionEngine.autocomplete(line, cursor);
+    }
+
     const textBeforeCursor = line.slice(0, cursor);
     const textAfterCursor = line.slice(cursor);
     const rawTokens = textBeforeCursor.trimStart().split(/\s+/);
@@ -4294,6 +4321,7 @@ class TerminalEngine {
 
 module.exports = {
   TerminalEngine,
+  AutocompletionEngine,
   tokenizeCommand,
   parseKubeFlags,
   jqTool,
