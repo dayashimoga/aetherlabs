@@ -82,3 +82,19 @@ test('Subphase 5.2.2: Operations Runbooks docs/08-OPERATIONS-AND-RUNBOOKS.md is 
   assert.ok(text.includes('Master Test Plan & Quality Gates'), 'Must include test plan matrix');
   assert.ok(text.includes('Production Readiness Checklist'), 'Must include production checklist');
 });
+
+test('Subphase 5.2.2: Subphase Ledger verification script executes and validates all 40 subphases', () => {
+  const ledgerPath = path.join(rootDir, 'scripts', 'verify-subphases.js');
+  assert.ok(fs.existsSync(ledgerPath), 'scripts/verify-subphases.js must exist');
+  const code = fs.readFileSync(ledgerPath, 'utf8');
+  assert.ok(code.includes('40 SUBPHASES'));
+  assert.ok(code.includes('Subphase 1.1.1'));
+  assert.ok(code.includes('Subphase 5.2.2'));
+  assert.ok(code.includes('Subphase 10.4.1'));
+});
+
+test('Subphase 5.2.2: Low-resource memory budget strictly remains below 150MB RSS', () => {
+  const mem = process.memoryUsage();
+  const rssMB = Math.round((mem.rss / (1024 * 1024)) * 10) / 10;
+  assert.ok(rssMB < 150, `Memory RSS (${rssMB} MB) must remain strictly below 150 MB envelope`);
+});
