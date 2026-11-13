@@ -1074,7 +1074,16 @@
 
         if (state.terminalView) {
           if (toInsert) {
-            state.terminalView.insertAtCursor(toInsert);
+            if (typeof ContextAwareQuickKeyEngine !== 'undefined') {
+              const res = ContextAwareQuickKeyEngine.insertToken(
+                state.terminalView.lineBuffer,
+                state.terminalView.cursorPos,
+                toInsert
+              );
+              state.terminalView.setLineAndCursor(res.line, res.cursorPos);
+            } else {
+              state.terminalView.insertAtCursor(toInsert);
+            }
           } else if (action === 'tab') {
             state.terminalView.handleTabCompletion();
           } else if (action === 'ctrl-c') {
@@ -1092,12 +1101,23 @@
 
         if (!termInput) return;
         if (toInsert) {
-          const start = termInput.selectionStart || termInput.value.length;
-          const end = termInput.selectionEnd || termInput.value.length;
-          const val = termInput.value;
-          termInput.value = val.slice(0, start) + toInsert + val.slice(end);
-          const nextPos = start + toInsert.length;
-          termInput.setSelectionRange(nextPos, nextPos);
+          if (typeof ContextAwareQuickKeyEngine !== 'undefined') {
+            const start = termInput.selectionStart || termInput.value.length;
+            const res = ContextAwareQuickKeyEngine.insertToken(
+              termInput.value,
+              start,
+              toInsert
+            );
+            termInput.value = res.line;
+            termInput.setSelectionRange(res.cursorPos, res.cursorPos);
+          } else {
+            const start = termInput.selectionStart || termInput.value.length;
+            const end = termInput.selectionEnd || termInput.value.length;
+            const val = termInput.value;
+            termInput.value = val.slice(0, start) + toInsert + val.slice(end);
+            const nextPos = start + toInsert.length;
+            termInput.setSelectionRange(nextPos, nextPos);
+          }
           termInput.focus();
         } else if (action === 'tab') {
           handleTabCompletion(termInput);

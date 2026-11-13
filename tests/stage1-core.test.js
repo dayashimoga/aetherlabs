@@ -13,4 +13,5 @@ require('./stage1-network.test');
 require('./stage1-cloud.test');
 require('./stage1-session-binding.test');
 require('./stage1-terminal-emulator.test');
+require('./stage1-quick-keybar.test');
 

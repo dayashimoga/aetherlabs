@@ -323,6 +323,13 @@
       this.focus();
     }
 
+    setLineAndCursor(line, pos) {
+      this.lineBuffer = String(line || '');
+      this.cursorPos = typeof pos === 'number' ? Math.max(0, Math.min(this.lineBuffer.length, pos)) : this.lineBuffer.length;
+      this.render();
+      this.focus();
+    }
+
     handleMultiLinePaste(text) {
       const lines = text.split(/\r?\n/);
       if (lines.length === 1) {
