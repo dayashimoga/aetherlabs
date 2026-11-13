@@ -138,7 +138,7 @@ class CertificationEngine {
 
     const scorePercent = Math.round((correctCount / questions.length) * 100);
     const passed = scorePercent >= 75;
-    const attemptId = `ATT-${Date.now()}`;
+    const attemptId = `ATT-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
 
     if (this.database) {
       this.database.saveAssessmentAttempt({

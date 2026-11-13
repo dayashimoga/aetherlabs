@@ -136,12 +136,18 @@ test('Subphase 4.2.2: ArchitectureEngine - 8 Reference Architectures, 4-Pillar S
     assert.ok(analysis.pillars.operationalExcellence >= 40);
     assert.ok(analysis.estimatedMonthlyCostUsd > 0);
 
-    // IaC Compilation
+    // IaC Compilation & VirtualCluster Deployment
     const compiled = engine.compileToManifests(ref.nodes, ref.edges);
     assert.ok(compiled.kubernetesYaml.length > 0);
     assert.ok(compiled.kubernetesYaml.includes('apiVersion:'));
     assert.ok(compiled.opentofuHcl.length > 0);
     assert.ok(compiled.opentofuHcl.includes('terraform {'));
+
+    // Deploy compiled architecture directly into VirtualCluster
+    const cluster = new VirtualCluster();
+    cluster.applyManifest(compiled.kubernetesYaml);
+    cluster.reconcile();
+    assert.ok(cluster.state.resources.length > 0, `Architecture ${ref.id} should provision cluster resources`);
   }
 
   // Test SPOF detection on single replica node
@@ -158,17 +164,67 @@ test('Subphase 4.2.2: AiMentor - Socratic Hint, Debug, Explain & CIS Security Be
   const mentor = new AiMentor(validationEngine);
   const cluster = new VirtualCluster();
 
-  // 1. Socratic Hint mode
+  // Seed sample deployment
+  cluster.applyManifest(`
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payments-api
+  namespace: production
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: payments-api
+  template:
+    metadata:
+      labels:
+        app: payments-api
+    spec:
+      containers:
+        - name: app
+          image: nginx:1.27
+`);
+  cluster.reconcile();
+
+  const mockLab = {
+    id: 'lab-test-socratic',
+    title: 'High-Availability Payments Scaling',
+    validationRules: [
+      {
+        id: 'r1',
+        description: 'Deployment payments-api has at least 3 ready replicas',
+        type: 'replica_count_min',
+        kind: 'Deployment',
+        name: 'payments-api',
+        namespace: 'production',
+        expectedValue: 3,
+        remediation: 'Run `kubectl scale deployment payments-api --replicas=3 -n production`.'
+      }
+    ]
+  };
+
+  // 1. Socratic Hint mode with unmet rule
   const hintReply = mentor.respond({
     mode: 'hint',
-    query: 'How do I expose my deployment?',
+    activeLab: mockLab,
     cluster
   });
   assert.equal(hintReply.mode, 'hint');
-  assert.ok(hintReply.response.includes('Socratic'));
+  assert.ok(hintReply.response.includes('Socratic Mentor'));
+  assert.ok(hintReply.response.includes('Next Objective Focus'));
+  assert.ok(hintReply.response.includes('Observed Cluster State'));
+  assert.ok(hintReply.response.includes('Target State'));
+  assert.ok(hintReply.response.includes('Actionable Hint'));
   assert.ok(hintReply.timestamp);
 
-  // 2. Debug Error mode
+  // 2. Debug Error mode with broken pod
+  cluster.state.resources.push({
+    apiVersion: 'v1',
+    kind: 'Pod',
+    metadata: { name: 'failing-pod', namespace: 'production' },
+    status: { reason: 'CrashLoopBackOff', message: 'Process exited with code 1' }
+  });
   const debugReply = mentor.respond({
     mode: 'debug-error',
     cluster,
@@ -176,10 +232,12 @@ test('Subphase 4.2.2: AiMentor - Socratic Hint, Debug, Explain & CIS Security Be
   });
   assert.equal(debugReply.mode, 'debug-error');
   assert.ok(debugReply.response.includes('Root-Cause Diagnostic Analysis'));
+  assert.ok(debugReply.response.includes('CrashLoopBackOff'));
 
   // 3. Explain Concept mode
   const explainReply = mentor.respond({
     mode: 'explain',
+    activeLab: mockLab,
     query: 'reconciliation loop',
     cluster
   });
@@ -194,6 +252,7 @@ test('Subphase 4.2.2: AiMentor - Socratic Hint, Debug, Explain & CIS Security Be
   });
   assert.equal(auditReply.mode, 'security-audit');
   assert.ok(auditReply.response.includes('CIS Kubernetes Benchmark'));
+  assert.ok(auditReply.response.includes('CIS-5.2.6'));
   assert.ok(auditReply.response.includes('CIS-5.3.2'));
 });
 
@@ -223,12 +282,29 @@ test('Subphase 4.2.2: CertificationEngine - Ed25519 Digital Signatures, Exam Gra
   assert.ok(clientQuestions.questions.length > 0);
   assert.equal(clientQuestions.questions[0].correctIndex, undefined);
 
-  // 4. Exam grading and Ed25519 signature issuance
+  // 4. Exam grading with failing score (< 75%)
+  const failingAnswers = {};
+  for (const q of clientQuestions.questions) {
+    failingAnswers[q.id] = 999; // Incorrect answer
+  }
+  const failedExam = engine.gradeExam({
+    trackId: 'track-foundations',
+    answers: failingAnswers,
+    learnerName: 'Test Student'
+  });
+  assert.equal(failedExam.passed, false);
+  assert.equal(failedExam.scorePercent, 0);
+  assert.equal(failedExam.certificate, null);
+
+  // 5. Exam grading and Ed25519 signature issuance
   const allQuestions = pm.getTrackQuestions('track-foundations');
   const perfectAnswers = {};
   for (const q of allQuestions) {
     perfectAnswers[q.id] = q.correctIndex;
   }
+
+  const initialProfile = db.getProfile();
+  const initialXp = (initialProfile.profile && initialProfile.profile.xp) || 0;
 
   const graded = engine.gradeExam({
     trackId: 'track-foundations',
@@ -242,22 +318,37 @@ test('Subphase 4.2.2: CertificationEngine - Ed25519 Digital Signatures, Exam Gra
   assert.ok(graded.certificate.signatureEd25519);
   assert.ok(graded.certificate.signatureSha256);
 
-  // 5. Ed25519 signature verification
+  // Verify XP was awarded (+500 XP)
+  const updatedProfile = db.getProfile();
+  assert.equal(updatedProfile.profile.xp, initialXp + 500);
+
+  // 6. Ed25519 signature verification
   const edVerify = engine.verifyCertificate(graded.certificate.certId, graded.certificate.signatureEd25519);
   assert.equal(edVerify.valid, true);
   assert.equal(edVerify.algorithm, 'ed25519');
 
-  // 6. HMAC-SHA256 signature verification fallback
+  // 7. HMAC-SHA256 signature verification fallback
   const shaVerify = engine.verifyCertificate(graded.certificate.certId, graded.certificate.signatureSha256);
   assert.equal(shaVerify.valid, true);
   assert.equal(shaVerify.algorithm, 'hmac-sha256');
 
-  // 7. Forged signature rejection
+  // 8. Forged signature rejection
   const forgedSig = 'f'.repeat(128);
   const forgedVerify = engine.verifyCertificate(graded.certificate.certId, forgedSig);
   assert.equal(forgedVerify.valid, false);
 
-  // 8. 26-Domain Skill Radar computation
+  // 9. Tampered certificate payload detection
+  const tamperedPayload = {
+    certId: graded.certificate.certId,
+    trackId: 'track-foundations',
+    title: graded.certificate.title,
+    learnerName: 'Impostor', // Tampered name
+    scorePercent: 100
+  };
+  const tamperedVerify = engine.verifyCertificateEd25519(tamperedPayload, graded.certificate.signatureEd25519);
+  assert.equal(tamperedVerify, false);
+
+  // 10. 26-Domain Skill Radar computation
   const radar = engine.computeDomainSkillRadar();
   assert.equal(radar.length, 26);
   for (const domain of radar) {
