@@ -13,6 +13,8 @@ const SHELL_ASSETS = [
   '/index.html',
   '/css/styles.css',
   '/js/offlineEngine.js',
+  '/js/quickKeyEngine.js',
+  '/js/terminalView.js',
   '/js/app.js',
   '/manifest.json',
   '/api/overview'

@@ -1,0 +1,16 @@
+{
+  "appId": "io.kubelabs.app",
+  "appName": "KubeLabs",
+  "webDir": "public",
+  "bundledWebRuntime": false,
+  "server": {
+    "androidScheme": "https",
+    "iosScheme": "kubelabs"
+  },
+  "plugins": {
+    "SplashScreen": {
+      "launchShowDuration": 1500,
+      "backgroundColor": "#090d16"
+    }
+  }
+}

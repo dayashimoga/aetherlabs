@@ -242,6 +242,8 @@ test('Subphase 5.1.2: Service Worker public/sw.js configures kubelabs-offline-v3
 
   assert.ok(swCode.includes('kubelabs-offline-v3'), 'Must define kubelabs-offline-v3 cache name');
   assert.ok(swCode.includes('/js/offlineEngine.js'), 'Must pre-cache offlineEngine.js');
+  assert.ok(swCode.includes('/js/quickKeyEngine.js'), 'Must pre-cache quickKeyEngine.js');
+  assert.ok(swCode.includes('/js/terminalView.js'), 'Must pre-cache terminalView.js');
   assert.ok(swCode.includes('/css/styles.css'), 'Must pre-cache styles.css');
   assert.ok(swCode.includes('/manifest.json'), 'Must pre-cache manifest.json');
   assert.ok(swCode.includes('req.mode === \'navigate\''), 'Must handle navigation request offline fallback');
@@ -251,7 +253,7 @@ test('Subphase 5.1.2: Service Worker public/sw.js configures kubelabs-offline-v3
 test('Subphase 5.1.2: Cross-platform packaging configurations (Tauri v2, Electron, Capacitor) are validated', () => {
   const root = path.join(__dirname, '..');
 
-  // 1. Tauri v2 Desktop Configuration
+  // 1. Tauri v2 Desktop Configuration & Rust Host
   const tauriPath = path.join(root, 'deploy', 'desktop', 'tauri.conf.json');
   assert.ok(fs.existsSync(tauriPath), 'tauri.conf.json must exist');
   const tauriConf = JSON.parse(fs.readFileSync(tauriPath, 'utf8'));
@@ -260,16 +262,41 @@ test('Subphase 5.1.2: Cross-platform packaging configurations (Tauri v2, Electro
   assert.equal(tauriConf.tauri.bundle.identifier, 'io.kubelabs.app');
   assert.ok(tauriConf.tauri.security.csp.includes('default-src'));
 
+  const cargoPath = path.join(root, 'deploy', 'desktop', 'Cargo.toml');
+  assert.ok(fs.existsSync(cargoPath), 'deploy/desktop/Cargo.toml must exist');
+  const cargoContent = fs.readFileSync(cargoPath, 'utf8');
+  assert.ok(cargoContent.includes('name = "kubelabs-desktop"'));
+  assert.ok(cargoContent.includes('tauri = { version = "2.0"'));
+
+  const mainRsPath = path.join(root, 'deploy', 'desktop', 'src', 'main.rs');
+  assert.ok(fs.existsSync(mainRsPath), 'deploy/desktop/src/main.rs must exist');
+
   // 2. Electron Main Process Configuration
   const electronPath = path.join(root, 'deploy', 'desktop', 'electron-main.js');
   assert.ok(fs.existsSync(electronPath), 'electron-main.js must exist');
   const electronCode = fs.readFileSync(electronPath, 'utf8');
   assert.ok(electronCode.includes("require('../../src/server')"), 'Must reference correct server relative path');
 
-  // 3. Capacitor Mobile Configuration
+  // 3. Capacitor Mobile Configuration (deploy/mobile & root)
   const capPath = path.join(root, 'deploy', 'mobile', 'capacitor.config.json');
-  assert.ok(fs.existsSync(capPath), 'capacitor.config.json must exist');
+  assert.ok(fs.existsSync(capPath), 'deploy/mobile/capacitor.config.json must exist');
   const capConf = JSON.parse(fs.readFileSync(capPath, 'utf8'));
   assert.equal(capConf.appId, 'io.kubelabs.app');
   assert.equal(capConf.appName, 'KubeLabs');
+
+  const rootCapPath = path.join(root, 'capacitor.config.json');
+  assert.ok(fs.existsSync(rootCapPath), 'root capacitor.config.json must exist');
+  const rootCapConf = JSON.parse(fs.readFileSync(rootCapPath, 'utf8'));
+  assert.equal(rootCapConf.appId, 'io.kubelabs.app');
+  assert.equal(rootCapConf.webDir, 'public');
+
+  // 4. Web App Manifest PWA compliance
+  const manifestPath = path.join(root, 'public', 'manifest.json');
+  assert.ok(fs.existsSync(manifestPath), 'public/manifest.json must exist');
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  assert.equal(manifest.short_name, 'KubeLabs');
+  assert.equal(manifest.display, 'standalone');
+  assert.equal(manifest.theme_color, '#38bdf8');
+  assert.ok(manifest.icons.length > 0);
+  assert.ok(manifest.icons[0].sizes.includes('512x512'));
 });
