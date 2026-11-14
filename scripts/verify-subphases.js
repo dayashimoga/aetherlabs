@@ -576,6 +576,7 @@ const SUBPHASES = [
     verify: () =>
       fs.existsSync(path.join(rootDir, 'README.md')) &&
       fs.existsSync(path.join(rootDir, 'docs', '07-CURRICULUM-CATALOG.md')) &&
+      fs.existsSync(path.join(rootDir, 'docs', '14-COMPREHENSIVE-PROJECT-WALKTHROUGH.md')) &&
       fs.existsSync(path.join(rootDir, 'docs', '15-V4-SUBPHASE-TRACKING-LEDGER.md'))
   }
 ];
