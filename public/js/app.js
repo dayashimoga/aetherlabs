@@ -184,6 +184,7 @@
     if (viewNameEl) {
       viewNameEl.textContent = VIEW_NAMES[viewId] || 'Workspace';
     }
+    announceAria('Navigated to ' + (VIEW_NAMES[viewId] || viewId));
     if (viewId === 'view-workbench' && state.activeLab) {
       const sel = document.getElementById('wb-lab-selector');
       if (sel && sel.value !== state.activeLab.id) {
@@ -208,6 +209,7 @@
     if (!modal) return;
     document.body.classList.add('modal-open');
     modal.style.display = 'flex';
+    announceAria('Production architecture modal opened.');
     if (state.activeLab) {
       renderLabArchDiagram(state.activeLab);
     }
@@ -220,6 +222,7 @@
     if (!modal) return;
     document.body.classList.remove('modal-open');
     modal.style.display = 'none';
+    announceAria('Architecture modal closed.');
   }
 
   function openDiagnosticsModal() {
@@ -227,6 +230,7 @@
     if (!modal) return;
     document.body.classList.add('modal-open');
     modal.style.display = 'flex';
+    announceAria('11-Agent Self-Audit and Diagnostics modal opened.');
     runLiveAgentAudit();
     const closeBtn = document.getElementById('btn-close-diagnostics');
     if (closeBtn) closeBtn.focus();
@@ -237,6 +241,7 @@
     if (!modal) return;
     document.body.classList.remove('modal-open');
     modal.style.display = 'none';
+    announceAria('Diagnostics modal closed.');
     if (window.location.hash === '#admin-diagnostics') {
       history.replaceState(null, document.title, window.location.pathname + window.location.search);
     }
@@ -419,6 +424,7 @@
     if (!modal) return;
     document.body.classList.add('modal-open');
     modal.style.display = 'flex';
+    announceAria('Command Palette opened. Type to filter commands or use arrow keys to navigate.');
     const input = document.getElementById('cmd-palette-input');
     if (input) {
       input.value = '';
@@ -433,6 +439,7 @@
     if (!modal) return;
     document.body.classList.remove('modal-open');
     modal.style.display = 'none';
+    announceAria('Command Palette closed.');
   }
 
   function renderCommandPaletteResults(query = '') {

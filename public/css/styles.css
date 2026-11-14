@@ -4055,4 +4055,31 @@ body.modal-open {
   display: block;
 }
 
+/* ==========================================================================
+   Subphase 6.2.3: WCAG 2.1 AA Keyboard & Screen-Reader Accessibility
+   ========================================================================== */
+.skip-link {
+  position: absolute;
+  top: -100px;
+  left: 1rem;
+  background: var(--accent-cyan);
+  color: #090d16;
+  font-weight: 700;
+  font-size: 0.88rem;
+  padding: 0.6rem 1.1rem;
+  border-radius: var(--radius-sm);
+  z-index: 99999;
+  text-decoration: none;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
+  transition: top 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.skip-link:focus,
+.skip-link:focus-visible {
+  top: 1rem;
+  outline: 2px solid #ffffff;
+  outline-offset: 2px;
+}
+
+
 
