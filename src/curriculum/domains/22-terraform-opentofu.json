@@ -1,0 +1,227 @@
+{
+  "id": "terraform-opentofu",
+  "title": "OpenTofu & Terraform Infrastructure Automation, State & Modules",
+  "category": "Infrastructure as Code",
+  "trackId": "track-platform",
+  "version": "1.0.0",
+  "difficulty": "Intermediate",
+  "estimatedHours": 8,
+  "summary": "Master enterprise infrastructure automation with OpenTofu and Terraform: declarative HCL syntax, provider configurations, remote state locking with S3 and DynamoDB, for_each meta-arguments, resource import, and refactoring with moved blocks.",
+  "prerequisites": [
+    "iac-foundations",
+    "git-fundamentals"
+  ],
+  "learningObjectives": [
+    "Structure production OpenTofu / Terraform codebases with reusable modules, input variables, and typed outputs.",
+    "Implement remote backend state storage with cryptographic locking to prevent concurrent state corruption.",
+    "Execute zero-downtime refactoring workflows using terraform import, moved blocks, and lifecycle preconditions."
+  ],
+  "curriculumModules": [
+    {
+      "id": "mod-tofu-01",
+      "title": "OpenTofu Architecture, HCL Syntax & State Management",
+      "conceptSummary": "OpenTofu (Linux Foundation fork of Terraform) uses HashiCorp Configuration Language (HCL) to model infrastructure as a resource graph. State files (terraform.tfstate) map real-world cloud IDs to declarative definitions. Remote state backends (S3 + DynamoDB or Consul) enforce state locking to prevent write collisions.",
+      "productionArchitecturePattern": "Mandate encrypted remote S3 backends with DynamoDB state locking, enable versioning on state buckets, and forbid local state files in production repositories.",
+      "keyCommands": [
+        "tofu init",
+        "tofu plan -out=tfplan",
+        "tofu apply tfplan",
+        "tofu state list"
+      ]
+    },
+    {
+      "id": "mod-tofu-02",
+      "title": "Meta-Arguments, Modules & Zero-Downtime Refactoring",
+      "conceptSummary": "Meta-arguments (for_each, count, depends_on, lifecycle) parameterize resource generation across availability zones. The moved block allows declarative resource renaming without triggering destroy-and-recreate cycles, while tofu import brings legacy infrastructure under management.",
+      "productionArchitecturePattern": "Pin provider versions strictly, enforce automated tfsec / trivy config security scans in CI pipelines, and require plan approval before apply in production environments.",
+      "keyCommands": [
+        "tofu state show <address>",
+        "tofu import <address> <id>",
+        "tofu output"
+      ]
+    }
+  ],
+  "labs": [
+    {
+      "id": "lab-tofu-01-vpc-cluster-apply",
+      "title": "Provisioning Cloud Infrastructure with OpenTofu / Terraform",
+      "difficulty": "Intermediate",
+      "durationMinutes": 20,
+      "xpReward": 150,
+      "scenario": "Initialize and apply an infrastructure stack in directory /infra: create main.tf declaring an AWS VPC aws_vpc.main and an EKS cluster aws_eks_cluster.prod, run tofu init to configure providers, and execute tofu apply -auto-approve to provision cloud resources.",
+      "productionContext": "Declarative IaC with OpenTofu ensures deterministic, reproducible environment provisioning across dev, staging, and production without manual console drift.",
+      "prerequisites": [
+        "lab-iac-01-crossplane-xrd"
+      ],
+      "objectives": [
+        "Create /infra/main.tf with aws_vpc and aws_eks_cluster resources.",
+        "Run tofu init to initialize provider plugins.",
+        "Run tofu apply to provision cloud resources and generate state."
+      ],
+      "initialClusterState": {
+        "resources": [],
+        "cloudResources": [],
+        "terraformState": {
+          "initialized": false,
+          "resources": []
+        }
+      },
+      "starterManifest": "terraform {\n  required_providers {\n    aws = {\n      source  = \"hashicorp/aws\"\n      version = \"~> 5.0\"\n    }\n  }\n}\n\nresource \"aws_vpc\" \"main\" {\n  cidr_block           = \"10.0.0.0/16\"\n  enable_dns_hostnames = true\n}\n\nresource \"aws_eks_cluster\" \"prod\" {\n  name    = \"kubelabs-eks\"\n  version = \"1.31\"\n}\n",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Create OpenTofu infrastructure definition",
+          "instruction": "Save the HCL configuration to /infra/main.tf declaring aws_vpc and aws_eks_cluster.",
+          "commandHint": "mkdir -p /infra && cat << 'EOF' > /infra/main.tf\n...\nEOF"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Initialize OpenTofu",
+          "instruction": "Initialize the directory to download provider plugins.",
+          "commandHint": "cd /infra && tofu init"
+        },
+        {
+          "stepNumber": 3,
+          "title": "Apply infrastructure resources",
+          "instruction": "Execute tofu apply to create cloud resources.",
+          "commandHint": "tofu apply -auto-approve"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "tofu-main-tf-exists",
+          "description": "/infra/main.tf contains aws_vpc.main",
+          "type": "vfs_file_contains",
+          "path": "/infra/main.tf",
+          "pattern": "aws_vpc",
+          "remediation": "Create /infra/main.tf with aws_vpc resource"
+        },
+        {
+          "id": "cloud-resource-vpc-active",
+          "description": "Cloud resource aws_vpc.main is active",
+          "type": "cloud_resource_exists",
+          "name": "aws_vpc.main",
+          "remediation": "Run tofu apply to create aws_vpc.main"
+        },
+        {
+          "id": "cloud-resource-eks-active",
+          "description": "Cloud resource aws_eks_cluster.prod is active",
+          "type": "cloud_resource_exists",
+          "name": "aws_eks_cluster.prod",
+          "remediation": "Run tofu apply to create aws_eks_cluster.prod"
+        }
+      ],
+      "solutionCommands": [
+        "mkdir -p /infra",
+        "cat << 'EOF' > /infra/main.tf\nterraform {\n  required_providers {\n    aws = {\n      source  = \"hashicorp/aws\"\n      version = \"~> 5.0\"\n    }\n  }\n}\n\nresource \"aws_vpc\" \"main\" {\n  cidr_block           = \"10.0.0.0/16\"\n  enable_dns_hostnames = true\n}\n\nresource \"aws_eks_cluster\" \"prod\" {\n  name    = \"kubelabs-eks\"\n  version = \"1.31\"\n}\nEOF",
+        "cd /infra",
+        "tofu init",
+        "tofu apply -auto-approve"
+      ],
+      "troubleshootingGuide": [
+        {
+          "problem": "Cloud resources not active or main.tf not found.",
+          "cause": "tofu apply was not executed or main.tf was created in the wrong directory.",
+          "solution": "Ensure /infra/main.tf exists and execute tofu apply -auto-approve."
+        }
+      ]
+    },
+    {
+      "id": "lab-tofu-02-remote-state-locking",
+      "title": "Configuring Remote S3 Backend State with DynamoDB Locking",
+      "difficulty": "Intermediate",
+      "durationMinutes": 20,
+      "xpReward": 150,
+      "scenario": "To prevent concurrent state corruption, configure a remote S3 backend in /infra/backend.tf: specify backend 's3' with bucket 'kubelabs-terraform-state', key 'prod/terraform.tfstate', region 'us-east-1', and dynamodb_table 'terraform-locks'. Execute tofu init to configure the backend.",
+      "productionContext": "Remote state with distributed locking prevents disastrous race conditions when multiple team members or CI runners execute simultaneous terraform apply operations.",
+      "prerequisites": [
+        "lab-tofu-01-vpc-cluster-apply"
+      ],
+      "objectives": [
+        "Create /infra/backend.tf specifying backend s3.",
+        "Configure bucket, key, and dynamodb_table locking.",
+        "Run tofu init to validate backend configuration."
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "terraform {\n  backend \"s3\" {\n    bucket         = \"kubelabs-terraform-state\"\n    key            = \"prod/terraform.tfstate\"\n    region         = \"us-east-1\"\n    dynamodb_table = \"terraform-locks\"\n    encrypt        = true\n  }\n}\n",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Create remote backend configuration",
+          "instruction": "Write the S3 backend block with dynamodb_table locking to /infra/backend.tf.",
+          "commandHint": "cat << 'EOF' > /infra/backend.tf\n...\nEOF"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Initialize remote backend",
+          "instruction": "Run tofu init to configure the S3 backend and DynamoDB state lock.",
+          "commandHint": "tofu init"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "backend-tf-contains-s3",
+          "description": "/infra/backend.tf configures backend 's3'",
+          "type": "vfs_file_contains",
+          "path": "/infra/backend.tf",
+          "pattern": "backend \"s3\"",
+          "remediation": "Configure backend 's3' in /infra/backend.tf"
+        },
+        {
+          "id": "backend-tf-contains-dynamodb",
+          "description": "/infra/backend.tf configures dynamodb_table locking",
+          "type": "vfs_file_contains",
+          "path": "/infra/backend.tf",
+          "pattern": "dynamodb_table",
+          "remediation": "Add dynamodb_table setting in /infra/backend.tf"
+        },
+        {
+          "id": "tofu-init-executed",
+          "description": "tofu init executed",
+          "type": "command_executed",
+          "commandSubstring": "tofu init",
+          "remediation": "Execute tofu init"
+        }
+      ],
+      "solutionCommands": [
+        "cat << 'EOF' > /infra/backend.tf\nterraform {\n  backend \"s3\" {\n    bucket         = \"kubelabs-terraform-state\"\n    key            = \"prod/terraform.tfstate\"\n    region         = \"us-east-1\"\n    dynamodb_table = \"terraform-locks\"\n    encrypt        = true\n  }\n}\nEOF",
+        "tofu init"
+      ],
+      "troubleshootingGuide": [
+        {
+          "problem": "Validation fails on missing backend configuration or unexecuted tofu init.",
+          "cause": "/infra/backend.tf is missing required properties or tofu init was not run.",
+          "solution": "Ensure /infra/backend.tf contains backend \"s3\" and dynamodb_table, then execute tofu init."
+        }
+      ]
+    }
+  ],
+  "assessmentQuestions": [
+    {
+      "id": "q-tofu-01",
+      "question": "Why is remote state locking (e.g. via DynamoDB with an S3 backend) essential for enterprise Terraform / OpenTofu usage?",
+      "options": [
+        "It speeds up network download times by caching container images in DynamoDB.",
+        "It prevents race conditions where two engineers or CI pipelines run concurrent 'apply' operations, which could corrupt or overwrite the remote state file.",
+        "It automatically commits code changes to GitHub when resources are created.",
+        "It bypasses cloud provider IAM authentication."
+      ],
+      "correctIndex": 1,
+      "explanation": "State locking ensures mutual exclusion: when an operation modifies state, a lock item is written to DynamoDB. Concurrent operations fail immediately with a state lock error, preventing corrupted state files."
+    },
+    {
+      "id": "q-tofu-02",
+      "question": "What is the purpose of the 'moved' block introduced in modern Terraform and OpenTofu?",
+      "options": [
+        "To migrate resources between cloud providers without changing resource types.",
+        "To record declarative resource address refactorings (e.g. from module.old to module.new) so that Terraform updates state addresses instead of destroying and recreating real-world cloud resources.",
+        "To physically move virtual machines to another AWS availability zone.",
+        "To archive unused terraform state files to Glacier."
+      ],
+      "correctIndex": 1,
+      "explanation": "The 'moved' block provides safe, declarative refactoring in HCL. When renaming a resource or moving it into a module, Terraform renames the address in state rather than destroying the existing infrastructure and creating a new one."
+    }
+  ]
+}

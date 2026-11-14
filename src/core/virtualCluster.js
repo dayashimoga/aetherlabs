@@ -151,7 +151,9 @@ const CLUSTER_SCOPED_KINDS = new Set([
   'CustomResourceDefinition',
   'PriorityClass',
   'GatewayClass',
-  'ConstraintTemplate'
+  'ConstraintTemplate',
+  'CompositeResourceDefinition',
+  'XRD'
 ]);
 
 function normalizeKind(input) {

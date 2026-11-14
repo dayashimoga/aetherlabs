@@ -1,0 +1,221 @@
+{
+  "id": "iac-foundations",
+  "title": "Infrastructure as Code Foundations & Crossplane Control Planes",
+  "category": "Infrastructure as Code",
+  "trackId": "track-platform",
+  "version": "1.0.0",
+  "difficulty": "Intermediate",
+  "estimatedHours": 8,
+  "summary": "Master modern Infrastructure as Code foundations: Kubernetes-native control planes with Crossplane, CompositeResourceDefinitions (XRDs), Compositions, application claims, and state drift reconciliation.",
+  "prerequisites": [
+    "kubernetes-core-v4",
+    "k8s-security-cks"
+  ],
+  "learningObjectives": [
+    "Design declarative infrastructure control planes using Crossplane CompositeResourceDefinitions (XRDs).",
+    "Author reusable infrastructure Compositions binding managed cloud resources to developer claims.",
+    "Reconcile cloud resource state through declarative Kubernetes claims (e.g. PostgresInstance)."
+  ],
+  "curriculumModules": [
+    {
+      "id": "mod-iac-01",
+      "title": "Kubernetes-Native Control Planes vs Legacy IaC",
+      "conceptSummary": "Traditional IaC engines run in point-in-time CLI pipelines, resulting in drift between runs. Crossplane transforms Kubernetes into a continuous infrastructure control plane, continuously reconciling cloud resources (AWS RDS, S3, VPC) against desired state via Kubernetes controllers.",
+      "productionArchitecturePattern": "Platform teams define CompositeResourceDefinitions (XRDs) encapsulating multi-resource blueprints; application teams consume simplified, self-service claims without needing direct cloud provider IAM credentials.",
+      "keyCommands": [
+        "kubectl get xrd",
+        "kubectl get compositions",
+        "kubectl get managed",
+        "crossplane --version"
+      ]
+    },
+    {
+      "id": "mod-iac-02",
+      "title": "Compositions & Developer Self-Service Claims",
+      "conceptSummary": "Compositions translate an abstract claim (e.g. PostgresInstance) into concrete cloud resources (e.g. AWS rds.aws.upbound.io or GCP sql.gcp.upbound.io). Environment patching maps claim parameters into resource specifications.",
+      "productionArchitecturePattern": "Enforce security guardrails in Compositions: mandatory encryption at rest, automated daily backups, multi-AZ high availability, and network isolation within private subnets.",
+      "keyCommands": [
+        "kubectl get postgresinstances -A",
+        "crossplane status"
+      ]
+    }
+  ],
+  "labs": [
+    {
+      "id": "lab-iac-01-crossplane-xrd",
+      "title": "Defining a Crossplane CompositeResourceDefinition (XRD)",
+      "difficulty": "Intermediate",
+      "durationMinutes": 20,
+      "xpReward": 150,
+      "scenario": "Platform engineering requires a standard database specification. Author and deploy a Crossplane CompositeResourceDefinition (XRD) named xpostgresqlinstances.database.kubelabs.io with group database.kubelabs.io, claimNames.kind PostgresInstance, and names.kind XPostgresInstance.",
+      "productionContext": "XRDs establish the platform API contract, defining custom resource schemas that application developers can provision without having cloud admin permissions.",
+      "prerequisites": [
+        "lab-k8s-01-ha-deployments"
+      ],
+      "objectives": [
+        "Create XRD manifest /iac/xrd-postgres.yaml.",
+        "Apply XRD to cluster and verify spec.claimNames.kind is PostgresInstance."
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "apiVersion: apiextensions.crossplane.io/v1\nkind: CompositeResourceDefinition\nmetadata:\n  name: xpostgresqlinstances.database.kubelabs.io\nspec:\n  group: database.kubelabs.io\n  names:\n    kind: XPostgresInstance\n    plural: xpostgresinstances\n  claimNames:\n    kind: PostgresInstance\n    plural: postgresinstances\n  versions:\n    - name: v1alpha1\n      served: true\n      referenceable: true\n      schema:\n        openAPIV3Schema:\n          type: object\n          properties:\n            spec:\n              type: object\n              properties:\n                parameters:\n                  type: object\n                  properties:\n                    storageGB:\n                      type: integer\n",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Create XRD manifest",
+          "instruction": "Save the CompositeResourceDefinition manifest to /iac/xrd-postgres.yaml.",
+          "commandHint": "mkdir -p /iac && cat << 'EOF' > /iac/xrd-postgres.yaml\n...\nEOF"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Apply XRD to cluster",
+          "instruction": "Apply the XRD using kubectl and inspect the defined custom resource definition.",
+          "commandHint": "kubectl apply -f /iac/xrd-postgres.yaml"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "xrd-resource-exists",
+          "description": "CompositeResourceDefinition xpostgresqlinstances.database.kubelabs.io exists",
+          "type": "resource_exists",
+          "kind": "CompositeResourceDefinition",
+          "name": "xpostgresqlinstances.database.kubelabs.io",
+          "remediation": "Apply XRD manifest with name xpostgresqlinstances.database.kubelabs.io"
+        },
+        {
+          "id": "xrd-claim-kind",
+          "description": "XRD claimNames.kind is PostgresInstance",
+          "type": "resource_field_equals",
+          "kind": "CompositeResourceDefinition",
+          "name": "xpostgresqlinstances.database.kubelabs.io",
+          "fieldPath": "spec.claimNames.kind",
+          "expectedValue": "PostgresInstance",
+          "remediation": "Set spec.claimNames.kind: PostgresInstance in the XRD"
+        }
+      ],
+      "solutionCommands": [
+        "mkdir -p /iac",
+        "cat << 'EOF' > /iac/xrd-postgres.yaml\napiVersion: apiextensions.crossplane.io/v1\nkind: CompositeResourceDefinition\nmetadata:\n  name: xpostgresqlinstances.database.kubelabs.io\nspec:\n  group: database.kubelabs.io\n  names:\n    kind: XPostgresInstance\n    plural: xpostgresinstances\n  claimNames:\n    kind: PostgresInstance\n    plural: postgresinstances\n  versions:\n    - name: v1alpha1\n      served: true\n      referenceable: true\n      schema:\n        openAPIV3Schema:\n          type: object\n          properties:\n            spec:\n              type: object\n              properties:\n                parameters:\n                  type: object\n                  properties:\n                    storageGB:\n                      type: integer\nEOF",
+        "kubectl apply -f /iac/xrd-postgres.yaml"
+      ],
+      "troubleshootingGuide": [
+        {
+          "problem": "XRD resource not found or claimNames.kind mismatch.",
+          "cause": "The manifest omitted claimNames or was not applied.",
+          "solution": "Apply /iac/xrd-postgres.yaml and verify spec.claimNames.kind is PostgresInstance."
+        }
+      ]
+    },
+    {
+      "id": "lab-iac-02-crossplane-claim",
+      "title": "Provisioning Cloud Resources with Developer Claims",
+      "difficulty": "Intermediate",
+      "durationMinutes": 20,
+      "xpReward": 150,
+      "scenario": "An application developer needs a dedicated managed database. Create namespace team-fintech and apply a PostgresInstance claim named fintech-payment-db with parameters.storageGB: 50. Run crossplane status to inspect the control plane reconciliation state.",
+      "productionContext": "Claims allow application teams to self-service cloud infrastructure using standard Kubernetes manifests, decoupling application delivery from cloud-specific APIs.",
+      "prerequisites": [
+        "lab-iac-01-crossplane-xrd"
+      ],
+      "objectives": [
+        "Create namespace team-fintech.",
+        "Deploy PostgresInstance fintech-payment-db in namespace team-fintech.",
+        "Execute crossplane status CLI verification."
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "apiVersion: database.kubelabs.io/v1alpha1\nkind: PostgresInstance\nmetadata:\n  name: fintech-payment-db\n  namespace: team-fintech\nspec:\n  parameters:\n    storageGB: 50\n",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Create namespace team-fintech",
+          "instruction": "Create the namespace for the fintech application team.",
+          "commandHint": "kubectl create namespace team-fintech"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Apply PostgresInstance claim",
+          "instruction": "Save and apply the PostgresInstance claim to namespace team-fintech.",
+          "commandHint": "cat << 'EOF' > /iac/claim-postgres.yaml\n...\nEOF\nkubectl apply -f /iac/claim-postgres.yaml"
+        },
+        {
+          "stepNumber": 3,
+          "title": "Inspect Crossplane control plane status",
+          "instruction": "Run crossplane status to verify control plane reconciliation.",
+          "commandHint": "crossplane status"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "claim-postgres-exists",
+          "description": "PostgresInstance fintech-payment-db exists in namespace team-fintech",
+          "type": "resource_exists",
+          "kind": "PostgresInstance",
+          "namespace": "team-fintech",
+          "name": "fintech-payment-db",
+          "remediation": "Apply PostgresInstance fintech-payment-db in namespace team-fintech"
+        },
+        {
+          "id": "claim-storage-equals",
+          "description": "PostgresInstance storageGB is 50",
+          "type": "resource_field_equals",
+          "kind": "PostgresInstance",
+          "namespace": "team-fintech",
+          "name": "fintech-payment-db",
+          "fieldPath": "spec.parameters.storageGB",
+          "expectedValue": 50,
+          "remediation": "Set spec.parameters.storageGB: 50 in PostgresInstance claim"
+        },
+        {
+          "id": "crossplane-cli-executed",
+          "description": "crossplane CLI executed",
+          "type": "command_executed",
+          "commandSubstring": "crossplane",
+          "remediation": "Run crossplane status"
+        }
+      ],
+      "solutionCommands": [
+        "mkdir -p /iac",
+        "kubectl create namespace team-fintech",
+        "cat << 'EOF' > /iac/claim-postgres.yaml\napiVersion: database.kubelabs.io/v1alpha1\nkind: PostgresInstance\nmetadata:\n  name: fintech-payment-db\n  namespace: team-fintech\nspec:\n  parameters:\n    storageGB: 50\nEOF",
+        "kubectl apply -f /iac/claim-postgres.yaml",
+        "crossplane status"
+      ],
+      "troubleshootingGuide": [
+        {
+          "problem": "PostgresInstance not found in team-fintech namespace.",
+          "cause": "Namespace was not created or manifest was applied to default namespace.",
+          "solution": "Create team-fintech namespace and apply /iac/claim-postgres.yaml."
+        }
+      ]
+    }
+  ],
+  "assessmentQuestions": [
+    {
+      "id": "q-iac-01",
+      "question": "What is the primary architectural difference between Crossplane and traditional CLI-based IaC tools like Terraform?",
+      "options": [
+        "Crossplane cannot provision databases or storage buckets.",
+        "Crossplane operates as an active, continuous Kubernetes control plane running reconciliation loops that continuously detect and heal infrastructure drift, whereas traditional IaC executes only during episodic pipeline runs.",
+        "Terraform runs directly inside the Linux kernel via eBPF.",
+        "Crossplane requires writing infrastructure in C++ instead of YAML."
+      ],
+      "correctIndex": 1,
+      "explanation": "Crossplane leverages the Kubernetes controller pattern: it continuously polls cloud provider APIs, reconciling actual state with desired state declared in Kubernetes etcd, thereby autonomously healing drift."
+    },
+    {
+      "id": "q-iac-02",
+      "question": "In Crossplane, what role does a CompositeResourceDefinition (XRD) play?",
+      "options": [
+        "It defines the custom OpenAPI schema and kind for composite resources and claims, establishing the self-service API contract for developers.",
+        "It compiles HCL scripts into binary container images.",
+        "It configures CoreDNS upstream forwarding servers.",
+        "It replaces the Kubernetes kubelet daemon on worker nodes."
+      ],
+      "correctIndex": 0,
+      "explanation": "An XRD defines the custom API type (schema, group, kind) that encapsulates one or more cloud resources. Application teams create lightweight claims matching the XRD contract without touching provider-specific resource definitions."
+    }
+  ]
+}
