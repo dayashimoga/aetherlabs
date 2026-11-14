@@ -104,6 +104,7 @@ const KIND_ALIASES = {
   pytorchjobs: 'PyTorchJob',
   inferenceservice: 'InferenceService',
   inferenceservices: 'InferenceService',
+  isvc: 'InferenceService',
   job: 'Job',
   jobs: 'Job',
   cj: 'CronJob',

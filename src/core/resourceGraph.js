@@ -103,7 +103,10 @@ const KIND_ALIASES = {
   dbclusters: 'DatabaseCluster',
   tracingpolicy: 'TracingPolicy',
   tracingpolicies: 'TracingPolicy',
-  tp: 'TracingPolicy'
+  tp: 'TracingPolicy',
+  inferenceservice: 'InferenceService',
+  inferenceservices: 'InferenceService',
+  isvc: 'InferenceService'
 };
 
 const CLUSTER_SCOPED_KINDS = new Set([

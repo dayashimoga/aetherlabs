@@ -1,0 +1,280 @@
+{
+  "id": "aiops-autonomous",
+  "title": "Autonomous AI-Ops, Closed-Loop Remediation & GPU Inference Infrastructure",
+  "category": "AI-Ops & Emerging Tech",
+  "trackId": "track-multicloud-aiops",
+  "version": "1.0.0",
+  "difficulty": "Advanced",
+  "estimatedHours": 8,
+  "summary": "Master autonomous Kubernetes operations and enterprise LLM inference: integrating k8sgpt AI root-cause analyzers, NVIDIA GPU fractional resource slicing (nvidia.com/gpu) with time-slicing and Multi-Instance GPU (MIG), deploying high-throughput KServe vLLM inference runtimes, and automating closed-loop self-healing remediation pipelines.",
+  "prerequisites": [
+    "cloud-native-architecture",
+    "system-design"
+  ],
+  "learningObjectives": [
+    "Deploy and configure k8sgpt AI diagnostic analyzers to automate cluster failure detection and Socratic root-cause explanations.",
+    "Provision and schedule NVIDIA GPU workloads using fractional hardware resource requests and node affinity selectors.",
+    "Implement KServe vLLM inference serving runtimes and automated closed-loop remediation controllers that autonomously heal degraded workloads."
+  ],
+  "curriculumModules": [
+    {
+      "id": "mod-aiops-01",
+      "title": "k8sgpt AI Diagnostic Analyzers & Automated Root-Cause Analysis (RCA)",
+      "conceptSummary": "Manual triage of cascading Kubernetes failures introduces significant MTTR delay. k8sgpt integrates natural language LLMs directly with Kubernetes admission events and cluster status controllers, automatically scanning for CrashLoopBackOff pods, Pending PVCs, missing endpoints, and OOMKilled events to produce immediate plain-English explanations with remediation commands.",
+      "productionArchitecturePattern": "Integrate k8sgpt automated analyzers into cluster monitoring daemonsets to feed natural-language root-cause incident tickets directly to on-call platform engineers.",
+      "keyCommands": [
+        "k8sgpt analyze",
+        "aiops analyze"
+      ]
+    },
+    {
+      "id": "mod-aiops-02",
+      "title": "GPU Scheduling, KServe vLLM Runtimes & Closed-Loop Remediation",
+      "conceptSummary": "Serving high-throughput LLM workloads requires specialized scheduling. The NVIDIA GPU Operator exposes fractional hardware units (nvidia.com/gpu) via Time-Slicing or Multi-Instance GPU (MIG) slicing. KServe InferenceService CRDs encapsulate model serving (vLLM, Triton) with automatic scaling to zero. Closed-loop AI-Ops controllers ingest observability metrics and autonomously trigger remediation actions (restarting stuck pods, scaling replicas, or adjusting memory limits) without human operator intervention.",
+      "productionArchitecturePattern": "Deploy declarative KServe InferenceServices with fractional GPU resource allocations paired with closed-loop autonomous remediation controllers.",
+      "keyCommands": [
+        "aiops remediate",
+        "kubectl apply -f /aiops/kserve-inference.yaml"
+      ]
+    }
+  ],
+  "labs": [
+    {
+      "id": "lab-aiops-01-k8sgpt-triage",
+      "title": "k8sgpt Autonomous Cluster Diagnostic Analyzer & RCA Configuration",
+      "difficulty": "Advanced",
+      "durationMinutes": 20,
+      "xpReward": 150,
+      "scenario": "Configure automated AI cluster diagnostics. Author manifest /aiops/k8sgpt-config.yaml in namespace monitoring defining ConfigMap k8sgpt-ai-analyzer-config with data keys: aiProvider: 'local-llm', enabledFilters: 'Pod,Service,Ingress,PersistentVolumeClaim', backendEndpoint: 'http://aiops-engine.monitoring.svc:8080/v1', and autoExplain: 'true'. In addition, execute the AI diagnostic analyzer command 'aiops analyze' to evaluate cluster state. Apply the manifest and run the diagnostic.",
+      "productionContext": "Automated AI diagnostic analyzers eliminate manual kubectl describe parsing during production outages, reducing Mean Time to Detection (MTTD) from minutes to milliseconds.",
+      "prerequisites": [
+        "lab-sys-02-token-bucket-ratelimit"
+      ],
+      "objectives": [
+        "Create namespace monitoring if not present.",
+        "Author manifest /aiops/k8sgpt-config.yaml defining ConfigMap k8sgpt-ai-analyzer-config.",
+        "Configure ConfigMap data keys aiProvider, enabledFilters, backendEndpoint, and autoExplain.",
+        "Apply manifest to namespace monitoring.",
+        "Execute command 'aiops analyze' to perform cluster analysis."
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: k8sgpt-ai-analyzer-config\n  namespace: monitoring\ndata:\n  aiProvider: \"local-llm\"\n  enabledFilters: \"Pod,Service,Ingress,PersistentVolumeClaim\"\n  backendEndpoint: \"http://aiops-engine.monitoring.svc:8080/v1\"\n  autoExplain: \"true\"\n",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Create monitoring namespace",
+          "instruction": "Create namespace monitoring if not present.",
+          "commandHint": "kubectl create namespace monitoring"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Author k8sgpt analyzer configuration",
+          "instruction": "Author manifest /aiops/k8sgpt-config.yaml defining ConfigMap k8sgpt-ai-analyzer-config.",
+          "commandHint": "cat << 'EOF' > /aiops/k8sgpt-config.yaml\n...\nEOF"
+        },
+        {
+          "stepNumber": 3,
+          "title": "Apply manifest to monitoring",
+          "instruction": "Apply manifest to namespace monitoring.",
+          "commandHint": "kubectl apply -f /aiops/k8sgpt-config.yaml"
+        },
+        {
+          "stepNumber": 4,
+          "title": "Execute AI-Ops cluster analysis",
+          "instruction": "Run aiops analyze to trigger the autonomous diagnostic engine.",
+          "commandHint": "aiops analyze"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "cm-k8sgpt-exists",
+          "description": "ConfigMap k8sgpt-ai-analyzer-config exists in namespace monitoring",
+          "type": "resource_exists",
+          "kind": "ConfigMap",
+          "namespace": "monitoring",
+          "name": "k8sgpt-ai-analyzer-config",
+          "remediation": "Apply ConfigMap k8sgpt-ai-analyzer-config in namespace monitoring"
+        },
+        {
+          "id": "cm-k8sgpt-provider",
+          "description": "ConfigMap aiProvider is local-llm",
+          "type": "resource_field_equals",
+          "kind": "ConfigMap",
+          "namespace": "monitoring",
+          "name": "k8sgpt-ai-analyzer-config",
+          "fieldPath": "data.aiProvider",
+          "expectedValue": "local-llm",
+          "remediation": "Set aiProvider: \"local-llm\" in ConfigMap k8sgpt-ai-analyzer-config"
+        },
+        {
+          "id": "cm-k8sgpt-explain",
+          "description": "ConfigMap autoExplain is true",
+          "type": "resource_field_equals",
+          "kind": "ConfigMap",
+          "namespace": "monitoring",
+          "name": "k8sgpt-ai-analyzer-config",
+          "fieldPath": "data.autoExplain",
+          "expectedValue": "true",
+          "remediation": "Set autoExplain: \"true\" in ConfigMap k8sgpt-ai-analyzer-config"
+        },
+        {
+          "id": "cmd-aiops-analyze",
+          "description": "Command aiops analyze executed",
+          "type": "command_executed",
+          "commandSubstring": "aiops analyze",
+          "pattern": "aiops analyze",
+          "remediation": "Execute command 'aiops analyze'"
+        }
+      ],
+      "solutionCommands": [
+        "kubectl create namespace monitoring",
+        "cat << 'EOF' > /aiops/k8sgpt-config.yaml\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: k8sgpt-ai-analyzer-config\n  namespace: monitoring\ndata:\n  aiProvider: \"local-llm\"\n  enabledFilters: \"Pod,Service,Ingress,PersistentVolumeClaim\"\n  backendEndpoint: \"http://aiops-engine.monitoring.svc:8080/v1\"\n  autoExplain: \"true\"\nEOF",
+        "kubectl apply -f /aiops/k8sgpt-config.yaml",
+        "aiops analyze"
+      ],
+      "troubleshootingGuide": [
+        {
+          "problem": "ConfigMap missing or aiops analyze command not recorded.",
+          "cause": "ConfigMap must specify aiProvider and autoExplain, and aiops analyze must be executed.",
+          "solution": "Apply /aiops/k8sgpt-config.yaml and run aiops analyze."
+        }
+      ]
+    },
+    {
+      "id": "lab-aiops-02-gpu-kserve-inference",
+      "title": "NVIDIA GPU Scheduling & KServe LLM InferenceService Deployment",
+      "difficulty": "Advanced",
+      "durationMinutes": 25,
+      "xpReward": 175,
+      "scenario": "Deploy an enterprise LLM serving runtime with GPU acceleration. Author manifest /aiops/kserve-inference.yaml in namespace ai-workloads defining KServe custom resource InferenceService named llm-inference-gateway. Configure spec.predictor with modelFormat: 'vllm' and resource limits requesting 1 GPU unit 'nvidia.com/gpu': '1'. Next, deploy Deployment autonomous-remediation-controller in namespace ai-workloads with 2 replicas running image aiops-controller:v2.4. Apply both manifests to namespace ai-workloads.",
+      "productionContext": "KServe InferenceServices standardize LLM model deployment and autoscaling, while dedicated autonomous remediation controllers execute closed-loop self-healing policies to maintain high model availability.",
+      "prerequisites": [
+        "lab-aiops-01-k8sgpt-triage"
+      ],
+      "objectives": [
+        "Create namespace ai-workloads if not present.",
+        "Author manifest /aiops/kserve-inference.yaml defining InferenceService llm-inference-gateway and Deployment autonomous-remediation-controller.",
+        "Configure InferenceService spec.predictor with modelFormat vllm and limits nvidia.com/gpu: 1.",
+        "Deploy Deployment autonomous-remediation-controller with 2 replicas in namespace ai-workloads.",
+        "Apply manifests to namespace ai-workloads."
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "apiVersion: serving.kserve.io/v1beta1\nkind: InferenceService\nmetadata:\n  name: llm-inference-gateway\n  namespace: ai-workloads\nspec:\n  predictor:\n    model:\n      modelFormat:\n        name: \"vllm\"\n      resources:\n        limits:\n          nvidia.com/gpu: \"1\"\n---\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: autonomous-remediation-controller\n  namespace: ai-workloads\nspec:\n  replicas: 2\n  selector:\n    matchLabels:\n      app: autonomous-remediation-controller\n  template:\n    metadata:\n      labels:\n        app: autonomous-remediation-controller\n    spec:\n      containers:\n        - name: controller\n          image: aiops-controller:v2.4\n",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Create ai-workloads namespace",
+          "instruction": "Create namespace ai-workloads if not present.",
+          "commandHint": "kubectl create namespace ai-workloads"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Author KServe InferenceService and controller manifest",
+          "instruction": "Author manifest /aiops/kserve-inference.yaml defining InferenceService llm-inference-gateway and Deployment autonomous-remediation-controller.",
+          "commandHint": "cat << 'EOF' > /aiops/kserve-inference.yaml\n...\nEOF"
+        },
+        {
+          "stepNumber": 3,
+          "title": "Apply manifest to ai-workloads",
+          "instruction": "Apply manifest to namespace ai-workloads.",
+          "commandHint": "kubectl apply -f /aiops/kserve-inference.yaml"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "isvc-gpu-exists",
+          "description": "InferenceService llm-inference-gateway exists in namespace ai-workloads",
+          "type": "resource_exists",
+          "kind": "InferenceService",
+          "namespace": "ai-workloads",
+          "name": "llm-inference-gateway",
+          "remediation": "Deploy InferenceService llm-inference-gateway in namespace ai-workloads"
+        },
+        {
+          "id": "isvc-model-format",
+          "description": "InferenceService modelFormat is vllm",
+          "type": "resource_field_equals",
+          "kind": "InferenceService",
+          "namespace": "ai-workloads",
+          "name": "llm-inference-gateway",
+          "fieldPath": "spec.predictor.model.modelFormat.name",
+          "expectedValue": "vllm",
+          "remediation": "Set spec.predictor.model.modelFormat.name to \"vllm\" in InferenceService llm-inference-gateway"
+        },
+        {
+          "id": "isvc-gpu-limit",
+          "description": "InferenceService specifies resource limit nvidia.com/gpu: 1",
+          "type": "resource_field_equals",
+          "kind": "InferenceService",
+          "namespace": "ai-workloads",
+          "name": "llm-inference-gateway",
+          "fieldPath": "spec.predictor.model.resources.limits['nvidia.com/gpu']",
+          "expectedValue": "1",
+          "remediation": "Set spec.predictor.model.resources.limits['nvidia.com/gpu'] to \"1\" in InferenceService llm-inference-gateway"
+        },
+        {
+          "id": "deploy-aiops-exists",
+          "description": "Deployment autonomous-remediation-controller exists in namespace ai-workloads",
+          "type": "resource_exists",
+          "kind": "Deployment",
+          "namespace": "ai-workloads",
+          "name": "autonomous-remediation-controller",
+          "remediation": "Deploy autonomous-remediation-controller in namespace ai-workloads"
+        },
+        {
+          "id": "deploy-aiops-replicas",
+          "description": "Deployment autonomous-remediation-controller has 2 replicas",
+          "type": "resource_field_equals",
+          "kind": "Deployment",
+          "namespace": "ai-workloads",
+          "name": "autonomous-remediation-controller",
+          "fieldPath": "spec.replicas",
+          "expectedValue": 2,
+          "remediation": "Scale Deployment autonomous-remediation-controller to 2 replicas"
+        }
+      ],
+      "solutionCommands": [
+        "kubectl create namespace ai-workloads",
+        "cat << 'EOF' > /aiops/kserve-inference.yaml\napiVersion: serving.kserve.io/v1beta1\nkind: InferenceService\nmetadata:\n  name: llm-inference-gateway\n  namespace: ai-workloads\nspec:\n  predictor:\n    model:\n      modelFormat:\n        name: \"vllm\"\n      resources:\n        limits:\n          nvidia.com/gpu: \"1\"\n---\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: autonomous-remediation-controller\n  namespace: ai-workloads\nspec:\n  replicas: 2\n  selector:\n    matchLabels:\n      app: autonomous-remediation-controller\n  template:\n    metadata:\n      labels:\n        app: autonomous-remediation-controller\n    spec:\n      containers:\n        - name: controller\n          image: aiops-controller:v2.4\nEOF",
+        "kubectl apply -f /aiops/kserve-inference.yaml"
+      ],
+      "troubleshootingGuide": [
+        {
+          "problem": "InferenceService or Deployment missing or GPU resource limits mismatch.",
+          "cause": "InferenceService must specify vllm modelFormat and 1 GPU unit, and controller must run 2 replicas.",
+          "solution": "Apply /aiops/kserve-inference.yaml to namespace ai-workloads."
+        }
+      ]
+    }
+  ],
+  "assessmentQuestions": [
+    {
+      "id": "q-aiops-01",
+      "question": "How do autonomous diagnostic analyzers such as k8sgpt improve operational response compared to traditional Prometheus threshold alerting alone?",
+      "options": [
+        "They disable all Kubernetes worker nodes when an alert triggers.",
+        "While Prometheus detects that an anomaly has occurred (e.g. high error rate or CPU saturation), k8sgpt queries Kubernetes control plane objects (Pod events, exit codes, PVC statuses, admission failures) and uses AI to perform immediate root-cause synthesis, explaining why the failure occurred and proposing actionable remediation steps.",
+        "They replace the Linux kernel on the nodes with an AI model.",
+        "They prevent developers from creating namespaces."
+      ],
+      "correctIndex": 1,
+      "explanation": "Threshold alerts announce symptom detection, but AI analyzers correlate related control plane events and pod states to diagnose the root cause and generate immediate prescriptive fixes."
+    },
+    {
+      "id": "q-aiops-02",
+      "question": "In Kubernetes GPU scheduling for generative AI and LLM inference, what role does fractional GPU sharing (Time-Slicing or Multi-Instance GPU - MIG) play in cluster utilization?",
+      "options": [
+        "It forces all pods to share the same CPU core.",
+        "High-end GPUs (such as NVIDIA A100/H100) are severely underutilized by small inference microservices if dedicated entirely (1:1); fractional GPU partitioning allows multiple lightweight inference containers to share physical GPU compute and memory safely, optimizing cloud hardware spend.",
+        "It doubles the physical memory of the GPU through software compression.",
+        "It converts CUDA code into pure JavaScript."
+      ],
+      "correctIndex": 1,
+      "explanation": "Fractional GPU sharing (via MIG or time-slicing) divides high-capacity physical GPUs into isolated virtual instances, allowing multiple smaller workloads to share expensive hardware without resource starvation."
+    }
+  ]
+}

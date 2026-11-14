@@ -95,6 +95,7 @@ const V4_CURRICULUM_TIERS = [
       'microservices-architecture',
       'system-design',
       'platform-engineering-idp',
+      'platform-engineering',
       'security-engineering',
       'cloud-architecture-patterns',
       'enterprise-architecture'
@@ -107,7 +108,8 @@ const V4_CURRICULUM_TIERS = [
     certTarget: 'CMCAP / AI-Ops Specialist',
     summary: 'Autonomous self-healing AI-Ops, GPU scheduling, KServe LLM inference, WebAssembly, eBPF Tetragon, and FinOps unit economics.',
     domainIds: [
-      'aiops-autonomous-v4'
+      'aiops-autonomous-v4',
+      'aiops-autonomous'
     ]
   }
 ];
