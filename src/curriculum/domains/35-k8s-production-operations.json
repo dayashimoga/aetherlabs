@@ -1,0 +1,224 @@
+{
+  "id": "k8s-production-operations",
+  "title": "Kubernetes Advanced Production Operations, APF & etcd Maintenance",
+  "category": "Platform Operations & Performance",
+  "trackId": "track-platform",
+  "version": "1.0.0",
+  "difficulty": "Advanced",
+  "estimatedHours": 8,
+  "summary": "Master high-scale Kubernetes production operations: implementing API Priority and Fairness (APF) FlowSchemas and PriorityLevelConfigurations to protect kube-apiserver from denial-of-service, deploying NodeLocal DNSCache DaemonSets to eliminate conntrack race conditions, and executing maintenance with etcd defragmentation and snapshot integrity checks.",
+  "prerequisites": [
+    "production-operations",
+    "kubernetes-core-v4"
+  ],
+  "learningObjectives": [
+    "Configure API Priority and Fairness (APF) FlowSchemas and PriorityLevelConfigurations to isolate traffic and prevent control plane starvation.",
+    "Deploy and validate NodeLocal DNSCache DaemonSets to intercept UDP DNS traffic and resolve conntrack table exhaustion.",
+    "Execute offline and online etcd cluster defragmentation and compaction workflows using etcdctl defrag."
+  ],
+  "curriculumModules": [
+    {
+      "id": "mod-k8sops-01",
+      "title": "API Priority and Fairness (APF) & FlowSchema Traffic Shaping",
+      "conceptSummary": "At scale, runaway controllers, reporting daemons, or batch cronjobs can overload kube-apiserver with LIST/WATCH requests. API Priority and Fairness (APF) classifies incoming HTTP requests into FlowSchemas using subject rules and routes them into PriorityLevelConfigurations. Each priority level maintains dedicated concurrency shares and fair-queuing queues, guaranteeing that system-critical controllers (kube-scheduler, node leases) remain responsive even during extreme API bursts.",
+      "productionArchitecturePattern": "Define custom FlowSchemas matching batch or reporting ServiceAccounts, assigning them to isolated PriorityLevelConfigurations with low concurrency shares (e.g. 10 shares) to protect high-priority production workloads.",
+      "keyCommands": [
+        "kubectl get flowschemas",
+        "kubectl get prioritylevelconfigurations",
+        "kubectl apply -f /ops/flowschema-batch.yaml"
+      ]
+    },
+    {
+      "id": "mod-k8sops-02",
+      "title": "NodeLocal DNSCache & etcd Maintenance Workflows",
+      "conceptSummary": "High pod churn saturates Linux netfilter conntrack tables with UDP DNS lookups, leading to 5-second DNS timeouts due to kernel races. NodeLocal DNSCache runs as a DaemonSet on link-local IP 169.254.20.10, caching DNS locally and upgrading upstream queries to TCP. Concurrently, high cluster churn causes etcd revision history bloat; running etcdctl compact followed by etcdctl defrag reclaims disk space and stabilizes Raft quorum commit latencies.",
+      "productionArchitecturePattern": "Pair NodeLocal DNSCache for zero-timeout DNS resolution with scheduled off-peak etcd compaction and rolling defragmentation across control plane nodes.",
+      "keyCommands": [
+        "etcdctl compact 5000",
+        "etcdctl defrag",
+        "etcdctl endpoint status"
+      ]
+    }
+  ],
+  "labs": [
+    {
+      "id": "lab-k8sops-01-flowschema-apf",
+      "title": "Configuring API Priority and Fairness (APF) FlowSchemas",
+      "difficulty": "Advanced",
+      "durationMinutes": 20,
+      "xpReward": 150,
+      "scenario": "Protect the kube-apiserver control plane from batch workload request floods: author a FlowSchema manifest in /ops/flowschema-batch.yaml named batch-workload-flowschema matching ServiceAccounts in namespace batch, routing requests to PriorityLevelConfiguration workload-low with matchingPrecedence: 500. Apply to the cluster.",
+      "productionContext": "Implementing APF ensures batch report jobs cannot starve control plane health checks or pod scheduling during high-volume data processing cycles.",
+      "prerequisites": [
+        "lab-ops-02-node-drain-maintenance"
+      ],
+      "objectives": [
+        "Author FlowSchema manifest in /ops/flowschema-batch.yaml.",
+        "Configure matchingPrecedence to 500 and priorityLevelConfiguration to workload-low.",
+        "Apply FlowSchema batch-workload-flowschema to the cluster."
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "apiVersion: flowcontrol.apiserver.k8s.io/v1\nkind: FlowSchema\nmetadata:\n  name: batch-workload-flowschema\nspec:\n  priorityLevelConfiguration:\n    name: workload-low\n  matchingPrecedence: 500\n  rules:\n    - subjects:\n        - kind: ServiceAccount\n          serviceAccount:\n            name: \"*\"\n            namespace: batch\n      resourceRules:\n        - verbs: [\"*\"]\n          apiGroups: [\"*\"]\n          resources: [\"*\"]\n",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Author FlowSchema manifest",
+          "instruction": "Create manifest /ops/flowschema-batch.yaml defining FlowSchema batch-workload-flowschema.",
+          "commandHint": "cat << 'EOF' > /ops/flowschema-batch.yaml\n...\nEOF"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Apply FlowSchema",
+          "instruction": "Apply the FlowSchema definition to the cluster.",
+          "commandHint": "kubectl apply -f /ops/flowschema-batch.yaml"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "flowschema-batch-exists",
+          "description": "FlowSchema batch-workload-flowschema exists in cluster",
+          "type": "resource_exists",
+          "kind": "FlowSchema",
+          "name": "batch-workload-flowschema",
+          "remediation": "Apply FlowSchema batch-workload-flowschema to the cluster"
+        },
+        {
+          "id": "flowschema-priority-level",
+          "description": "FlowSchema routes to priorityLevelConfiguration workload-low",
+          "type": "resource_field_equals",
+          "kind": "FlowSchema",
+          "name": "batch-workload-flowschema",
+          "fieldPath": "spec.priorityLevelConfiguration.name",
+          "expectedValue": "workload-low",
+          "remediation": "Set spec.priorityLevelConfiguration.name: workload-low"
+        },
+        {
+          "id": "flowschema-precedence",
+          "description": "FlowSchema has matchingPrecedence 500",
+          "type": "resource_field_equals",
+          "kind": "FlowSchema",
+          "name": "batch-workload-flowschema",
+          "fieldPath": "spec.matchingPrecedence",
+          "expectedValue": 500,
+          "remediation": "Set spec.matchingPrecedence: 500"
+        }
+      ],
+      "solutionCommands": [
+        "mkdir -p /ops",
+        "cat << 'EOF' > /ops/flowschema-batch.yaml\napiVersion: flowcontrol.apiserver.k8s.io/v1\nkind: FlowSchema\nmetadata:\n  name: batch-workload-flowschema\nspec:\n  priorityLevelConfiguration:\n    name: workload-low\n  matchingPrecedence: 500\n  rules:\n    - subjects:\n        - kind: ServiceAccount\n          serviceAccount:\n            name: \"*\"\n            namespace: batch\n      resourceRules:\n        - verbs: [\"*\"]\n          apiGroups: [\"*\"]\n          resources: [\"*\"]\nEOF",
+        "kubectl apply -f /ops/flowschema-batch.yaml"
+      ],
+      "troubleshootingGuide": [
+        {
+          "problem": "FlowSchema validation fails or priorityLevelConfiguration not found.",
+          "cause": "FlowSchema is cluster-scoped and requires exact field matching.",
+          "solution": "Verify spec.priorityLevelConfiguration.name is workload-low and spec.matchingPrecedence is 500."
+        }
+      ]
+    },
+    {
+      "id": "lab-k8sops-02-etcd-defrag",
+      "title": "Executing etcd Compaction, Defragmentation & Endpoint Health Audits",
+      "difficulty": "Advanced",
+      "durationMinutes": 20,
+      "xpReward": 150,
+      "scenario": "Mitigate etcd database bloat and defragment cluster storage after high pod turnover: compact etcd historical revisions via etcdctl compact 5000, defragment the active database via etcdctl defrag, and audit endpoint storage metrics via etcdctl endpoint status.",
+      "productionContext": "Compacting and defragmenting etcd reclaims physical disk space and prevents slow disk sync warnings (etcd wal: sync took too long) that cause etcd leader elections.",
+      "prerequisites": [
+        "lab-k8sops-01-flowschema-apf"
+      ],
+      "objectives": [
+        "Execute etcdctl compact 5000.",
+        "Execute etcdctl defrag to reclaim free pages.",
+        "Audit endpoint health and db size with etcdctl endpoint status."
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "# etcd Maintenance Automation\n# Execute: etcdctl compact 5000 && etcdctl defrag && etcdctl endpoint status\n",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Compact etcd revisions",
+          "instruction": "Execute etcdctl compact 5000 to purge old revision history.",
+          "commandHint": "etcdctl compact 5000"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Defragment etcd member storage",
+          "instruction": "Execute etcdctl defrag to reclaim fragmented database space.",
+          "commandHint": "etcdctl defrag"
+        },
+        {
+          "stepNumber": 3,
+          "title": "Audit endpoint storage status",
+          "instruction": "Execute etcdctl endpoint status to inspect member DB size and Raft index.",
+          "commandHint": "etcdctl endpoint status"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "etcd-compact-executed",
+          "description": "etcdctl compact 5000 executed",
+          "type": "command_executed",
+          "commandSubstring": "etcdctl compact 5000",
+          "remediation": "Execute etcdctl compact 5000"
+        },
+        {
+          "id": "etcd-defrag-executed",
+          "description": "etcdctl defrag executed",
+          "type": "command_executed",
+          "commandSubstring": "etcdctl defrag",
+          "remediation": "Execute etcdctl defrag"
+        },
+        {
+          "id": "etcd-endpoint-status-executed",
+          "description": "etcdctl endpoint status executed",
+          "type": "command_executed",
+          "commandSubstring": "etcdctl endpoint status",
+          "remediation": "Execute etcdctl endpoint status"
+        }
+      ],
+      "solutionCommands": [
+        "etcdctl compact 5000",
+        "etcdctl defrag",
+        "etcdctl endpoint status"
+      ],
+      "troubleshootingGuide": [
+        {
+          "problem": "etcdctl commands fail or defragmentation times out.",
+          "cause": "Commands must be executed sequentially to ensure revisions are compacted before defragmenting.",
+          "solution": "Run etcdctl compact 5000 followed by etcdctl defrag and etcdctl endpoint status."
+        }
+      ]
+    }
+  ],
+  "assessmentQuestions": [
+    {
+      "id": "q-k8sops-01",
+      "question": "What is the primary role of API Priority and Fairness (APF) in Kubernetes 1.20+?",
+      "options": [
+        "It provides Round-Robin load balancing across cluster nodes.",
+        "It replaces the legacy max-requests-inflight concurrency gate with a multi-queue, priority-level fair-queuing mechanism that categorizes requests via FlowSchemas and prevents misbehaving or low-priority clients from starving critical API calls.",
+        "It forces all pods to communicate over HTTP/3.",
+        "It dynamically changes container CPU requests based on API traffic."
+      ],
+      "correctIndex": 1,
+      "explanation": "APF enables fine-grained control over kube-apiserver concurrency by classifying requests into priority levels with independent concurrency limits and fair queues, preventing denial-of-service from runaway clients."
+    },
+    {
+      "id": "q-k8sops-02",
+      "question": "Why is etcd defragmentation required after executing 'etcdctl compact'?",
+      "options": [
+        "Compaction physically deletes the etcd binary from the host.",
+        "Compaction frees etcd internal logical revisions and marks pages as reusable within etcd's bbolt storage engine, but does NOT release the physical disk space back to the underlying operating system until 'etcdctl defrag' is executed.",
+        "Defragmentation changes the etcd Raft consensus algorithm.",
+        "Compaction stops all running pods."
+      ],
+      "correctIndex": 1,
+      "explanation": "etcd uses bbolt for storage. Compaction marks historical key revisions as free within the bbolt database file without shrinking the file size. Running 'etcdctl defrag' reorganizes storage and releases unused disk pages back to the host filesystem."
+    }
+  ]
+}

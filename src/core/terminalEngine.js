@@ -1199,6 +1199,8 @@ class TerminalEngine {
         return this.handleKubeadm(args);
       case 'velero':
         return this.handleVelero(args);
+      case 'cilium':
+        return this.handleCilium(args);
       case 'kyverno':
         return this.handleKyverno(args);
       case 'vcluster':
@@ -3299,6 +3301,19 @@ class TerminalEngine {
 
   handleEtcdctl(args) {
     const sub = args[0] || 'endpoint';
+    if (sub === 'defrag') {
+      return {
+        exitCode: 0,
+        output: 'Finished defragmenting etcd member[https://127.0.0.1:2379]'
+      };
+    }
+    if (sub === 'compact') {
+      const rev = args[1] || '5000';
+      return {
+        exitCode: 0,
+        output: `compacted revision ${rev}`
+      };
+    }
     if (sub === 'snapshot') {
       const action = args[1];
       const target = args[2] || '/var/lib/etcd/backup.db';
@@ -3584,6 +3599,20 @@ class TerminalEngine {
       }
     }
     return { exitCode: 0, output: 'Velero client v1.14.0' };
+  }
+
+  handleCilium(args) {
+    if (this.multiCli) {
+      const res = this.multiCli.handleCilium({ argv: ['cilium', ...args], cwd: this.cwd, vfs: this.vfs });
+      return {
+        exitCode: res.code !== undefined ? res.code : 0,
+        output: (res.stdout || res.stderr || '').replace(/\n$/, ''),
+        stdout: res.stdout || '',
+        stderr: res.stderr || '',
+        ...res
+      };
+    }
+    return { exitCode: 0, output: 'Cilium CLI v1.16.4' };
   }
 
   handleKyverno(args) {

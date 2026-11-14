@@ -84,7 +84,19 @@ const KIND_ALIASES = {
   app: 'Application',
   application: 'Application',
   rollout: 'Rollout',
-  rollouts: 'Rollout'
+  rollouts: 'Rollout',
+  flowschema: 'FlowSchema',
+  flowschemas: 'FlowSchema',
+  prioritylevelconfiguration: 'PriorityLevelConfiguration',
+  prioritylevelconfigurations: 'PriorityLevelConfiguration',
+  plc: 'PriorityLevelConfiguration',
+  machinedeployment: 'MachineDeployment',
+  machinedeployments: 'MachineDeployment',
+  md: 'MachineDeployment',
+  serviceimport: 'ServiceImport',
+  serviceimports: 'ServiceImport',
+  serviceexport: 'ServiceExport',
+  serviceexports: 'ServiceExport'
 };
 
 const CLUSTER_SCOPED_KINDS = new Set([
@@ -102,7 +114,9 @@ const CLUSTER_SCOPED_KINDS = new Set([
   'ClusterSecretStore',
   'CustomResourceDefinition',
   'PriorityClass',
-  'GatewayClass'
+  'GatewayClass',
+  'FlowSchema',
+  'PriorityLevelConfiguration'
 ]);
 
 function normalizeKind(inputKind) {

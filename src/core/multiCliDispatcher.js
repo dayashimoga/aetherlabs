@@ -5028,6 +5028,13 @@ spec:
 
   handleEtcdctl({ argv = [] }) {
     const sub = argv[1];
+    if (sub === 'defrag') {
+      return { stdout: 'Finished defragmenting etcd member[https://127.0.0.1:2379]\n', stderr: '', code: 0 };
+    }
+    if (sub === 'compact') {
+      const rev = argv[2] || '5000';
+      return { stdout: `compacted revision ${rev}\n`, stderr: '', code: 0 };
+    }
     if (sub === 'endpoint') {
       const action = argv[2] || 'health';
       if (action === 'status') {
@@ -5303,6 +5310,19 @@ spec:
 
   handleCilium({ argv = [] }) {
     const sub = argv[1];
+    if (sub === 'clustermesh') {
+      const action = argv[2] || 'status';
+      if (action === 'status') {
+        const out = [
+          '✅ Cluster access information is complete',
+          '✅ Service "clustermesh-apiserver" of type "NodePort" found',
+          '✅ 2/2 clusters connected (cluster-us-east, cluster-eu-west)',
+          '🔌 Global services connected: 1',
+          'All ClusterMesh endpoints healthy and synchronized.'
+        ].join('\n');
+        return { stdout: out + '\n', stderr: '', code: 0 };
+      }
+    }
     if (sub === 'connectivity' && argv[2] === 'test') {
       if (this.networking) {
         const pods = this.graph.list({ kind: 'Pod' }).filter((p) => p.status?.phase === 'Running');

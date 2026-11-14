@@ -132,7 +132,19 @@ const KIND_ALIASES = {
   constrainttemplates: 'ConstraintTemplate',
   ciliumnetworkpolicy: 'CiliumNetworkPolicy',
   ciliumnetworkpolicies: 'CiliumNetworkPolicy',
-  cnp: 'CiliumNetworkPolicy'
+  cnp: 'CiliumNetworkPolicy',
+  flowschema: 'FlowSchema',
+  flowschemas: 'FlowSchema',
+  prioritylevelconfiguration: 'PriorityLevelConfiguration',
+  prioritylevelconfigurations: 'PriorityLevelConfiguration',
+  plc: 'PriorityLevelConfiguration',
+  machinedeployment: 'MachineDeployment',
+  machinedeployments: 'MachineDeployment',
+  md: 'MachineDeployment',
+  serviceimport: 'ServiceImport',
+  serviceimports: 'ServiceImport',
+  serviceexport: 'ServiceExport',
+  serviceexports: 'ServiceExport'
 };
 
 const CLUSTER_SCOPED_KINDS = new Set([
@@ -153,7 +165,9 @@ const CLUSTER_SCOPED_KINDS = new Set([
   'GatewayClass',
   'ConstraintTemplate',
   'CompositeResourceDefinition',
-  'XRD'
+  'XRD',
+  'FlowSchema',
+  'PriorityLevelConfiguration'
 ]);
 
 function normalizeKind(input) {

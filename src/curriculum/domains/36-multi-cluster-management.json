@@ -1,0 +1,244 @@
+{
+  "id": "multi-cluster-management",
+  "title": "Multi-Cluster Management, Cluster API (CAPI), vCluster & Cilium ClusterMesh",
+  "category": "Platform Operations & Performance",
+  "trackId": "track-platform",
+  "version": "1.0.0",
+  "difficulty": "Advanced",
+  "estimatedHours": 8,
+  "summary": "Master enterprise multi-cluster orchestration, declarative fleet management, and hybrid mesh topologies: provisioning clusters declaratively with Cluster API (CAPI Cluster, MachineDeployment, and AWSCluster/AzureCluster infrastructure providers), provisioning lightweight virtual tenant clusters using vCluster, and configuring cross-cluster service discovery with Cilium ClusterMesh and MCS (Multi-Cluster Services) ServiceExport/ServiceImport.",
+  "prerequisites": [
+    "k8s-production-operations",
+    "platform-reliability"
+  ],
+  "learningObjectives": [
+    "Declare and deploy Kubernetes clusters as first-class resources using Cluster API (CAPI) Cluster and MachineDeployment manifests.",
+    "Architect multi-tenant virtual control planes using vCluster to achieve tenant isolation while sharing underlying physical nodes.",
+    "Implement cross-cluster service mesh networking and global DNS discovery with Cilium ClusterMesh and Kubernetes Multi-Cluster Services (MCS) ServiceImport/ServiceExport."
+  ],
+  "curriculumModules": [
+    {
+      "id": "mod-mcm-01",
+      "title": "Declarative Fleet Lifecycle with Cluster API (CAPI)",
+      "conceptSummary": "Cluster API (CAPI) treats Kubernetes clusters and worker node machines as declarative Kubernetes resources. A management cluster uses CustomResourceDefinitions (Cluster, MachineDeployment, ControlPlane, and Infrastructure Providers like CAPA/CAPZ) to provision, upgrade, and reconcile workload clusters across heterogeneous clouds and bare-metal environments.",
+      "productionArchitecturePattern": "Adopt a GitOps-driven management cluster pattern where platform teams manage fleet-wide Kubernetes version upgrades and OS patching via Git pull requests updating MachineDeployment version fields.",
+      "keyCommands": [
+        "clusterctl generate cluster prod-cluster --kubernetes-version v1.32.0",
+        "kubectl get clusters -A",
+        "kubectl get machinedeployments -A",
+        "kubectl apply -f /fleet/worker-fleet.yaml"
+      ]
+    },
+    {
+      "id": "mod-mcm-02",
+      "title": "Virtual Clusters (vCluster) & Cilium ClusterMesh with MCS",
+      "conceptSummary": "To prevent physical cluster sprawl, vCluster creates isolated virtual Kubernetes control planes inside namespaces of an underlying host cluster, giving tenants full admin access (CRDs, namespaces) without multi-cluster overhead. Across physical clusters, Cilium ClusterMesh connects eBPF routing engines without ingress gateways, enabling seamless pod-to-pod cross-cluster routing and Kubernetes Multi-Cluster Services (MCS) ServiceExport/ServiceImport resolution.",
+      "productionArchitecturePattern": "Utilize vCluster for multi-tenant dev/staging sandbox environments and link production regional clusters via Cilium ClusterMesh with MCS ServiceImports for zero-egress cross-region disaster recovery.",
+      "keyCommands": [
+        "vcluster create dev-tenant --namespace team-alpha",
+        "cilium clustermesh status",
+        "kubectl apply -f /fleet/checkout-service-import.yaml"
+      ]
+    }
+  ],
+  "labs": [
+    {
+      "id": "lab-mcm-01-capi-machinedeployment",
+      "title": "Provisioning Declarative Workload Clusters via Cluster API MachineDeployment",
+      "difficulty": "Advanced",
+      "durationMinutes": 20,
+      "xpReward": 150,
+      "scenario": "Deploy a declarative worker fleet for a production workload cluster: author a Cluster API MachineDeployment manifest in /fleet/worker-fleet.yaml named prod-worker-fleet in namespace fleet-system with 3 replicas targeting cluster prod-cluster and version v1.32.0. Apply to namespace fleet-system.",
+      "productionContext": "Using CAPI MachineDeployments automates worker node rolling replacements during CVE patch cycles without manual node provisioning.",
+      "prerequisites": [
+        "lab-k8sops-02-etcd-defrag"
+      ],
+      "objectives": [
+        "Create namespace fleet-system if not present.",
+        "Author MachineDeployment in /fleet/worker-fleet.yaml.",
+        "Configure clusterName to prod-cluster and replicas to 3.",
+        "Apply MachineDeployment to namespace fleet-system."
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "apiVersion: cluster.x-k8s.io/v1beta1\nkind: MachineDeployment\nmetadata:\n  name: prod-worker-fleet\n  namespace: fleet-system\nspec:\n  clusterName: prod-cluster\n  replicas: 3\n  selector:\n    matchLabels:\n      cluster.x-k8s.io/cluster-name: prod-cluster\n  template:\n    metadata:\n      labels:\n        cluster.x-k8s.io/cluster-name: prod-cluster\n    spec:\n      clusterName: prod-cluster\n      version: v1.32.0\n",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Create fleet-system namespace",
+          "instruction": "Create namespace fleet-system if not present.",
+          "commandHint": "kubectl create namespace fleet-system"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Author MachineDeployment manifest",
+          "instruction": "Author manifest /fleet/worker-fleet.yaml targeting cluster prod-cluster with 3 replicas.",
+          "commandHint": "cat << 'EOF' > /fleet/worker-fleet.yaml\n...\nEOF"
+        },
+        {
+          "stepNumber": 3,
+          "title": "Apply MachineDeployment",
+          "instruction": "Apply manifest to namespace fleet-system.",
+          "commandHint": "kubectl apply -f /fleet/worker-fleet.yaml"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "machinedeployment-fleet-exists",
+          "description": "MachineDeployment prod-worker-fleet exists in namespace fleet-system",
+          "type": "resource_exists",
+          "kind": "MachineDeployment",
+          "namespace": "fleet-system",
+          "name": "prod-worker-fleet",
+          "remediation": "Apply MachineDeployment prod-worker-fleet in namespace fleet-system"
+        },
+        {
+          "id": "machinedeployment-cluster-name",
+          "description": "MachineDeployment targets clusterName prod-cluster",
+          "type": "resource_field_equals",
+          "kind": "MachineDeployment",
+          "namespace": "fleet-system",
+          "name": "prod-worker-fleet",
+          "fieldPath": "spec.clusterName",
+          "expectedValue": "prod-cluster",
+          "remediation": "Set spec.clusterName: prod-cluster on MachineDeployment prod-worker-fleet"
+        },
+        {
+          "id": "machinedeployment-replicas",
+          "description": "MachineDeployment has 3 replicas",
+          "type": "resource_field_equals",
+          "kind": "MachineDeployment",
+          "namespace": "fleet-system",
+          "name": "prod-worker-fleet",
+          "fieldPath": "spec.replicas",
+          "expectedValue": 3,
+          "remediation": "Set spec.replicas: 3 on MachineDeployment prod-worker-fleet"
+        }
+      ],
+      "solutionCommands": [
+        "mkdir -p /fleet",
+        "kubectl create namespace fleet-system",
+        "cat << 'EOF' > /fleet/worker-fleet.yaml\napiVersion: cluster.x-k8s.io/v1beta1\nkind: MachineDeployment\nmetadata:\n  name: prod-worker-fleet\n  namespace: fleet-system\nspec:\n  clusterName: prod-cluster\n  replicas: 3\n  selector:\n    matchLabels:\n      cluster.x-k8s.io/cluster-name: prod-cluster\n  template:\n    metadata:\n      labels:\n        cluster.x-k8s.io/cluster-name: prod-cluster\n    spec:\n      clusterName: prod-cluster\n      version: v1.32.0\nEOF",
+        "kubectl apply -f /fleet/worker-fleet.yaml"
+      ],
+      "troubleshootingGuide": [
+        {
+          "problem": "MachineDeployment missing or target cluster mismatch.",
+          "cause": "MachineDeployment must target clusterName prod-cluster in namespace fleet-system.",
+          "solution": "Verify spec.clusterName is prod-cluster and apply to namespace fleet-system."
+        }
+      ]
+    },
+    {
+      "id": "lab-mcm-02-cilium-clustermesh-mcs",
+      "title": "Cross-Cluster Service Discovery with Cilium ClusterMesh & MCS",
+      "difficulty": "Advanced",
+      "durationMinutes": 20,
+      "xpReward": 150,
+      "scenario": "Configure cross-cluster multi-cloud service discovery: verify multi-cluster mesh connectivity via cilium clustermesh status, author a Multi-Cluster Services ServiceImport manifest in /fleet/checkout-service-import.yaml named checkout-service in namespace production of type ClusterSetIP targeting port 8080. Apply to namespace production.",
+      "productionContext": "Multi-Cluster Services (MCS) ServiceImports allow pods in one cluster to discover and communicate with services in another cluster using standard DNS names (service.namespace.svc.clusterset.local).",
+      "prerequisites": [
+        "lab-mcm-01-capi-machinedeployment"
+      ],
+      "objectives": [
+        "Audit ClusterMesh connectivity via cilium clustermesh status.",
+        "Author ServiceImport in /fleet/checkout-service-import.yaml.",
+        "Configure spec.type to ClusterSetIP.",
+        "Apply ServiceImport to namespace production."
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "apiVersion: multicluster.x-k8s.io/v1alpha1\nkind: ServiceImport\nmetadata:\n  name: checkout-service\n  namespace: production\nspec:\n  type: ClusterSetIP\n  ports:\n    - port: 8080\n      protocol: TCP\n",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Verify ClusterMesh status",
+          "instruction": "Execute cilium clustermesh status to verify cross-cluster tunnel synchronization.",
+          "commandHint": "cilium clustermesh status"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Author ServiceImport manifest",
+          "instruction": "Author manifest /fleet/checkout-service-import.yaml for checkout-service of type ClusterSetIP.",
+          "commandHint": "cat << 'EOF' > /fleet/checkout-service-import.yaml\n...\nEOF"
+        },
+        {
+          "stepNumber": 3,
+          "title": "Apply ServiceImport",
+          "instruction": "Apply ServiceImport manifest to namespace production.",
+          "commandHint": "kubectl apply -f /fleet/checkout-service-import.yaml"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "cilium-clustermesh-status-executed",
+          "description": "cilium clustermesh status executed",
+          "type": "command_executed",
+          "commandSubstring": "cilium clustermesh status",
+          "remediation": "Execute cilium clustermesh status"
+        },
+        {
+          "id": "serviceimport-checkout-exists",
+          "description": "ServiceImport checkout-service exists in namespace production",
+          "type": "resource_exists",
+          "kind": "ServiceImport",
+          "namespace": "production",
+          "name": "checkout-service",
+          "remediation": "Apply ServiceImport checkout-service in namespace production"
+        },
+        {
+          "id": "serviceimport-type-clustersetip",
+          "description": "ServiceImport type is ClusterSetIP",
+          "type": "resource_field_equals",
+          "kind": "ServiceImport",
+          "namespace": "production",
+          "name": "checkout-service",
+          "fieldPath": "spec.type",
+          "expectedValue": "ClusterSetIP",
+          "remediation": "Set spec.type: ClusterSetIP on ServiceImport checkout-service"
+        }
+      ],
+      "solutionCommands": [
+        "mkdir -p /fleet",
+        "cilium clustermesh status",
+        "cat << 'EOF' > /fleet/checkout-service-import.yaml\napiVersion: multicluster.x-k8s.io/v1alpha1\nkind: ServiceImport\nmetadata:\n  name: checkout-service\n  namespace: production\nspec:\n  type: ClusterSetIP\n  ports:\n    - port: 8080\n      protocol: TCP\nEOF",
+        "kubectl apply -f /fleet/checkout-service-import.yaml"
+      ],
+      "troubleshootingGuide": [
+        {
+          "problem": "ServiceImport validation fails or clustermesh not checked.",
+          "cause": "Cilium clustermesh status command must be executed and ServiceImport must be created in namespace production.",
+          "solution": "Execute cilium clustermesh status and apply /fleet/checkout-service-import.yaml to namespace production."
+        }
+      ]
+    }
+  ],
+  "assessmentQuestions": [
+    {
+      "id": "q-mcm-01",
+      "question": "How does Cluster API (CAPI) handle automated rolling upgrades of worker nodes in a MachineDeployment?",
+      "options": [
+        "It deletes all physical nodes simultaneously causing downtime.",
+        "It provisions a new Machine matching the updated MachineTemplate, waits for it to join the cluster as a Ready Node, drains old nodes safely while respecting PodDisruptionBudgets, and deletes old Machines sequentially.",
+        "It modifies the Linux kernel dynamically via SSH.",
+        "It converts worker nodes into Docker containers."
+      ],
+      "correctIndex": 1,
+      "explanation": "CAPI MachineDeployments follow the Kubernetes Deployment controller model: they create a new MachineSet, scale up new Machines with the updated spec, wait for them to become Ready, cordons and drains old nodes, and scales down the old MachineSet."
+    },
+    {
+      "id": "q-mcm-02",
+      "question": "How does Cilium ClusterMesh achieve cross-cluster service routing without dedicated ingress/egress gateway bottlenecks?",
+      "options": [
+        "It routes all traffic through a single public IP in AWS.",
+        "By synchronizing cluster states via etcd/apiserver proxies and managing eBPF connection tracking maps directly in the Linux kernel, allowing pods in cluster A to route packets directly to pod IPs in cluster B over flat underlay or overlay tunnels.",
+        "It encapsulates all packets in base64 HTTP requests.",
+        "It relies exclusively on DNS round-robin without health checking."
+      ],
+      "correctIndex": 1,
+      "explanation": "Cilium ClusterMesh establishes direct pod-to-pod networking across clusters using eBPF datapath routing and distributed mesh state synchronization, eliminating the latency and cost of intermediate edge gateways."
+    }
+  ]
+}
