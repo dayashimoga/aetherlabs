@@ -236,6 +236,72 @@
           </div>
         </div>
 
+        <!-- ROLE-BASED & CERTIFICATION FILTER BAR -->
+        <div class="curriculum-filter-bar glass-panel" id="curriculum-filter-bar" role="search" aria-label="Curriculum Filters and Search">
+          <div class="filter-search-row">
+            <div class="search-input-wrap">
+              <span class="search-input-icon" aria-hidden="true">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="11" cy="11" r="8"></circle>
+                  <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                </svg>
+              </span>
+              <input id="curriculum-search-input" class="curriculum-search-input" type="search"
+                placeholder="Instant filter domains, labs, certs (e.g. CKA, Istio, Kyverno, eBPF)..."
+                aria-label="Filter curriculum by keyword or certification" />
+              <div class="search-shortcut-hint">
+                <button id="btn-clear-curriculum-search" class="btn-clear-search" type="button" aria-label="Clear search input">&times;</button>
+                <kbd class="kbd" title="Press / to search">/</kbd>
+              </div>
+            </div>
+            <div style="display:flex; align-items:center; gap:0.5rem;">
+              <span id="curriculum-match-count" class="filter-match-badge">Showing 26 of 26 Domains</span>
+              <button id="btn-reset-filters" class="btn-reset-filters" type="button" style="display:none;" aria-label="Reset all active filters">
+                <span>Reset Filters</span> &times;
+              </button>
+            </div>
+          </div>
+
+          <div class="filter-groups-row">
+            <!-- Certification Alignment Filters -->
+            <div class="filter-group-line">
+              <span class="filter-group-label">Certification:</span>
+              <div class="filter-pills-container" id="cert-filter-pills" role="radiogroup" aria-label="Filter by Certification Target">
+                <button class="filter-pill active" data-filter-type="cert" data-filter-value="all" type="button" role="radio" aria-checked="true">All Certs</button>
+                <button class="filter-pill" data-filter-type="cert" data-filter-value="CKA" type="button" role="radio" aria-checked="false">CKA</button>
+                <button class="filter-pill" data-filter-type="cert" data-filter-value="CKAD" type="button" role="radio" aria-checked="false">CKAD</button>
+                <button class="filter-pill" data-filter-type="cert" data-filter-value="CKS" type="button" role="radio" aria-checked="false">CKS</button>
+                <button class="filter-pill" data-filter-type="cert" data-filter-value="LFCS" type="button" role="radio" aria-checked="false">CCNFA / LFCS</button>
+                <button class="filter-pill" data-filter-type="cert" data-filter-value="GitOps" type="button" role="radio" aria-checked="false">GitOps / CI-CD</button>
+                <button class="filter-pill" data-filter-type="cert" data-filter-value="SRE" type="button" role="radio" aria-checked="false">PCA / SRE</button>
+                <button class="filter-pill" data-filter-type="cert" data-filter-value="AI-Ops" type="button" role="radio" aria-checked="false">AI-Ops / Multi-Cloud</button>
+              </div>
+            </div>
+
+            <!-- Difficulty Filters -->
+            <div class="filter-group-line">
+              <span class="filter-group-label">Difficulty:</span>
+              <div class="filter-pills-container" id="difficulty-filter-pills" role="radiogroup" aria-label="Filter by Difficulty Level">
+                <button class="filter-pill active" data-filter-type="difficulty" data-filter-value="all" type="button" role="radio" aria-checked="true">All Levels</button>
+                <button class="filter-pill" data-filter-type="difficulty" data-filter-value="Beginner" type="button" role="radio" aria-checked="false">Beginner</button>
+                <button class="filter-pill" data-filter-type="difficulty" data-filter-value="Intermediate" type="button" role="radio" aria-checked="false">Intermediate</button>
+                <button class="filter-pill" data-filter-type="difficulty" data-filter-value="Advanced" type="button" role="radio" aria-checked="false">Advanced</button>
+              </div>
+            </div>
+
+            <!-- Status Filters -->
+            <div class="filter-group-line">
+              <span class="filter-group-label">Progress:</span>
+              <div class="filter-pills-container" id="status-filter-pills" role="radiogroup" aria-label="Filter by Progression Status">
+                <button class="filter-pill active" data-filter-type="status" data-filter-value="all" type="button" role="radio" aria-checked="true">All Status</button>
+                <button class="filter-pill" data-filter-type="status" data-filter-value="mastered" type="button" role="radio" aria-checked="false">Mastered</button>
+                <button class="filter-pill" data-filter-type="status" data-filter-value="progress" type="button" role="radio" aria-checked="false">In Progress</button>
+                <button class="filter-pill" data-filter-type="status" data-filter-value="available" type="button" role="radio" aria-checked="false">Available</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <div id="skill-tree-container" class="skill-tree-dag" role="region" aria-label="7-Tier Skill Tree DAG">
           <!-- Dynamically populated via app.js -->
         </div>

@@ -315,12 +315,25 @@
 
     if (state.overview && state.overview.domains) {
       state.overview.domains.forEach((d) => {
+        // Deep-link domain syllabus drawer
+        commands.push({
+          id: `domain-${d.id}`,
+          title: `Domain: ${d.title}`,
+          subtitle: `${DOMAIN_CERTS[d.id] || d.category || 'Cloud-Native'} • ${d.difficulty || 'Intermediate'} • ${(d.labs || []).length} Labs`,
+          badge: 'Domain',
+          icon: DOMAIN_ICONS[d.id] || '☸️',
+          action: () => {
+            switchView('view-paths');
+            openSyllabusDrawer(d.id);
+          }
+        });
+
         if (d.labs) {
           d.labs.forEach((l) => {
             commands.push({
               id: `lab-${l.id}`,
               title: `Lab: ${l.title}`,
-              subtitle: `${d.name || d.id} • ${l.difficulty || 'Intermediate'} • ${l.estimatedMinutes || 15} mins`,
+              subtitle: `${d.title || d.id} • ${l.difficulty || 'Intermediate'} • ${l.durationMinutes || 15}m • +${l.xpReward || 150} XP`,
               badge: 'Lab',
               icon: '🧪',
               action: async () => {
@@ -330,6 +343,39 @@
             });
           });
         }
+      });
+    }
+
+    if (state.overview && state.overview.incidents) {
+      state.overview.incidents.forEach((inc) => {
+        commands.push({
+          id: `incident-${inc.id}`,
+          title: `Outage Drill: ${inc.title}`,
+          subtitle: `${inc.severity} • ${inc.category} • Live Production Failure`,
+          badge: 'Incident',
+          icon: '🚨',
+          action: async () => {
+            await startIncident(inc.id);
+            switchView('view-incidents');
+          }
+        });
+      });
+    }
+
+    if (state.overview && state.overview.projects) {
+      state.overview.projects.forEach((proj) => {
+        commands.push({
+          id: `project-${proj.id}`,
+          title: `Capstone: ${proj.title}`,
+          subtitle: `${proj.category || 'Enterprise'} • +${proj.xpReward || 500} XP • ${proj.difficulty || 'Advanced'}`,
+          badge: 'Capstone',
+          icon: '🏆',
+          action: () => {
+            switchView('view-paths');
+            const target = document.getElementById('projects-container');
+            if (target) target.scrollIntoView({ behavior: 'smooth' });
+          }
+        });
       });
     }
 
@@ -734,9 +780,93 @@
     'finops-green-cloud': 'inc-13-slow-app-cpu-throttling'
   };
 
+  const curriculumFilterState = {
+    cert: 'all',
+    difficulty: 'all',
+    status: 'all',
+    search: ''
+  };
+
+  function isDomainMatchingFilters(domain, completedSet) {
+    if (!domain) return false;
+    const cert = curriculumFilterState.cert;
+    const diff = curriculumFilterState.difficulty;
+    const status = curriculumFilterState.status;
+    const q = (curriculumFilterState.search || '').trim().toLowerCase();
+
+    // 1. Certification Alignment Filter
+    if (cert !== 'all') {
+      const certVal = (DOMAIN_CERTS[domain.id] || domain.category || '').toLowerCase();
+      if (cert === 'CKA' && !certVal.includes('cka')) return false;
+      if (cert === 'CKAD' && !certVal.includes('ckad')) return false;
+      if (cert === 'CKS' && !certVal.includes('cks')) return false;
+      if (cert === 'LFCS' && !(certVal.includes('lfcs') || certVal.includes('linux') || certVal.includes('ccnfa'))) return false;
+      if (cert === 'GitOps' && !(certVal.includes('gitops') || certVal.includes('helm') || certVal.includes('ci/cd') || certVal.includes('ci-cd') || certVal.includes('packaging'))) return false;
+      if (cert === 'SRE' && !(certVal.includes('sre') || certVal.includes('pca') || certVal.includes('prometheus') || certVal.includes('chaos') || certVal.includes('observability'))) return false;
+      if (cert === 'AI-Ops' && !(certVal.includes('ai-ops') || certVal.includes('wasm') || certVal.includes('mlops') || certVal.includes('aws') || certVal.includes('azure') || certVal.includes('multi-cloud'))) return false;
+    }
+
+    // 2. Difficulty Level Filter
+    if (diff !== 'all') {
+      if ((domain.difficulty || '').toLowerCase() !== diff.toLowerCase()) return false;
+    }
+
+    // 3. Progression Status Filter
+    if (status !== 'all') {
+      const dLabs = domain.labs || [];
+      const dDoneLabs = dLabs.filter((l) => completedSet.has(l.id));
+      const isMastered = dLabs.length > 0 && dDoneLabs.length === dLabs.length;
+      const isInProgress = dDoneLabs.length > 0 || (state.activeLab && dLabs.some((l) => l.id === state.activeLab.id));
+
+      if (status === 'mastered' && !isMastered) return false;
+      if (status === 'progress' && (!isInProgress || isMastered)) return false;
+      if (status === 'available' && isMastered) return false;
+    }
+
+    // 4. Instant Search Substring / Fuzzy
+    if (q) {
+      const certVal = (DOMAIN_CERTS[domain.id] || '').toLowerCase();
+      const matchesSearch =
+        domain.id.toLowerCase().includes(q) ||
+        (domain.title || '').toLowerCase().includes(q) ||
+        (domain.summary || '').toLowerCase().includes(q) ||
+        certVal.includes(q) ||
+        (domain.category || '').toLowerCase().includes(q) ||
+        (domain.labs || []).some((l) => (l.title || '').toLowerCase().includes(q) || (l.scenario || '').toLowerCase().includes(q));
+
+      if (!matchesSearch) return false;
+    }
+
+    return true;
+  }
+
+  function resetCurriculumFilters() {
+    curriculumFilterState.cert = 'all';
+    curriculumFilterState.difficulty = 'all';
+    curriculumFilterState.status = 'all';
+    curriculumFilterState.search = '';
+
+    const currInput = document.getElementById('curriculum-search-input');
+    if (currInput) currInput.value = '';
+    const domInput = document.getElementById('domain-search-input');
+    if (domInput) domInput.value = '';
+
+    document.querySelectorAll('.filter-pill').forEach((pill) => {
+      const isAll = pill.dataset.filterValue === 'all';
+      pill.classList.toggle('active', isAll);
+      pill.setAttribute('aria-checked', isAll ? 'true' : 'false');
+    });
+
+    renderPathsAndDomains('');
+  }
+
   function render7TierSkillTree(filterText = '') {
     const container = document.getElementById('skill-tree-container');
     if (!container || !state.overview) return;
+
+    if (typeof filterText === 'string') {
+      curriculumFilterState.search = filterText;
+    }
 
     const completedLabs = ((state.overview.learner && state.overview.learner.completedLabs) || []).filter(
       (l) => l.status === 'completed'
@@ -744,10 +874,10 @@
     const completedSet = new Set(completedLabs.map((l) => l.lab_id));
     const allDomains = state.overview.domains || [];
     const domainMap = new Map(allDomains.map((d) => [d.id, d]));
-    const q = (filterText || '').trim().toLowerCase();
 
     let html = '';
     const visibleTiers = [];
+    let totalMatchingDomains = 0;
 
     CURRICULUM_TIERS.forEach((tierConfig) => {
       // Find domains in this tier
@@ -755,38 +885,48 @@
         .map((id) => domainMap.get(id))
         .filter(Boolean);
 
-      // Filter if search query is present
-      const matchingDomains = tierDomains.filter((d) => {
-        if (!q) return true;
-        return (
-          d.id.toLowerCase().includes(q) ||
-          d.title.toLowerCase().includes(q) ||
-          (d.summary || '').toLowerCase().includes(q) ||
-          (DOMAIN_CERTS[d.id] || '').toLowerCase().includes(q) ||
-          (d.labs || []).some((l) => l.title.toLowerCase().includes(q))
-        );
-      });
+      // Filter domains using centralized matching
+      const matchingDomains = tierDomains.filter((d) => isDomainMatchingFilters(d, completedSet));
+      totalMatchingDomains += matchingDomains.length;
 
-      if (q && matchingDomains.length === 0) {
-        return; // Skip empty tiers during search
+      if (matchingDomains.length > 0) {
+        visibleTiers.push({ tierConfig, tierDomains, matchingDomains });
       }
-
-      visibleTiers.push({ tierConfig, tierDomains, matchingDomains });
     });
 
-    if (q && visibleTiers.length === 0) {
+    // Update match count badge and reset button
+    const matchCountEl = document.getElementById('curriculum-match-count');
+    if (matchCountEl) {
+      matchCountEl.textContent = `Showing ${totalMatchingDomains} of ${allDomains.length} Domains`;
+    }
+
+    const isFiltered =
+      curriculumFilterState.cert !== 'all' ||
+      curriculumFilterState.difficulty !== 'all' ||
+      curriculumFilterState.status !== 'all' ||
+      !!curriculumFilterState.search;
+
+    const btnReset = document.getElementById('btn-reset-filters');
+    if (btnReset) {
+      btnReset.style.display = isFiltered ? 'inline-flex' : 'none';
+    }
+
+    const btnClearSearch = document.getElementById('btn-clear-curriculum-search');
+    if (btnClearSearch) {
+      btnClearSearch.style.display = curriculumFilterState.search ? 'inline-block' : 'none';
+    }
+
+    if (visibleTiers.length === 0) {
       container.innerHTML = `
         <div style="text-align:center; padding:3rem; background:var(--bg-card); border:1px dashed var(--border-subtle); border-radius:12px;">
-          <p style="color:var(--text-secondary); font-size:0.95rem;">No curriculum domains match "${escapeHtml(filterText)}".</p>
-          <button class="btn btn-primary" id="btn-clear-tree-search" type="button" style="margin-top:0.75rem;">Clear Search Filter</button>
+          <p style="color:var(--text-secondary); font-size:0.95rem;">No curriculum domains match the active filter criteria.</p>
+          <button class="btn btn-primary" id="btn-clear-tree-search" type="button" style="margin-top:0.75rem;">Reset All Filters</button>
         </div>
       `;
       const clearBtn = document.getElementById('btn-clear-tree-search');
       if (clearBtn) {
         clearBtn.addEventListener('click', () => {
-          const searchInput = document.getElementById('search-input');
-          if (searchInput) searchInput.value = '';
-          renderPathsAndDomains();
+          resetCurriculumFilters();
         });
       }
       return;
@@ -1177,11 +1317,14 @@
 
   function renderPathsAndDomains(filterText = '') {
     if (!state.overview) return;
-    if (!filterText) {
+    if (typeof filterText === 'string' && filterText) {
+      curriculumFilterState.search = filterText;
+    }
+    if (!curriculumFilterState.search && curriculumFilterState.cert === 'all' && curriculumFilterState.difficulty === 'all' && curriculumFilterState.status === 'all') {
       renderContinueLearningHero();
     }
     render7TierSkillTree(filterText);
-    const q = filterText.trim().toLowerCase();
+    const q = (curriculumFilterState.search || '').trim().toLowerCase();
     const completedSet = new Set(
       ((state.overview.learner && state.overview.learner.completedLabs) || [])
         .filter((l) => l.status === 'completed')
@@ -1295,15 +1438,7 @@
 
     const domainsContainer = document.getElementById('domains-container');
     if (domainsContainer) {
-      const filteredDomains = (state.overview.domains || []).filter((d) => {
-        if (!q) return true;
-        return (
-          d.title.toLowerCase().includes(q) ||
-          d.summary.toLowerCase().includes(q) ||
-          d.category.toLowerCase().includes(q) ||
-          (d.labs || []).some((l) => l.title.toLowerCase().includes(q))
-        );
-      });
+      const filteredDomains = (state.overview.domains || []).filter((d) => isDomainMatchingFilters(d, completedSet));
 
       domainsContainer.innerHTML = filteredDomains
         .map((d) => {
@@ -3222,11 +3357,55 @@
       }
     }
 
-    // Domain search input
-    const searchInput = document.getElementById('domain-search-input');
-    if (searchInput) {
-      searchInput.addEventListener('input', () => renderPathsAndDomains(searchInput.value));
+    // Curriculum & Domain instant search inputs & filter pills
+    const currSearchInput = document.getElementById('curriculum-search-input');
+    const domSearchInput = document.getElementById('domain-search-input');
+    const btnClearCurrSearch = document.getElementById('btn-clear-curriculum-search');
+    const btnResetAllFilters = document.getElementById('btn-reset-filters');
+
+    function syncSearch(query) {
+      curriculumFilterState.search = query;
+      if (currSearchInput && currSearchInput.value !== query) {
+        currSearchInput.value = query;
+      }
+      if (domSearchInput && domSearchInput.value !== query) {
+        domSearchInput.value = query;
+      }
+      renderPathsAndDomains(query);
     }
+
+    if (currSearchInput) {
+      currSearchInput.addEventListener('input', () => syncSearch(currSearchInput.value));
+    }
+    if (domSearchInput) {
+      domSearchInput.addEventListener('input', () => syncSearch(domSearchInput.value));
+    }
+    if (btnClearCurrSearch) {
+      btnClearCurrSearch.addEventListener('click', () => syncSearch(''));
+    }
+    if (btnResetAllFilters) {
+      btnResetAllFilters.addEventListener('click', () => resetCurriculumFilters());
+    }
+
+    // Role, Difficulty and Status Filter Pills
+    document.querySelectorAll('.filter-pill').forEach((pill) => {
+      pill.addEventListener('click', () => {
+        const filterType = pill.dataset.filterType;
+        const filterVal = pill.dataset.filterValue;
+        if (!filterType || !filterVal) return;
+
+        curriculumFilterState[filterType] = filterVal;
+
+        // Toggle active state among siblings with the same filter type
+        document.querySelectorAll(`.filter-pill[data-filter-type="${filterType}"]`).forEach((sibling) => {
+          const isActive = sibling === pill;
+          sibling.classList.toggle('active', isActive);
+          sibling.setAttribute('aria-checked', isActive ? 'true' : 'false');
+        });
+
+        renderPathsAndDomains(curriculumFilterState.search);
+      });
+    });
 
     // Terminal input keydown for Arrow history, Tab completion, Ctrl+L, Ctrl+Enter
     const termInput = document.getElementById('terminal-input');
@@ -3497,8 +3676,22 @@
       });
     }
 
-    // Ctrl+Shift+D keyboard shortcut, Ctrl+K command palette, & Escape handler
+    // Ctrl+Shift+D keyboard shortcut, Ctrl+K command palette, / search focus, & Escape handler
     document.addEventListener('keydown', (e) => {
+      // Press '/' to focus curriculum search input (unless active element is an input, textarea, contenteditable, or modal open)
+      if (e.key === '/' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        const activeTag = document.activeElement ? document.activeElement.tagName.toLowerCase() : '';
+        const isEditable = document.activeElement && document.activeElement.isContentEditable;
+        const modalOpen = document.body.classList.contains('modal-open');
+        if (activeTag !== 'input' && activeTag !== 'textarea' && !isEditable && !modalOpen) {
+          e.preventDefault();
+          const currInput = document.getElementById('curriculum-search-input');
+          if (currInput) {
+            currInput.focus();
+            currInput.select();
+          }
+        }
+      }
       if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K')) {
         e.preventDefault();
         const modal = document.getElementById('command-palette-modal');
@@ -3548,6 +3741,9 @@
       DOMAIN_ICONS,
       DOMAIN_CERTS,
       DOMAIN_INCIDENT_MAP,
+      curriculumFilterState,
+      isDomainMatchingFilters,
+      resetCurriculumFilters,
       render7TierSkillTree,
       openSyllabusDrawer,
       closeSyllabusDrawer
