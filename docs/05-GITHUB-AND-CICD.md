@@ -128,7 +128,7 @@ flowchart LR
 
 - **`ci.yml`**: Runs on every push and PR across `ubuntu-latest`, `windows-latest`, and `macos-latest`:
   1. Checkout repository
-  2. Setup Node.js `25.x`
+  2. Setup Node.js `22.x` (LTS)
   3. Execute Self-Audit & 11-Agent Quality Gate (`npm run audit:self`)
   4. Execute Full Unit, Integration, Security, and E2E Lab Solver Suite (`npm test`)
 - **`security-scan.yml`**: Runs on push, PR, and daily schedule:

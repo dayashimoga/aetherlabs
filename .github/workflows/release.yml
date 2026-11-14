@@ -22,7 +22,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "25.x"
+          node-version: "22.x"
 
       - name: Run Full Self-Audit, Subphase Ledger & Solver Verification
         run: |
@@ -53,9 +53,44 @@ jobs:
             });
           '
 
-      - name: Upload Release Artifacts
+      - name: Upload Universal Bundle Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: kubelabs-${{ github.ref_name }}-bundle
-          path: dist/*
+          name: kubelabs-universal-app
+          path: dist/*universal*
 
+      - name: Upload Windows App Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kubelabs-windows-app
+          path: dist/*windows*
+
+      - name: Upload Web PWA App Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kubelabs-web-pwa-app
+          path: dist/*web-pwa*
+
+      - name: Upload Linux App Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kubelabs-linux-app
+          path: dist/*linux*
+
+      - name: Upload macOS App Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kubelabs-macos-app
+          path: dist/*darwin*
+
+      - name: Upload Kubernetes & Helm Package
+        uses: actions/upload-artifact@v4
+        with:
+          name: kubelabs-helm-k8s-app
+          path: dist/*helm-k8s*
+
+      - name: Upload Complete Release Artifacts Suite
+        uses: actions/upload-artifact@v4
+        with:
+          name: kubelabs-release-bundle
+          path: dist/*

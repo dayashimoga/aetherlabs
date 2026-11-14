@@ -67,7 +67,7 @@ jobs:
           node --check public/js/quickKeyEngine.js
           node --check public/js/terminalView.js
 
-      - name: 11-Agent Self-Audit Gate (50 Quality Checks)
+      - name: 11-Agent Self-Audit Gate (54 Quality Checks)
         run: npm run audit:self
 
       - name: Subphase Sequential Execution Ledger Verification
@@ -82,7 +82,7 @@ jobs:
       - name: Stage 3 Tests (Multi-CLI, Observability, Autoscaling, Validation)
         run: npm run test:stage3
 
-      - name: Stage 4 Tests (26 Plugins, 15 Incidents, 8 Capstones, Ed25519 Certs)
+      - name: Stage 4 Tests (Curriculum, Incidents, Capstones, Certs)
         run: npm run test:stage4
 
       - name: Stage 5 Tests (UI Workbench, Offline Engine, Server Hardening)
@@ -154,12 +154,7 @@ jobs:
       - name: Package Universal Distribution Tarball
         run: |
           node scripts/package-release.js
-          mkdir -p dist
-          ARCHIVE_NAME="kubelabs-${GITHUB_REF_NAME:-v3.0.0}-universal.tar.gz"
-          tar -czf "dist/$ARCHIVE_NAME" \
-            package.json README.md Dockerfile docker-compose.yml docs agents schemas plugins src public scripts deploy
-          cd dist && sha256sum "$ARCHIVE_NAME" > SHA256SUMS.txt
-          echo "Distribution archive created: dist/$ARCHIVE_NAME"
+          echo "Release packages and SHA256SUMS.txt built successfully."
 
       - name: Deployment Smoke Test & Graceful Drain Gate
         run: |
@@ -177,6 +172,42 @@ jobs:
               console.log("Deployment smoke test and graceful drain gate passed.");
             });
           '
+
+      - name: Upload Universal Distribution Bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: kubelabs-universal-bundle
+          path: dist/*universal*
+
+      - name: Upload Web & PWA Standalone App
+        uses: actions/upload-artifact@v4
+        with:
+          name: kubelabs-web-pwa
+          path: dist/*web-pwa*
+
+      - name: Upload Windows Portable App
+        uses: actions/upload-artifact@v4
+        with:
+          name: kubelabs-windows-portable
+          path: dist/*windows*
+
+      - name: Upload Linux Portable App
+        uses: actions/upload-artifact@v4
+        with:
+          name: kubelabs-linux-portable
+          path: dist/*linux*
+
+      - name: Upload macOS Portable App
+        uses: actions/upload-artifact@v4
+        with:
+          name: kubelabs-macos-portable
+          path: dist/*darwin*
+
+      - name: Upload Kubernetes & Helm Package
+        uses: actions/upload-artifact@v4
+        with:
+          name: kubelabs-helm-k8s
+          path: dist/*helm-k8s*
 
       - name: Upload Release Bundle Artifacts
         uses: actions/upload-artifact@v4

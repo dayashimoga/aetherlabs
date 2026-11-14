@@ -22,7 +22,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "25.x"
+          node-version: "22.x"
 
       - name: Verify Zero External Runtime Dependencies & Sandbox Integrity
         run: |
@@ -31,4 +31,3 @@ jobs:
 
       - name: Execute Security, Ed25519 Signature Forgery & Injection Prevention Suite
         run: npm test
-
