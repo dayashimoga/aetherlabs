@@ -1482,6 +1482,23 @@ class TerminalEngine {
       return { exitCode: 0, output: `${normalizeKind(kind).toLowerCase()} "${name}" deleted` };
     }
 
+    if (this.multiCli && typeof this.multiCli.handleKubectl === 'function') {
+      const cliRes = this.multiCli.handleKubectl({
+        argv: ['kubectl', ...args],
+        cwd: this.cwd,
+        vfs: this.vfs
+      });
+      if (cliRes && cliRes.code === 0) {
+        return {
+          exitCode: 0,
+          code: 0,
+          output: (cliRes.stdout || '').replace(/\n$/, ''),
+          stdout: cliRes.stdout || '',
+          stderr: cliRes.stderr || ''
+        };
+      }
+    }
+
     throw new Error(`Unsupported kubectl subcommand "${sub}". Try get, describe, apply, replace, create, scale, set, patch, label, annotate, rollout, autoscale, logs, exec, debug, top, auth, cordon, uncordon, drain, taint, delete.`);
   }
 
