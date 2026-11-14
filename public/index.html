@@ -131,10 +131,95 @@
       <main class="app-container" role="main">
     <!-- VIEW 1: GUIDED LEARNING PATHS & 26-DOMAIN CURRICULUM -->
     <section id="view-paths" class="view-panel active" aria-labelledby="paths-heading">
+      <!-- CONTINUE LEARNING PERSONALIZED HERO BANNER -->
+      <section id="continue-learning-hero" class="hero-card glass-card" aria-label="Continue Learning and Progress Tracker">
+        <div class="hero-content">
+          <div class="hero-main-info">
+            <div class="hero-eyebrow">
+              <span class="badge badge-cyan badge-glow-cyan" id="hero-track-badge">Career Track: SRE &amp; Platform Engineer</span>
+              <span class="hero-streak-pill" id="hero-streak-pill">
+                <span class="streak-icon" aria-hidden="true">🔥</span>
+                <span id="hero-streak-text">3-Day Streak</span>
+              </span>
+            </div>
+
+            <h2 class="hero-lab-title" id="hero-lab-title">
+              Multi-Container Pod Lifecycle &amp; Log Streaming
+            </h2>
+
+            <p class="hero-lab-desc" id="hero-lab-desc">
+              Design sidecar patterns, configure shared emptyDir volumes, and inspect container restart policies against live Kubernetes cluster state.
+            </p>
+
+            <div class="hero-meta-row">
+              <span class="hero-meta-item">
+                <span class="meta-label">Domain:</span>
+                <strong id="hero-domain-name">09 — Kubernetes Core</strong>
+              </span>
+              <span class="meta-separator">&bull;</span>
+              <span class="hero-meta-item">
+                <span class="meta-label">Difficulty:</span>
+                <span class="badge badge-emerald" id="hero-difficulty-badge">Intermediate</span>
+              </span>
+              <span class="meta-separator">&bull;</span>
+              <span class="hero-meta-item">
+                <span class="meta-label">Estimated:</span>
+                <span id="hero-est-time">15 mins</span>
+              </span>
+              <span class="meta-separator">&bull;</span>
+              <span class="hero-meta-item">
+                <span class="meta-label">XP Reward:</span>
+                <span style="color:var(--accent-amber); font-weight:700;" id="hero-xp-reward">+150 XP</span>
+              </span>
+            </div>
+
+            <div class="hero-actions-row">
+              <button class="btn btn-primary hero-btn-primary" id="hero-btn-resume" type="button">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                  <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                </svg>
+                <span id="hero-btn-label">Resume Active Lab</span>
+              </button>
+              <button class="btn btn-secondary hero-btn-secondary" id="hero-btn-explore" type="button">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                  <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
+                  <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>
+                </svg>
+                <span>Browse 7-Tier Roadmap</span>
+              </button>
+            </div>
+          </div>
+
+          <div class="hero-progress-aside">
+            <div class="progress-ring-wrap">
+              <svg class="progress-ring" width="130" height="130" viewBox="0 0 130 130" aria-hidden="true">
+                <circle class="progress-ring-bg" cx="65" cy="65" r="54" stroke-width="10"></circle>
+                <circle class="progress-ring-fill" id="hero-progress-ring-fill" cx="65" cy="65" r="54" stroke-width="10" stroke-dasharray="339.29" stroke-dashoffset="250"></circle>
+              </svg>
+              <div class="progress-ring-text">
+                <span class="progress-percentage" id="hero-progress-pct">24%</span>
+                <span class="progress-sublabel">Track Mastery</span>
+              </div>
+            </div>
+            <div class="hero-stats-mini">
+              <div class="mini-stat">
+                <span class="mini-stat-val" id="hero-stat-labs">12/52</span>
+                <span class="mini-stat-lbl">Labs Done</span>
+              </div>
+              <div class="mini-stat-divider"></div>
+              <div class="mini-stat">
+                <span class="mini-stat-val" id="hero-stat-level">Level 5</span>
+                <span class="mini-stat-lbl">Apprentice</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
       <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:1rem; margin-bottom:1.25rem;">
         <div>
-          <h1 id="paths-heading" style="font-size:1.45rem;">Guided Cloud-Native Role Learning Paths &amp; Modular Plugin Catalog</h1>
-          <p style="color:var(--text-secondary); font-size:0.9rem;">
+          <h1 id="paths-heading" style="font-size:1.35rem;">Guided Cloud-Native Role Learning Paths &amp; Modular Plugin Catalog</h1>
+          <p style="color:var(--text-secondary); font-size:0.88rem;">
             26 schema-validated technology plugins | 52 hands-on labs | 12 production outages | 8 enterprise capstone projects | 8 reference architectures
           </p>
         </div>

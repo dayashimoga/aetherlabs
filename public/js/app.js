@@ -457,6 +457,113 @@
     const labsEl = document.getElementById('header-labs-completed');
     if (xpEl) xpEl.textContent = `${profile.xp || 0} XP`;
     if (labsEl) labsEl.textContent = `${completedLabs.length}/${totalLabs} Labs Completed`;
+
+    renderContinueLearningHero();
+  }
+
+  function renderContinueLearningHero() {
+    const heroEl = document.getElementById('continue-learning-hero');
+    if (!heroEl || !state.overview) return;
+
+    const learner = state.overview.learner || {};
+    const profile = learner.profile || { xp: 0, level: 1, currentRole: 'Cloud-Native Practitioner' };
+    const completedLabs = (learner.completedLabs || []).filter((l) => l.status === 'completed');
+    const completedSet = new Set(completedLabs.map((l) => l.lab_id));
+    const totalLabs = (state.overview.labs || []).length || 52;
+
+    // Calculate progression
+    const pct = totalLabs > 0 ? Math.round((completedLabs.length / totalLabs) * 100) : 0;
+    const circumference = 339.29; // 2 * Math.PI * 54
+    const offset = circumference - (pct / 100) * circumference;
+
+    // Find recommended lab or active lab
+    let recommendedLab = state.activeLab;
+    let recommendedDomain = null;
+
+    if (!recommendedLab && state.overview.domains) {
+      for (const d of state.overview.domains) {
+        if (d.labs) {
+          const nextLab = d.labs.find((l) => !completedSet.has(l.id));
+          if (nextLab) {
+            recommendedLab = nextLab;
+            recommendedDomain = d;
+            break;
+          }
+        }
+      }
+    }
+
+    if (!recommendedLab && state.overview.domains && state.overview.domains[0] && state.overview.domains[0].labs) {
+      recommendedLab = state.overview.domains[0].labs[0];
+      recommendedDomain = state.overview.domains[0];
+    }
+
+    if (!recommendedDomain && recommendedLab && state.overview.domains) {
+      recommendedDomain = state.overview.domains.find((d) => (d.labs || []).some((l) => l.id === recommendedLab.id));
+    }
+
+    // Determine active track
+    const activeTrack = (state.overview.tracks && state.overview.tracks[0]) || { title: 'SRE & Platform Reliability Engineer' };
+
+    // Update Track Badge & Streak
+    const trackBadge = document.getElementById('hero-track-badge');
+    if (trackBadge) trackBadge.textContent = `Career Track: ${activeTrack.title}`;
+
+    const streakText = document.getElementById('hero-streak-text');
+    if (streakText) streakText.textContent = `${profile.streakDays || 3}-Day Streak`;
+
+    // Update Lab Details
+    if (recommendedLab) {
+      const labTitle = document.getElementById('hero-lab-title');
+      if (labTitle) labTitle.textContent = recommendedLab.title;
+
+      const labDesc = document.getElementById('hero-lab-desc');
+      if (labDesc) labDesc.textContent = recommendedLab.summary || recommendedLab.description || 'Master cloud-native concepts through step-by-step interactive assertions and live topology verification.';
+
+      const domainName = document.getElementById('hero-domain-name');
+      if (domainName) domainName.textContent = recommendedDomain ? `${recommendedDomain.id} — ${recommendedDomain.name}` : 'Kubernetes Core';
+
+      const diffBadge = document.getElementById('hero-difficulty-badge');
+      if (diffBadge) diffBadge.textContent = recommendedLab.difficulty || 'Intermediate';
+
+      const estTime = document.getElementById('hero-est-time');
+      if (estTime) estTime.textContent = `${recommendedLab.estimatedMinutes || 15} mins`;
+
+      const xpReward = document.getElementById('hero-xp-reward');
+      if (xpReward) xpReward.textContent = `+${recommendedLab.xpReward || 150} XP`;
+
+      const resumeBtn = document.getElementById('hero-btn-resume');
+      if (resumeBtn) {
+        resumeBtn.onclick = async () => {
+          await startLab(recommendedLab.id);
+          switchView('view-workbench');
+        };
+      }
+    }
+
+    // Update Explore Button
+    const exploreBtn = document.getElementById('hero-btn-explore');
+    if (exploreBtn) {
+      exploreBtn.onclick = () => {
+        const target = document.getElementById('paths-heading') || document.getElementById('tracks-container');
+        if (target) {
+          target.scrollIntoView({ behavior: 'smooth' });
+        }
+      };
+    }
+
+    // Update Progress Ring & Stats
+    const progressFill = document.getElementById('hero-progress-ring-fill');
+    if (progressFill) progressFill.style.strokeDashoffset = offset;
+
+    const progressPct = document.getElementById('hero-progress-pct');
+    if (progressPct) progressPct.textContent = `${pct}%`;
+
+    const statLabs = document.getElementById('hero-stat-labs');
+    if (statLabs) statLabs.textContent = `${completedLabs.length}/${totalLabs}`;
+
+    const statLevel = document.getElementById('hero-stat-level');
+    if (statLevel) statLevel.textContent = `Level ${Math.floor((profile.xp || 0) / 250) + 1}`;
   }
 
   function renderSvgTopology(clusterState) {
@@ -595,6 +702,9 @@
 
   function renderPathsAndDomains(filterText = '') {
     if (!state.overview) return;
+    if (!filterText) {
+      renderContinueLearningHero();
+    }
     const q = filterText.trim().toLowerCase();
     const completedSet = new Set(
       ((state.overview.learner && state.overview.learner.completedLabs) || [])
