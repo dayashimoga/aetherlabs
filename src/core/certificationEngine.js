@@ -227,7 +227,6 @@ EOF`
           { type: 'resource_exists', kind: 'PersistentVolumeClaim', namespace: 'production', name: 'data-pvc' }
         ],
         solutionCommands: [
-          'kubectl create namespace production',
           `cat <<'EOF' | kubectl apply -f -
 apiVersion: v1
 kind: PersistentVolume
@@ -478,7 +477,6 @@ EOF`
           { type: 'resource_field_equals', kind: 'ScaledObject', namespace: 'production', name: 'queue-autoscaler', fieldPath: 'spec.minReplicaCount', expectedValue: 2 }
         ],
         solutionCommands: [
-          'kubectl create namespace production',
           `cat <<'EOF' | kubectl apply -f -
 apiVersion: keda.sh/v1alpha1
 kind: ScaledObject
@@ -606,7 +604,6 @@ EOF`
           { type: 'resource_field_equals', kind: 'DatabaseCluster', namespace: 'production', name: 'main-db', fieldPath: 'spec.engine', expectedValue: 'postgres' }
         ],
         solutionCommands: [
-          'kubectl create namespace production',
           `cat <<'EOF' | kubectl apply -f -
 apiVersion: databases.kubelabs.io/v1
 kind: DatabaseCluster
@@ -741,7 +738,6 @@ EOF`
           { type: 'resource_field_contains', kind: 'Service', namespace: 'production', name: 'global-auth', fieldPath: 'metadata.annotations', expectedValue: 'service.cilium.io/global' }
         ],
         solutionCommands: [
-          'kubectl create namespace production',
           `cat <<'EOF' | kubectl apply -f -
 apiVersion: v1
 kind: Service
