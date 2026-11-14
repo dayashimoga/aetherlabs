@@ -732,6 +732,7 @@
     'git-fundamentals': '🐙',
     'docker-containers': '🐳',
     'container-runtime-cri': '📦',
+    'helm-packaging': '📦',
     'containers-runtime': '🐳',
     'cloud-networking': '🌐',
     'cncf-packaging': '📦',

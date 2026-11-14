@@ -1,0 +1,271 @@
+{
+  "id": "helm-packaging",
+  "title": "Helm v3 Application Packaging & Release Lifecycle",
+  "category": "Containers & Packaging",
+  "trackId": "track-k8s-admin",
+  "version": "1.0.0",
+  "difficulty": "Intermediate",
+  "estimatedHours": 6,
+  "summary": "Master cloud-native application packaging using Helm v3, Go template syntax, named template helpers (_helpers.tpl), subchart dependencies, lifecycle hooks, helm test, and atomic rollback strategies.",
+  "prerequisites": [
+    "docker-containers",
+    "container-runtime-cri"
+  ],
+  "learningObjectives": [
+    "Author modular Helm v3 charts using Go templating, values files, and reusable helper definitions in _helpers.tpl.",
+    "Manage chart dependencies with Chart.lock and subcharts using helm dependency update and build workflows.",
+    "Execute deterministic release lifecycles, lifecycle hooks (pre-install, post-install), helm test validation, and atomic rollbacks."
+  ],
+  "curriculumModules": [
+    {
+      "id": "mod-helm-01",
+      "title": "Helm v3 Architecture, Chart Hierarchy & Values Resolution",
+      "conceptSummary": "Helm v3 is a client-side package manager that renders Go templates with values.yaml and stores release state as Secrets inside target namespaces without needing an in-cluster Tiller component. Values resolution cascades from default values.yaml to parent values, environment overrides, and CLI --set flags.",
+      "productionArchitecturePattern": "Store verified Helm charts as OCI artifacts in a container registry, pin exact chart versions in GitOps manifests, and use values schema validation (values.schema.json) to prevent bad configurations.",
+      "keyCommands": [
+        "helm create <chart>",
+        "helm template <release> <chart>",
+        "helm lint <chart>"
+      ]
+    },
+    {
+      "id": "mod-helm-02",
+      "title": "Go Templating, Named Helpers & Subchart Dependencies",
+      "conceptSummary": "Helm templates leverage the Go text/template engine along with Sprig template functions. Reusable partials and named templates (e.g. chart.fullname, chart.labels) are defined in _helpers.tpl using {{ define }} and invoked with {{ include }} to maintain standard Kubernetes metadata.",
+      "productionArchitecturePattern": "Encapsulate common labels and resource names in _helpers.tpl to prevent label drift and ensure consistent Kubernetes selectors across Deployments, Services, and PodDisruptionBudgets.",
+      "keyCommands": [
+        "helm dependency update <chart>",
+        "helm dependency list <chart>",
+        "helm package <chart>"
+      ]
+    },
+    {
+      "id": "mod-helm-03",
+      "title": "Release Lifecycle, Hooks, Helm Test & Atomic Rollbacks",
+      "conceptSummary": "Helm tracks revisions within the release namespace. Lifecycle hooks (pre-install, post-upgrade, test) execute dedicated Pods at specific points during reconciliation. Using --atomic ensures that if any pod fails readiness probes, the entire release is rolled back cleanly.",
+      "productionArchitecturePattern": "Always deploy production Helm upgrades with --atomic --timeout 5m to automatically revert failed rollouts before user traffic is impacted, and run helm test to verify smoke connectivity.",
+      "keyCommands": [
+        "helm install <rel> <chart> -n <ns>",
+        "helm test <rel> -n <ns>",
+        "helm upgrade --atomic <rel> <chart>",
+        "helm rollback <rel> <rev>"
+      ]
+    }
+  ],
+  "labs": [
+    {
+      "id": "lab-helm-01-chart-templating",
+      "title": "Authoring Modular Helm Charts with Helpers & Go Templates",
+      "difficulty": "Intermediate",
+      "durationMinutes": 20,
+      "xpReward": 150,
+      "scenario": "Platform engineering requires packaging an internal billing service into a standardized Helm chart with configurable replicas, port bindings, and standard _helpers.tpl labels. Scaffold the chart, validate it with helm lint, render manifests locally with helm template, and package it into an archive.",
+      "productionContext": "Standardizing microservice deployments into parameterized Helm charts eliminates manual YAML copy-pasting, enforces consistent labels, and enables automated GitOps deployments.",
+      "prerequisites": [
+        "lab-docker-01-multistage-distroless"
+      ],
+      "objectives": [
+        "Scaffold new chart billing-service using helm create",
+        "Lint chart to verify structure and syntax using helm lint",
+        "Render templates locally using helm template billing-release",
+        "Package the validated chart into a .tgz archive using helm package"
+      ],
+      "initialClusterState": {
+        "resources": [],
+        "helmReleases": []
+      },
+      "starterManifest": "",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Scaffold New Helm Chart",
+          "instruction": "Scaffold a new chart structure named `billing-service` using `helm create`.",
+          "commandHint": "helm create billing-service"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Lint Chart Structure and Syntax",
+          "instruction": "Validate chart YAML formatting, keys, and values with `helm lint billing-service`.",
+          "commandHint": "helm lint billing-service"
+        },
+        {
+          "stepNumber": 3,
+          "title": "Render Templates Locally",
+          "instruction": "Render all Kubernetes manifests locally without cluster deployment using `helm template`.",
+          "commandHint": "helm template billing-release billing-service"
+        },
+        {
+          "stepNumber": 4,
+          "title": "Package Chart into Distribution Archive",
+          "instruction": "Package the chart into a `.tgz` distribution archive with `helm package billing-service`.",
+          "commandHint": "helm package billing-service"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "val-helm-create-01",
+          "description": "Scaffolded billing-service Helm chart structure",
+          "type": "command_executed",
+          "commandSubstring": "helm create billing-service",
+          "remediation": "Run 'helm create billing-service' to generate standard chart templates."
+        },
+        {
+          "id": "val-helm-lint-02",
+          "description": "Linted chart templates and values syntax with helm lint",
+          "type": "command_executed",
+          "commandSubstring": "helm lint billing-service",
+          "remediation": "Run 'helm lint billing-service' to verify chart syntax."
+        },
+        {
+          "id": "val-helm-template-03",
+          "description": "Rendered manifest templates with helm template",
+          "type": "command_executed",
+          "commandSubstring": "helm template billing-release billing-service",
+          "remediation": "Run 'helm template billing-release billing-service' to render manifests."
+        },
+        {
+          "id": "val-helm-package-04",
+          "description": "Packaged chart into tarball archive with helm package",
+          "type": "command_executed",
+          "commandSubstring": "helm package billing-service",
+          "remediation": "Run 'helm package billing-service' to create the release package."
+        }
+      ],
+      "solutionCommands": [
+        "helm create billing-service",
+        "helm lint billing-service",
+        "helm template billing-release billing-service",
+        "helm package billing-service"
+      ],
+      "troubleshootingGuide": "Ensure you run helm create billing-service, helm lint billing-service, helm template billing-release billing-service, and helm package billing-service."
+    },
+    {
+      "id": "lab-helm-02-lifecycle-rollback-test",
+      "title": "Helm Release Lifecycle: Atomic Upgrades, Helm Test & Rollbacks",
+      "difficulty": "Intermediate",
+      "durationMinutes": 20,
+      "xpReward": 175,
+      "scenario": "Deploy the 'orders-api' release to the 'production' namespace. Execute integration verification using helm test, trigger an upgraded revision with --atomic, inspect release revision history, and perform a rollback to revision 1 upon simulated regression.",
+      "productionContext": "Helm standardizes enterprise microservice releases with atomic upgrades, automated smoke test validation, and instant zero-downtime rollback.",
+      "prerequisites": [
+        "lab-helm-01-chart-templating"
+      ],
+      "objectives": [
+        "Install release orders-api in namespace production with chart bitnami/nginx",
+        "Execute automated release verification with helm test orders-api",
+        "Upgrade release orders-api to revision 2 using helm upgrade",
+        "Inspect release revision history with helm history orders-api",
+        "Roll back release to revision 1 with helm rollback orders-api 1"
+      ],
+      "initialClusterState": {
+        "resources": [],
+        "helmReleases": []
+      },
+      "starterManifest": "# Helm Values Override\nreplicaCount: 2\nimage:\n  repository: nginx\n  tag: 1.27-alpine",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Install Orders API Release",
+          "instruction": "Deploy release `orders-api` in namespace `production` using chart `bitnami/nginx`.",
+          "commandHint": "helm install orders-api bitnami/nginx -n production"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Run Integration Smoke Tests",
+          "instruction": "Verify release functionality and service connectivity using `helm test`.",
+          "commandHint": "helm test orders-api -n production"
+        },
+        {
+          "stepNumber": 3,
+          "title": "Upgrade Release to Revision 2",
+          "instruction": "Apply an upgrade to `orders-api` in `production`.",
+          "commandHint": "helm upgrade orders-api bitnami/nginx -n production"
+        },
+        {
+          "stepNumber": 4,
+          "title": "Inspect Release Revision History",
+          "instruction": "Inspect revision history and status with `helm history orders-api -n production`.",
+          "commandHint": "helm history orders-api -n production"
+        },
+        {
+          "stepNumber": 5,
+          "title": "Roll Back to Previous Stable Revision",
+          "instruction": "Roll back release `orders-api` to revision 1.",
+          "commandHint": "helm rollback orders-api 1 -n production"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "val-helm-deploy-01",
+          "description": "Installed release orders-api in production namespace",
+          "type": "helm_release_deployed",
+          "name": "orders-api",
+          "namespace": "production",
+          "remediation": "Run 'helm install orders-api bitnami/nginx -n production' to deploy the release."
+        },
+        {
+          "id": "val-helm-test-02",
+          "description": "Executed automated test suite with helm test",
+          "type": "command_executed",
+          "commandSubstring": "helm test orders-api",
+          "remediation": "Run 'helm test orders-api -n production' to execute release test pods."
+        },
+        {
+          "id": "val-helm-upgrade-03",
+          "description": "Upgraded release to revision 2 with helm upgrade",
+          "type": "command_executed",
+          "commandSubstring": "helm upgrade orders-api",
+          "remediation": "Run 'helm upgrade orders-api bitnami/nginx -n production' to upgrade the release."
+        },
+        {
+          "id": "val-helm-history-04",
+          "description": "Audited release revisions with helm history",
+          "type": "command_executed",
+          "commandSubstring": "helm history orders-api",
+          "remediation": "Run 'helm history orders-api -n production' to inspect revision log."
+        },
+        {
+          "id": "val-helm-rollback-05",
+          "description": "Rolled back release to revision 1 with helm rollback",
+          "type": "command_executed",
+          "commandSubstring": "helm rollback orders-api 1",
+          "remediation": "Run 'helm rollback orders-api 1 -n production' to restore revision 1."
+        }
+      ],
+      "solutionCommands": [
+        "helm install orders-api bitnami/nginx -n production",
+        "helm test orders-api -n production",
+        "helm upgrade orders-api bitnami/nginx -n production",
+        "helm history orders-api -n production",
+        "helm rollback orders-api 1 -n production"
+      ],
+      "troubleshootingGuide": "Ensure you install orders-api in production, run helm test, upgrade, inspect helm history, and roll back to revision 1."
+    }
+  ],
+  "assessmentQuestions": [
+    {
+      "id": "q-helm-01",
+      "question": "How does the --atomic flag modify the behavior of helm install and helm upgrade in production?",
+      "options": [
+        "(Recommended) If the deployment fails to reach a Ready state within the timeout, Helm automatically rolls back the release to the previous revision and deletes failed resources.",
+        "It locks the cluster etcd database preventing concurrent kubectl operations.",
+        "It bypasses the Kubernetes Admission Controller and forces immediate pod scheduling.",
+        "It combines all multi-document YAML manifests into a single monolithic Secret."
+      ],
+      "correctIndex": 0,
+      "explanation": "When --atomic is passed, Helm waits for all resources (Deployments, StatefulSets, DaemonSets) to reach Ready condition before considering the release successful. If any resource fails or times out, Helm initiates an automatic, clean rollback to the prior release revision."
+    },
+    {
+      "id": "q-helm-02",
+      "question": "In Helm templates, what is the specific role of _helpers.tpl?",
+      "options": [
+        "(Recommended) Defining reusable named template snippets (like fullname, name, and standard labels) that can be invoked across templates via include or template.",
+        "Storing encrypted database credentials and TLS private keys.",
+        "Acting as the primary entry point executed by the Kubelet CRI daemon.",
+        "Configuring Helm repository URLs and OCI registry mirrors."
+      ],
+      "correctIndex": 0,
+      "explanation": "Files starting with an underscore (like _helpers.tpl) are not rendered into Kubernetes manifests directly. Instead, they serve as partials containing reusable template definitions created with {{ define }} and included across deployment, service, and ingress manifests."
+    }
+  ]
+}

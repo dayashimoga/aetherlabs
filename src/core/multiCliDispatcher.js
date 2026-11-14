@@ -2982,6 +2982,78 @@ spec:
       return { stdout: `Successfully packaged chart and saved it to: ${targetPkg}\n`, stderr: '', code: 0 };
     }
 
+    if (sub === 'create') {
+      const chartName = argv[2] || 'mychart';
+      const absPath = chartName.startsWith('/') ? chartName : `${cwd}/${chartName}`.replace(/\/+/g, '/');
+      if (fs) {
+        fs.mkdir(absPath);
+        fs.mkdir(`${absPath}/templates`);
+        fs.mkdir(`${absPath}/templates/tests`);
+        fs.writeFile(`${absPath}/Chart.yaml`, `apiVersion: v2\nname: ${chartName}\ndescription: A Helm chart for Kubernetes\ntype: application\nversion: 0.1.0\nappVersion: "1.16.0"\n`);
+        fs.writeFile(`${absPath}/values.yaml`, `replicaCount: 1\nimage:\n  repository: nginx\n  pullPolicy: IfNotPresent\n  tag: ""\nservice:\n  type: ClusterIP\n  port: 80\n`);
+        fs.writeFile(`${absPath}/templates/_helpers.tpl`, `{{/* Expand the name of the chart. */}}\n{{- define "${chartName}.name" -}}\n{{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" }}\n{{- end }}\n`);
+        fs.writeFile(`${absPath}/templates/deployment.yaml`, `apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: {{ include "${chartName}.name" . }}\nspec:\n  replicas: {{ .Values.replicaCount }}\n`);
+        fs.writeFile(`${absPath}/templates/service.yaml`, `apiVersion: v1\nkind: Service\nmetadata:\n  name: {{ include "${chartName}.name" . }}\nspec:\n  ports:\n  - port: {{ .Values.service.port }}\n`);
+        fs.writeFile(`${absPath}/templates/tests/test-connection.yaml`, `apiVersion: v1\nkind: Pod\nmetadata:\n  name: "{{ include \"${chartName}.name\" . }}-test-connection"\n  annotations:\n    "helm.sh/hook": test\nspec:\n  containers:\n  - name: wget\n    image: busybox\n    command: ['wget']\n    args: ['{{ include \"${chartName}.name\" . }}:{{ .Values.service.port }}']\n`);
+      }
+      return { stdout: `Creating ${chartName}\n`, stderr: '', code: 0 };
+    }
+
+    if (sub === 'dependency' || sub === 'dep') {
+      const act = argv[2] || 'list';
+      if (act === 'update' || act === 'build') {
+        return { stdout: 'Hang tight while we grab the latest from your chart repositories...\n...Successfully got an update from the "bitnami" chart repository\nSaving 1 charts\nDeleting outdated charts\n', stderr: '', code: 0 };
+      }
+      const headers = ['NAME', 'VERSION', 'REPOSITORY', 'STATUS'];
+      const rows = [['common', '2.x.x', 'https://charts.bitnami.com/bitnami', 'ok']];
+      return { stdout: this._formatTable(headers, rows) + '\n', stderr: '', code: 0 };
+    }
+
+    if (sub === 'test') {
+      const name = argv[2] || 'release';
+      let ns = 'default';
+      const nIdx = argv.findIndex((a) => a === '-n' || a === '--namespace');
+      if (nIdx !== -1 && argv[nIdx + 1]) ns = argv[nIdx + 1];
+      const rel = this.helmReleases.find((r) => r.name === name);
+      const rev = rel ? rel.revision || 1 : 1;
+      return {
+        stdout: `NAME: ${name}\nLAST DEPLOYED: ${new Date().toUTCString()}\nNAMESPACE: ${ns}\nSTATUS: deployed\nREVISION: ${rev}\nTEST SUITE:     ${name}-test-connection\nTEST STATUS:    SUCCESS\nNOTES:\nConnection test passed successfully.\n`,
+        stderr: '',
+        code: 0
+      };
+    }
+
+    if (sub === 'status') {
+      const name = argv[2] || 'release';
+      const rel = this.helmReleases.find((r) => r.name === name);
+      if (!rel) return { stdout: '', stderr: `Error: release: not found\n`, code: 1 };
+      return {
+        stdout: `NAME: ${name}\nLAST DEPLOYED: ${new Date().toUTCString()}\nNAMESPACE: ${rel.namespace}\nSTATUS: ${rel.status || 'deployed'}\nREVISION: ${rel.revision || 1}\nTEST SUITE: None\n`,
+        stderr: '',
+        code: 0
+      };
+    }
+
+    if (sub === 'history') {
+      const name = argv[2] || 'release';
+      const rel = this.helmReleases.find((r) => r.name === name);
+      if (!rel) return { stdout: '', stderr: `Error: release: not found\n`, code: 1 };
+      const headers = ['REVISION', 'UPDATED', 'STATUS', 'CHART', 'APP VERSION', 'DESCRIPTION'];
+      const rows = [];
+      const currentRev = rel.revision || 1;
+      for (let r = 1; r <= currentRev; r++) {
+        rows.push([
+          String(r),
+          new Date().toUTCString(),
+          r === currentRev ? 'deployed' : 'superseded',
+          rel.chart || 'chart',
+          rel.appVersion || '1.0.0',
+          r === 1 ? 'Install complete' : r === currentRev ? 'Upgrade complete' : 'Rollback complete'
+        ]);
+      }
+      return { stdout: this._formatTable(headers, rows) + '\n', stderr: '', code: 0 };
+    }
+
     return { stdout: '', stderr: `Error: unknown command "${sub}" for "helm"\n`, code: 1 };
   }
 
