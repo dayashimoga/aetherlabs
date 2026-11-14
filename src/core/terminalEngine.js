@@ -74,15 +74,27 @@ const formatApiError = cliFormatterModule.formatApiError || function (type, deta
 const createApiError = cliFormatterModule.createApiError || function (type, details) { return new Error(formatApiError(type, details)); };
 
 function unpackArgs(firstArg, ...rest) {
-  if (firstArg && typeof firstArg === 'object' && !Array.isArray(firstArg) && firstArg.argv) {
-    return {
-      args: (firstArg.argv || []).slice(1),
-      stdin: firstArg.stdin || '',
-      vfs: firstArg.vfs || null,
-      cwd: firstArg.cwd || '/home/learner',
-      env: firstArg.env || {},
-      driver: firstArg.driver || null
-    };
+  if (firstArg && typeof firstArg === 'object' && !Array.isArray(firstArg)) {
+    if (firstArg.argv) {
+      return {
+        args: (firstArg.argv || []).slice(1),
+        stdin: firstArg.stdin || '',
+        vfs: firstArg.vfs || null,
+        cwd: firstArg.cwd || '/home/learner',
+        env: firstArg.env || {},
+        driver: firstArg.driver || null
+      };
+    }
+    if (firstArg.args) {
+      return {
+        args: firstArg.args || [],
+        stdin: firstArg.stdin || '',
+        vfs: firstArg.vfs || null,
+        cwd: firstArg.cwd || '/home/learner',
+        env: firstArg.env || {},
+        driver: firstArg.driver || null
+      };
+    }
   }
   return {
     args: Array.isArray(firstArg) ? firstArg : [],
@@ -314,7 +326,50 @@ function opensslTool(firstArg, ...rest) {
     return { stdout: 'Certificate Request generated successfully\n', stderr: '', code: 0 };
   }
 
-  return { stdout: 'OpenSSL CLI (x509, genrsa, req, version)\n', stderr: '', code: 0 };
+  if (sub === 's_client') {
+    let connect = '127.0.0.1:6443';
+    for (let i = 1; i < args.length; i++) {
+      if (args[i] === '-connect') connect = args[++i] || connect;
+    }
+    const out = [
+      'CONNECTED(00000003)',
+      'depth=1 CN = kubernetes-ca',
+      'verify return:1',
+      'depth=0 CN = kube-apiserver',
+      'verify return:1',
+      '---',
+      'Certificate chain',
+      ' 0 s:CN = kube-apiserver',
+      '   i:CN = kubernetes-ca',
+      '---',
+      'Server certificate',
+      '-----BEGIN CERTIFICATE-----',
+      'MIIDITCCAgmgAwIBAgIIZ1vMOCKCERTIFICATEFORKUBELABSINSPECTION...',
+      '-----END CERTIFICATE-----',
+      'subject=CN = kube-apiserver',
+      'issuer=CN = kubernetes-ca',
+      '---',
+      'No client certificate CA names sent',
+      'Peer signing digest: SHA256',
+      'Server Temp Key: X25519, 253 bits',
+      '---',
+      'SSL handshake has read 1845 bytes and written 432 bytes',
+      'Verification: OK',
+      '---',
+      'New, TLSv1.3, Cipher is TLS_AES_256_GCM_SHA384',
+      'Server public key is 2048 bit',
+      'Secure Renegotiation IS NOT supported',
+      'Compression: NONE',
+      'Expansion: NONE',
+      'No ALPN negotiated',
+      'Early data was not sent',
+      'Verify return code: 0 (ok)',
+      '---'
+    ];
+    return { stdout: out.join('\n') + '\n', stderr: '', code: 0 };
+  }
+
+  return { stdout: 'OpenSSL CLI (x509, genrsa, req, s_client, version)\n', stderr: '', code: 0 };
 }
 
 // ---------------------------------------------------------------------------
@@ -1224,6 +1279,7 @@ class TerminalEngine {
       case 'lvcreate':
       case 'lvs':
       case 'lvdisplay':
+      case 'openssl':
         return this.handleLinuxAndNet(bin, args, options);
       default:
         return {
@@ -3053,6 +3109,9 @@ class TerminalEngine {
         case 'lvs':
         case 'lvdisplay':
           res = this.multiCli.handleLvs();
+          break;
+        case 'openssl':
+          res = opensslTool({ args, cwd: this.cwd, vfs: this.vfs });
           break;
         case 'head':
         case 'tail':

@@ -54,7 +54,7 @@ describe('Subphase 3.1.1 — Domain 01 (Linux Fundamentals) & Domain 02 (Linux A
   });
 
   it('2. Deterministic Solver: All 4 labs fail before solution commands (0% score)', () => {
-    const allLabs = pluginManager.getAllLabs();
+    const allLabs = pluginManager.getAllLabs().filter((l) => l.id.startsWith('lab-linux'));
     assert.equal(allLabs.length, 4, 'Must have exactly 4 hands-on labs across Domains 01 and 02');
 
     for (const lab of allLabs) {
@@ -73,7 +73,7 @@ describe('Subphase 3.1.1 — Domain 01 (Linux Fundamentals) & Domain 02 (Linux A
   });
 
   it('3. Deterministic Solver: All 4 labs achieve 100% score after canonical solution replay', () => {
-    const allLabs = pluginManager.getAllLabs();
+    const allLabs = pluginManager.getAllLabs().filter((l) => l.id.startsWith('lab-linux'));
 
     for (const lab of allLabs) {
       const vfs = new VirtualFileSystem();

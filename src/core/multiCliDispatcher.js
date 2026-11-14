@@ -359,6 +359,45 @@ class MultiCliDispatcher {
       lvs: {}
     };
     this.netnsList = ['cni-0a1b2c3d4e (id: 0)', 'cni-9f8e7d6c5b (id: 1)'];
+    this.networkInterfaces = {
+      lo: { index: 1, name: 'lo', flags: '<LOOPBACK,UP,LOWER_UP>', state: 'UNKNOWN', mac: '00:00:00:00:00:00', ips: ['127.0.0.1/8'], type: 'loopback' },
+      eth0: { index: 2, name: 'eth0', flags: '<BROADCAST,MULTICAST,UP,LOWER_UP>', state: 'UP', mac: '02:42:ac:11:00:02', ips: ['192.168.1.10/24'], type: 'ether' },
+      cilium_host: { index: 3, name: 'cilium_host', flags: '<UP,LOWER_UP>', state: 'UP', mac: '26:95:67:3a:48:84', ips: ['10.244.0.1/32'], type: 'ether' }
+    };
+    this.networkRoutes = [
+      'default via 192.168.1.1 dev eth0 proto dhcp src 192.168.1.10 metric 100',
+      '10.244.0.0/16 via 10.244.0.1 dev cilium_host proto kernel src 10.244.0.1',
+      '192.168.1.0/24 dev eth0 proto kernel scope link src 192.168.1.10 metric 100'
+    ];
+    this.netnsState = {};
+    this.iptablesRules = {
+      filter: {
+        INPUT: [
+          '  1102   66K ACCEPT     tcp  --  *      *       0.0.0.0/0            0.0.0.0/0            tcp dpt:6443 /* kube-apiserver secure port */',
+          '   940   56K ACCEPT     tcp  --  *      *       0.0.0.0/0            0.0.0.0/0            tcp dpt:2379 /* etcd client port */'
+        ],
+        FORWARD: [
+          '  1840  110K KUBE-FORWARD  all  --  *      *       0.0.0.0/0            0.0.0.0/0            /* kubernetes forwarding rules */'
+        ],
+        OUTPUT: []
+      },
+      nat: {
+        PREROUTING: [
+          '  1420   85K KUBE-SERVICES  all  --  *      *       0.0.0.0/0            0.0.0.0/0            /* kubernetes service portals */'
+        ],
+        INPUT: [],
+        OUTPUT: [
+          '   940   56K KUBE-SERVICES  all  --  *      *       0.0.0.0/0            0.0.0.0/0            /* kubernetes service portals */'
+        ],
+        POSTROUTING: [
+          '  3410  204K KUBE-POSTROUTING  all  --  *      *       0.0.0.0/0            0.0.0.0/0            /* kubernetes postrouting rules */'
+        ],
+        'KUBE-SERVICES': [
+          '   120  7200 KUBE-SVC-K8S  tcp  --  *      *       0.0.0.0/0            10.96.0.1            /* default/kubernetes:https cluster IP */ tcp dpt:443',
+          '   450 27000 KUBE-SVC-DNS  udp  --  *      *       0.0.0.0/0            10.96.0.10           /* kube-system/kube-dns:dns cluster IP */ udp dpt:53'
+        ]
+      }
+    };
     this.simulatedContainers = [
       { id: 'a1b2c3d4e5f6', name: 'k8s_kube-apiserver', image: 'registry.k8s.io/kube-apiserver:v1.31.0', status: 'Up 2 days', ports: '6443/tcp', command: '"kube-apiserver --..."', created: '2 days ago' },
       { id: 'b2c3d4e5f6a1', name: 'k8s_etcd', image: 'registry.k8s.io/etcd:3.5.15-0', status: 'Up 2 days', ports: '2379-2380/tcp', command: '"etcd --..."', created: '2 days ago' },
@@ -5330,7 +5369,8 @@ spec:
   }
 
   handleDig({ argv = [] }) {
-    const host = argv.find((a, i) => i > 0 && !a.startsWith('-')) || 'kubernetes.default.svc.cluster.local';
+    const isShort = argv.some((a) => a === '+short');
+    const host = argv.find((a, i) => i > 0 && !a.startsWith('-') && !a.startsWith('+')) || 'kubernetes.default.svc.cluster.local';
     let resolvedIp = '10.96.0.1';
     let status = 'NOERROR';
     let errorMsg = '';
@@ -5347,6 +5387,13 @@ spec:
       } else {
         errorMsg = dnsRes.error || '';
       }
+    }
+
+    if (isShort) {
+      if (status !== 'NOERROR') {
+        return { stdout: '', stderr: errorMsg ? `;; connection timed out; no servers could be reached\n` : '', code: 1 };
+      }
+      return { stdout: `${resolvedIp}\n`, stderr: '', code: 0 };
     }
 
     if (status !== 'NOERROR') {
@@ -5441,136 +5488,377 @@ spec:
     };
   }
 
-  handleIp({ argv = [] }) {
+  handleIp({ argv = [], netns = null }) {
+    if (!this.networkInterfaces) {
+      this.networkInterfaces = {
+        lo: { index: 1, name: 'lo', flags: '<LOOPBACK,UP,LOWER_UP>', state: 'UNKNOWN', mac: '00:00:00:00:00:00', ips: ['127.0.0.1/8'], type: 'loopback', master: null },
+        eth0: { index: 2, name: 'eth0', flags: '<BROADCAST,MULTICAST,UP,LOWER_UP>', state: 'UP', mac: '02:42:ac:11:00:02', ips: ['192.168.1.10/24'], type: 'ether', master: null },
+        cilium_host: { index: 3, name: 'cilium_host', flags: '<UP,LOWER_UP>', state: 'UP', mac: '26:95:67:3a:48:84', ips: ['10.244.0.1/32'], type: 'ether', master: null }
+      };
+    }
+    if (!this.networkRoutes) {
+      this.networkRoutes = [
+        'default via 192.168.1.1 dev eth0 proto dhcp src 192.168.1.10 metric 100',
+        '10.244.0.0/16 via 10.244.0.1 dev cilium_host proto kernel src 10.244.0.1',
+        '192.168.1.0/24 dev eth0 proto kernel scope link src 192.168.1.10 metric 100'
+      ];
+    }
+    if (!this.netnsList) {
+      this.netnsList = ['cni-0a1b2c3d4e (id: 0)', 'cni-9f8e7d6c5b (id: 1)'];
+    }
+    if (!this.netnsState) {
+      this.netnsState = {};
+    }
+
     const sub = argv[1] || 'addr';
-    if (sub === 'addr' || sub === 'a') {
-      return {
-        stdout: [
-          '1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN group default qlen 1000',
-          '    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00',
-          '    inet 127.0.0.1/8 scope host lo',
-          '       valid_lft forever preferred_lft forever',
-          '2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc mq state UP group default qlen 1000',
-          '    link/ether 02:42:ac:11:00:02 brd ff:ff:ff:ff:ff:ff',
-          '    inet 192.168.1.10/24 brd 192.168.1.255 scope global eth0',
-          '       valid_lft forever preferred_lft forever',
-          '3: cilium_host: <UP,LOWER_UP> mtu 1500 qdisc noqueue state UP group default qlen 1000',
-          '    link/ether 26:95:67:3a:48:84 brd ff:ff:ff:ff:ff:ff',
-          '    inet 10.244.0.1/32 scope link cilium_host',
-          '       valid_lft forever preferred_lft forever'
-        ].join('\n') + '\n',
-        stderr: '',
-        code: 0
-      };
-    }
 
-    if (sub === 'route' || sub === 'r') {
-      return {
-        stdout: [
-          'default via 192.168.1.1 dev eth0 proto dhcp src 192.168.1.10 metric 100',
-          '10.244.0.0/16 via 10.244.0.1 dev cilium_host proto kernel src 10.244.0.1',
-          '192.168.1.0/24 dev eth0 proto kernel scope link src 192.168.1.10 metric 100'
-        ].join('\n') + '\n',
-        stderr: '',
-        code: 0
-      };
-    }
-
-    if (sub === 'link' || sub === 'l') {
-      return {
-        stdout: [
-          '1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN mode DEFAULT group default qlen 1000',
-          '    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00',
-          '2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc mq state UP mode DEFAULT group default qlen 1000',
-          '    link/ether 02:42:ac:11:00:02 brd ff:ff:ff:ff:ff:ff',
-          '3: cilium_host: <UP,LOWER_UP> mtu 1500 qdisc noqueue state UP mode DEFAULT group default qlen 1000',
-          '    link/ether 26:95:67:3a:48:84 brd ff:ff:ff:ff:ff:ff'
-        ].join('\n') + '\n',
-        stderr: '',
-        code: 0
-      };
-    }
-
+    // Handle network namespaces
     if (sub === 'netns') {
       const action = argv[2] || 'list';
       if (action === 'list') {
-        const list = this.netnsList || ['cni-0a1b2c3d4e (id: 0)', 'cni-9f8e7d6c5b (id: 1)'];
         return {
-          stdout: list.join('\n') + '\n',
+          stdout: this.netnsList.join('\n') + '\n',
           stderr: '',
           code: 0
         };
       }
       if (action === 'add') {
         const nsName = argv[3];
-        if (!this.netnsList) {
-          this.netnsList = ['cni-0a1b2c3d4e (id: 0)', 'cni-9f8e7d6c5b (id: 1)'];
-        }
-        if (nsName && !this.netnsList.some((n) => n.startsWith(nsName))) {
-          this.netnsList.push(`${nsName} (id: ${this.netnsList.length})`);
+        if (nsName) {
+          if (!this.netnsList.some((n) => n.startsWith(nsName))) {
+            this.netnsList.push(`${nsName} (id: ${this.netnsList.length})`);
+          }
+          if (!this.netnsState[nsName]) {
+            this.netnsState[nsName] = {
+              interfaces: {
+                lo: { index: 1, name: 'lo', flags: '<LOOPBACK>', state: 'DOWN', mac: '00:00:00:00:00:00', ips: ['127.0.0.1/8'], type: 'loopback', master: null }
+              },
+              routes: []
+            };
+          }
         }
         return { stdout: '', stderr: '', code: 0 };
       }
       if (action === 'del' || action === 'delete') {
         const nsName = argv[3];
-        if (this.netnsList && nsName) {
+        if (nsName) {
           this.netnsList = this.netnsList.filter((n) => !n.startsWith(nsName));
+          delete this.netnsState[nsName];
         }
         return { stdout: '', stderr: '', code: 0 };
       }
       if (action === 'exec') {
-        const nsCmd = argv.slice(4).join(' ') || 'ip a';
-        return { stdout: `[netns ${argv[3]}] ${nsCmd}\n`, stderr: '', code: 0 };
+        const targetNs = argv[3];
+        const subCmd = argv.slice(4);
+        if (subCmd.length === 0) {
+          return { stdout: '', stderr: 'ip netns exec: command missing\n', code: 1 };
+        }
+        if (subCmd[0] === 'ip') {
+          return this.handleIp({ argv: subCmd, netns: targetNs });
+        }
+        if (subCmd[0] === 'ping') {
+          return this.handlePing({ argv: subCmd });
+        }
+        if (subCmd[0] === 'curl') {
+          return this.handleCurl({ argv: subCmd });
+        }
+        return { stdout: `[netns ${targetNs}] ${subCmd.join(' ')}\n`, stderr: '', code: 0 };
       }
     }
 
-    return { stdout: 'default via 192.168.1.1 dev eth0 proto dhcp src 192.168.1.10 metric 100\n', stderr: '', code: 0 };
+    // Determine target interface table and routing table based on netns
+    let ifaces = this.networkInterfaces;
+    let routes = this.networkRoutes;
+    if (netns) {
+      if (!this.netnsState[netns]) {
+        this.netnsState[netns] = {
+          interfaces: {
+            lo: { index: 1, name: 'lo', flags: '<LOOPBACK>', state: 'DOWN', mac: '00:00:00:00:00:00', ips: ['127.0.0.1/8'], type: 'loopback', master: null }
+          },
+          routes: []
+        };
+      }
+      ifaces = this.netnsState[netns].interfaces;
+      routes = this.netnsState[netns].routes;
+    }
+
+    // Handle ip link
+    if (sub === 'link' || sub === 'l') {
+      const action = argv[2];
+      if (action === 'add') {
+        const linkName = argv[3];
+        const typeIdx = argv.indexOf('type');
+        const linkType = typeIdx !== -1 ? argv[typeIdx + 1] : 'ether';
+
+        if (linkType === 'bridge') {
+          ifaces[linkName] = {
+            index: Object.keys(ifaces).length + 1,
+            name: linkName,
+            flags: '<BROADCAST,MULTICAST>',
+            state: 'DOWN',
+            mac: '5a:21:bb:12:00:01',
+            ips: [],
+            type: 'bridge',
+            master: null
+          };
+          return { stdout: '', stderr: '', code: 0 };
+        }
+
+        if (linkType === 'veth') {
+          let peerName = null;
+          const peerIdx = argv.indexOf('peer');
+          if (peerIdx !== -1) {
+            const nameIdx = argv.indexOf('name', peerIdx);
+            peerName = nameIdx !== -1 ? argv[nameIdx + 1] : argv[peerIdx + 1];
+          }
+          if (!peerName) peerName = `${linkName}-peer`;
+
+          const idx = Object.keys(ifaces).length + 1;
+          ifaces[linkName] = {
+            index: idx,
+            name: linkName,
+            peer: peerName,
+            flags: '<BROADCAST,MULTICAST>',
+            state: 'DOWN',
+            mac: 'fe:11:22:33:44:01',
+            ips: [],
+            type: 'ether',
+            master: null
+          };
+          ifaces[peerName] = {
+            index: idx + 1,
+            name: peerName,
+            peer: linkName,
+            flags: '<BROADCAST,MULTICAST>',
+            state: 'DOWN',
+            mac: 'fe:11:22:33:44:02',
+            ips: [],
+            type: 'ether',
+            master: null
+          };
+          return { stdout: '', stderr: '', code: 0 };
+        }
+
+        ifaces[linkName] = {
+          index: Object.keys(ifaces).length + 1,
+          name: linkName,
+          flags: '<BROADCAST,MULTICAST>',
+          state: 'DOWN',
+          mac: 'fe:aa:bb:cc:dd:ee',
+          ips: [],
+          type: linkType,
+          master: null
+        };
+        return { stdout: '', stderr: '', code: 0 };
+      }
+
+      if (action === 'set') {
+        const devName = argv[3];
+        const dev = ifaces[devName];
+
+        if (argv.includes('up')) {
+          if (dev) {
+            dev.state = 'UP';
+            if (!dev.flags.includes('UP')) {
+              dev.flags = dev.flags.replace('>', ',UP,LOWER_UP>');
+            }
+          }
+        }
+        if (argv.includes('down')) {
+          if (dev) {
+            dev.state = 'DOWN';
+            dev.flags = dev.flags.replace(/,UP,LOWER_UP|,UP/, '');
+          }
+        }
+        if (argv.includes('master')) {
+          const mIdx = argv.indexOf('master');
+          const masterBridge = argv[mIdx + 1];
+          if (dev) dev.master = masterBridge;
+        }
+        if (argv.includes('netns')) {
+          const nsIdx = argv.indexOf('netns');
+          const targetNs = argv[nsIdx + 1];
+          if (dev && targetNs) {
+            if (!this.netnsState[targetNs]) {
+              this.netnsState[targetNs] = {
+                interfaces: {
+                  lo: { index: 1, name: 'lo', flags: '<LOOPBACK>', state: 'DOWN', mac: '00:00:00:00:00:00', ips: ['127.0.0.1/8'], type: 'loopback', master: null }
+                },
+                routes: []
+              };
+            }
+            this.netnsState[targetNs].interfaces[devName] = dev;
+            delete ifaces[devName];
+          }
+        }
+        return { stdout: '', stderr: '', code: 0 };
+      }
+
+      // Show link list
+      const lines = [];
+      for (const iface of Object.values(ifaces)) {
+        const masterStr = iface.master ? ` master ${iface.master}` : '';
+        lines.push(`${iface.index}: ${iface.name}: ${iface.flags} mtu 1500 qdisc noqueue state ${iface.state} mode DEFAULT group default qlen 1000`);
+        lines.push(`    link/${iface.type || 'ether'} ${iface.mac} brd ff:ff:ff:ff:ff:ff${masterStr}`);
+      }
+      return { stdout: lines.join('\n') + '\n', stderr: '', code: 0 };
+    }
+
+    // Handle ip addr
+    if (sub === 'addr' || sub === 'a' || sub === 'address') {
+      const action = argv[2];
+      if (action === 'add') {
+        const cidr = argv[3];
+        const devIdx = argv.indexOf('dev');
+        const devName = devIdx !== -1 ? argv[devIdx + 1] : argv[4];
+
+        if (devName) {
+          if (!ifaces[devName]) {
+            ifaces[devName] = {
+              index: Object.keys(ifaces).length + 1,
+              name: devName,
+              flags: '<BROADCAST,MULTICAST,UP,LOWER_UP>',
+              state: 'UP',
+              mac: '02:42:0a:c8:01:01',
+              ips: [],
+              type: 'ether',
+              master: null
+            };
+          }
+          if (cidr && !ifaces[devName].ips.includes(cidr)) {
+            ifaces[devName].ips.push(cidr);
+          }
+        }
+        return { stdout: '', stderr: '', code: 0 };
+      }
+
+      if (action === 'del' || action === 'delete') {
+        const cidr = argv[3];
+        const devIdx = argv.indexOf('dev');
+        const devName = devIdx !== -1 ? argv[devIdx + 1] : argv[4];
+        if (devName && ifaces[devName]) {
+          ifaces[devName].ips = ifaces[devName].ips.filter((ip) => ip !== cidr);
+        }
+        return { stdout: '', stderr: '', code: 0 };
+      }
+
+      // Show addr list
+      const lines = [];
+      for (const iface of Object.values(ifaces)) {
+        const masterStr = iface.master ? ` master ${iface.master}` : '';
+        lines.push(`${iface.index}: ${iface.name}: ${iface.flags} mtu 1500 qdisc noqueue state ${iface.state} group default qlen 1000`);
+        lines.push(`    link/${iface.type || 'ether'} ${iface.mac} brd ff:ff:ff:ff:ff:ff${masterStr}`);
+        for (const ip of iface.ips) {
+          const scope = ip.startsWith('127.') ? 'host lo' : `global ${iface.name}`;
+          lines.push(`    inet ${ip} scope ${scope}`);
+          lines.push(`       valid_lft forever preferred_lft forever`);
+        }
+      }
+      return { stdout: lines.join('\n') + '\n', stderr: '', code: 0 };
+    }
+
+    // Handle ip route
+    if (sub === 'route' || sub === 'r') {
+      const action = argv[2];
+      if (action === 'add') {
+        const routeStr = argv.slice(3).join(' ');
+        if (routeStr && !routes.includes(routeStr)) {
+          routes.push(routeStr);
+        }
+        return { stdout: '', stderr: '', code: 0 };
+      }
+
+      if (action === 'del' || action === 'delete') {
+        const routeStr = argv.slice(3).join(' ');
+        if (routeStr) {
+          const idx = routes.findIndex((r) => r.includes(routeStr));
+          if (idx !== -1) routes.splice(idx, 1);
+        }
+        return { stdout: '', stderr: '', code: 0 };
+      }
+
+      return { stdout: routes.join('\n') + (routes.length ? '\n' : ''), stderr: '', code: 0 };
+    }
+
+    return { stdout: routes.join('\n') + '\n', stderr: '', code: 0 };
   }
 
   handleIptables({ argv = [] }) {
-    const isNat = argv.includes('-t') && (argv[argv.indexOf('-t') + 1] === 'nat');
-    const isList = argv.includes('-L') || argv.includes('--list') || argv.length <= 1;
+    if (!this.iptablesRules) {
+      this.iptablesRules = {
+        filter: {
+          INPUT: [
+            '  1102   66K ACCEPT     tcp  --  *      *       0.0.0.0/0            0.0.0.0/0            tcp dpt:6443 /* kube-apiserver secure port */',
+            '   940   56K ACCEPT     tcp  --  *      *       0.0.0.0/0            0.0.0.0/0            tcp dpt:2379 /* etcd client port */'
+          ],
+          FORWARD: [
+            '  1840  110K KUBE-FORWARD  all  --  *      *       0.0.0.0/0            0.0.0.0/0            /* kubernetes forwarding rules */'
+          ],
+          OUTPUT: []
+        },
+        nat: {
+          PREROUTING: [
+            '  1420   85K KUBE-SERVICES  all  --  *      *       0.0.0.0/0            0.0.0.0/0            /* kubernetes service portals */'
+          ],
+          INPUT: [],
+          OUTPUT: [
+            '   940   56K KUBE-SERVICES  all  --  *      *       0.0.0.0/0            0.0.0.0/0            /* kubernetes service portals */'
+          ],
+          POSTROUTING: [
+            '  3410  204K KUBE-POSTROUTING  all  --  *      *       0.0.0.0/0            0.0.0.0/0            /* kubernetes postrouting rules */'
+          ],
+          'KUBE-SERVICES': [
+            '   120  7200 KUBE-SVC-K8S  tcp  --  *      *       0.0.0.0/0            10.96.0.1            /* default/kubernetes:https cluster IP */ tcp dpt:443',
+            '   450 27000 KUBE-SVC-DNS  udp  --  *      *       0.0.0.0/0            10.96.0.10           /* kube-system/kube-dns:dns cluster IP */ udp dpt:53'
+          ]
+        }
+      };
+    }
 
+    const tIdx = argv.indexOf('-t');
+    const table = tIdx !== -1 ? argv[tIdx + 1] : 'filter';
+    if (!this.iptablesRules[table]) {
+      this.iptablesRules[table] = {};
+    }
+
+    // Append rule: iptables [-t table] -A CHAIN ...
+    const aIdx = argv.indexOf('-A');
+    if (aIdx !== -1) {
+      const chain = argv[aIdx + 1];
+      const ruleBody = argv.slice(aIdx + 2).join(' ');
+      if (!this.iptablesRules[table][chain]) {
+        this.iptablesRules[table][chain] = [];
+      }
+      this.iptablesRules[table][chain].push(`     0     0 ${ruleBody}`);
+      return { stdout: '', stderr: '', code: 0 };
+    }
+
+    // List rules: iptables [-t table] -L [CHAIN]
+    const isList = argv.includes('-L') || argv.includes('--list') || argv.length <= 1;
     if (isList) {
-      if (isNat) {
-        const lines = [
-          'Chain PREROUTING (policy ACCEPT 1420 packets, 85K bytes)',
-          ' pkts bytes target     prot opt in     out     source               destination',
-          ' 1420   85K KUBE-SERVICES  all  --  *      *       0.0.0.0/0            0.0.0.0/0            /* kubernetes service portals */',
-          '',
-          'Chain INPUT (policy ACCEPT 1204 packets, 72K bytes)',
-          ' pkts bytes target     prot opt in     out     source               destination',
-          '',
-          'Chain OUTPUT (policy ACCEPT 940 packets, 56K bytes)',
-          ' pkts bytes target     prot opt in     out     source               destination',
-          '  940   56K KUBE-SERVICES  all  --  *      *       0.0.0.0/0            0.0.0.0/0            /* kubernetes service portals */',
-          '',
-          'Chain POSTROUTING (policy ACCEPT 3410 packets, 204K bytes)',
-          ' pkts bytes target     prot opt in     out     source               destination',
-          ' 3410  204K KUBE-POSTROUTING  all  --  *   *       0.0.0.0/0            0.0.0.0/0            /* kubernetes postrouting rules */',
-          '',
-          'Chain KUBE-SERVICES (2 references)',
-          ' pkts bytes target     prot opt in     out     source               destination',
-          '  120  7200 KUBE-SVC-K8S  tcp  --  *      *       0.0.0.0/0            10.96.0.1            /* default/kubernetes:https cluster IP */ tcp dpt:443',
-          '  450 27000 KUBE-SVC-DNS  udp  --  *      *       0.0.0.0/0            10.96.0.10           /* kube-system/kube-dns:dns cluster IP */ udp dpt:53'
-        ];
-        return { stdout: lines.join('\n') + '\n', stderr: '', code: 0 };
+      let filterChain = null;
+      const lIdx = argv.indexOf('-L');
+      if (lIdx !== -1 && argv[lIdx + 1] && !argv[lIdx + 1].startsWith('-')) {
+        filterChain = argv[lIdx + 1];
       }
 
-      // Filter table default
-      const lines = [
-        'Chain INPUT (policy ACCEPT 4520 packets, 270K bytes)',
-        ' pkts bytes target     prot opt in     out     source               destination',
-        ' 1102   66K ACCEPT     tcp  --  *      *       0.0.0.0/0            0.0.0.0/0            tcp dpt:6443 /* kube-apiserver secure port */',
-        '  940   56K ACCEPT     tcp  --  *      *       0.0.0.0/0            0.0.0.0/0            tcp dpt:2379 /* etcd client port */',
-        '',
-        'Chain FORWARD (policy ACCEPT 1840 packets, 110K bytes)',
-        ' pkts bytes target     prot opt in     out     source               destination',
-        ' 1840  110K KUBE-FORWARD  all  --  *    *       0.0.0.0/0            0.0.0.0/0            /* kubernetes forwarding rules */',
-        '',
-        'Chain OUTPUT (policy ACCEPT 4120 packets, 247K bytes)',
-        ' pkts bytes target     prot opt in     out     source               destination'
-      ];
+      const tableData = this.iptablesRules[table] || {};
+      const lines = [];
+
+      for (const [chainName, rules] of Object.entries(tableData)) {
+        if (filterChain && chainName !== filterChain) continue;
+        const isBuiltin = ['INPUT', 'OUTPUT', 'FORWARD', 'PREROUTING', 'POSTROUTING'].includes(chainName);
+        const header = isBuiltin
+          ? `Chain ${chainName} (policy ACCEPT 100 packets, 6000 bytes)`
+          : `Chain ${chainName} (2 references)`;
+        lines.push(header);
+        lines.push(' pkts bytes target     prot opt in     out     source               destination');
+        for (const rule of rules) {
+          lines.push(rule);
+        }
+        lines.push('');
+      }
+
       return { stdout: lines.join('\n') + '\n', stderr: '', code: 0 };
     }
 

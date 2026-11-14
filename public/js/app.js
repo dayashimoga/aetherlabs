@@ -728,6 +728,7 @@
   const DOMAIN_ICONS = {
     'linux-fundamentals': '🐧',
     'linux-admin': '⚙️',
+    'networking-fundamentals': '🌐',
     'containers-runtime': '🐳',
     'cloud-networking': '🌐',
     'cncf-packaging': '📦',

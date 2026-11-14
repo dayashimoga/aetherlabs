@@ -1,0 +1,259 @@
+{
+  "id": "networking-fundamentals",
+  "title": "Linux Networking Fundamentals, Bridge Isolation & Packet Filtering",
+  "category": "Foundations",
+  "trackId": "track-foundations",
+  "version": "4.0.0",
+  "difficulty": "Beginner",
+  "estimatedHours": 6,
+  "summary": "Master Linux networking foundations including software bridges (br0), virtual ethernet pairs (veth), network namespace isolation, default gateway routing, iptables NAT masquerading, and CoreDNS/TLS diagnostics.",
+  "prerequisites": [
+    "linux-fundamentals",
+    "linux-admin"
+  ],
+  "learningObjectives": [
+    "Construct software bridges and virtual ethernet pairs to interconnect isolated network namespaces.",
+    "Configure IP addresses, default routes, and namespace loopback interfaces using the modern iproute2 suite.",
+    "Implement stateful iptables packet filtering and NAT masquerading for container subnet egress.",
+    "Troubleshoot Kubernetes service DNS resolution and audit TLS certificate attributes using dig and openssl."
+  ],
+  "curriculumModules": [
+    {
+      "id": "mod-net-01",
+      "title": "Linux Bridge Architecture & Virtual Ethernet (veth) Pairs",
+      "conceptSummary": "Linux network namespaces isolate routing tables, iptables rules, and network devices. Virtual ethernet (veth) pairs act as virtual patch cables connecting an isolated namespace to a software bridge on the host.",
+      "productionArchitecturePattern": "Container Network Interfaces (CNIs) emulate L2/L3 topologies on every Kubernetes node: a bridge or veth pair delivers packets from the container namespace to the root namespace where routing and firewall rules take over.",
+      "keyCommands": [
+        "ip netns add netns-isolated",
+        "ip link add br0 type bridge",
+        "ip link add veth-host type veth peer name veth-ns",
+        "ip link set veth-host master br0",
+        "ip link set veth-ns netns netns-isolated",
+        "ip netns exec netns-isolated ip addr add 10.200.1.10/24 dev veth-ns"
+      ]
+    },
+    {
+      "id": "mod-net-02",
+      "title": "Iptables Packet Filtering, NAT Masquerading & DNS/TLS Diagnostics",
+      "conceptSummary": "Outbound namespace traffic requires source Network Address Translation (SNAT / MASQUERADE) to traverse external networks. CoreDNS query resolution and TLS certificates safeguard control-plane and inter-service communications.",
+      "productionArchitecturePattern": "Every Kubernetes node runs kube-proxy which programs iptables or IPVS to redirect service ClusterIPs to backing Pod IPs, while CNI plugins configure POSTROUTING masquerade for cross-node and internet egress.",
+      "keyCommands": [
+        "iptables -t nat -A POSTROUTING -s 10.200.1.0/24 ! -o br0 -j MASQUERADE",
+        "iptables -A FORWARD -i br0 ! -o br0 -j ACCEPT",
+        "dig +short kubernetes.default.svc.cluster.local",
+        "openssl x509 -in /etc/kubernetes/pki/apiserver.crt -text -noout",
+        "openssl s_client -connect 127.0.0.1:6443 -showcerts"
+      ]
+    }
+  ],
+  "labs": [
+    {
+      "id": "lab-net-01-veth-bridge",
+      "title": "Linux Bridge, Veth Pairs & Namespace Network Isolation",
+      "difficulty": "Beginner",
+      "durationMinutes": 25,
+      "xpReward": 150,
+      "scenario": "You are designing a lightweight container runtime network model. You must create an isolated network namespace, construct a software bridge (br0), attach a virtual ethernet pair (veth-host <-> veth-ns), and configure IP addresses and routing to establish connectivity between the host and the isolated namespace.",
+      "productionContext": "Understanding veth pairs and bridge devices is essential for troubleshooting Kubernetes CNI plugins (such as Flannel, Calico, and Cilium) and resolving container connectivity failures.",
+      "prerequisites": [],
+      "objectives": [
+        "Create network namespace netns-isolated",
+        "Create software bridge br0 with IP 10.200.1.1/24 and bring it up",
+        "Create veth pair veth-host and veth-ns, enslaving veth-host to br0",
+        "Assign veth-ns to netns-isolated, configure IP 10.200.1.10/24, and set default route via 10.200.1.1"
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Create Network Namespace",
+          "instruction": "Create an isolated network namespace named `netns-isolated` using `ip netns add netns-isolated`.",
+          "commandHint": "ip netns add netns-isolated"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Create and Configure Software Bridge br0",
+          "instruction": "Create software bridge `br0`, assign IP `10.200.1.1/24`, and bring the link up.",
+          "commandHint": "ip link add br0 type bridge && ip addr add 10.200.1.1/24 dev br0 && ip link set br0 up"
+        },
+        {
+          "stepNumber": 3,
+          "title": "Create and Attach Veth Pair",
+          "instruction": "Create a veth pair `veth-host` and `veth-ns`. Enslave `veth-host` to bridge `br0` and bring it up.",
+          "commandHint": "ip link add veth-host type veth peer name veth-ns && ip link set veth-host master br0 && ip link set veth-host up"
+        },
+        {
+          "stepNumber": 4,
+          "title": "Configure Namespace Interface and Routing",
+          "instruction": "Move `veth-ns` into `netns-isolated`. Bring up `lo` and `veth-ns`, configure IP `10.200.1.10/24`, and add a default route via `10.200.1.1`.",
+          "commandHint": "ip link set veth-ns netns netns-isolated && ip netns exec netns-isolated ip link set lo up && ip netns exec netns-isolated ip link set veth-ns up && ip netns exec netns-isolated ip addr add 10.200.1.10/24 dev veth-ns && ip netns exec netns-isolated ip route add default via 10.200.1.1 dev veth-ns"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "val-net-bridge-01",
+          "description": "Linux bridge br0 created and brought up with gateway IP",
+          "type": "command_executed",
+          "commandSubstring": "ip link add br0 type bridge",
+          "remediation": "Run 'ip link add br0 type bridge && ip addr add 10.200.1.1/24 dev br0 && ip link set br0 up'."
+        },
+        {
+          "id": "val-net-veth-02",
+          "description": "Veth pair created and host end enslaved to bridge",
+          "type": "command_executed",
+          "commandSubstring": "ip link set veth-host master br0",
+          "remediation": "Run 'ip link add veth-host type veth peer name veth-ns && ip link set veth-host master br0 && ip link set veth-host up'."
+        },
+        {
+          "id": "val-net-ns-03",
+          "description": "Network namespace netns-isolated configured with IP and default route",
+          "type": "command_executed",
+          "commandSubstring": "ip netns exec netns-isolated ip addr add 10.200.1.10/24 dev veth-ns",
+          "remediation": "Run 'ip link set veth-ns netns netns-isolated && ip netns exec netns-isolated ip link set lo up && ip netns exec netns-isolated ip link set veth-ns up && ip netns exec netns-isolated ip addr add 10.200.1.10/24 dev veth-ns && ip netns exec netns-isolated ip route add default via 10.200.1.1 dev veth-ns'."
+        }
+      ],
+      "solutionCommands": [
+        "ip netns add netns-isolated",
+        "ip link add br0 type bridge",
+        "ip addr add 10.200.1.1/24 dev br0",
+        "ip link set br0 up",
+        "ip link add veth-host type veth peer name veth-ns",
+        "ip link set veth-host master br0",
+        "ip link set veth-host up",
+        "ip link set veth-ns netns netns-isolated",
+        "ip netns exec netns-isolated ip link set lo up",
+        "ip netns exec netns-isolated ip link set veth-ns up",
+        "ip netns exec netns-isolated ip addr add 10.200.1.10/24 dev veth-ns",
+        "ip netns exec netns-isolated ip route add default via 10.200.1.1 dev veth-ns"
+      ],
+      "troubleshootingGuide": "Ensure br0 is created with type bridge, veth-host is enslaved to br0, and veth-ns is assigned to netns-isolated with IP 10.200.1.10/24."
+    },
+    {
+      "id": "lab-net-02-iptables-nat-tls",
+      "title": "Iptables NAT Masquerade, CoreDNS & TLS Certificate Inspection",
+      "difficulty": "Beginner",
+      "durationMinutes": 25,
+      "xpReward": 150,
+      "scenario": "Pods in the 10.200.1.0/24 subnet require internet access through NAT masquerading and need to resolve internal cluster DNS names. Additionally, you must audit the TLS certificate on the Kubernetes API server to verify SAN names and ensure secure encrypted transport.",
+      "productionContext": "Kubelet, kube-proxy, and CoreDNS work together with iptables to establish pod egress and cluster-wide service discovery. Validating TLS certificate SANs is crucial to prevent man-in-the-middle attacks.",
+      "prerequisites": [
+        "lab-net-01-veth-bridge"
+      ],
+      "objectives": [
+        "Add iptables NAT masquerade rule for outbound subnet traffic",
+        "Add iptables forwarding rules for bridge br0",
+        "Verify internal DNS resolution for kubernetes.default.svc.cluster.local",
+        "Inspect kube-apiserver TLS certificate SANs and perform live handshake check"
+      ],
+      "initialClusterState": {
+        "resources": [
+          {
+            "apiVersion": "v1",
+            "kind": "Service",
+            "metadata": {
+              "name": "kubernetes",
+              "namespace": "default"
+            },
+            "spec": {
+              "clusterIP": "10.96.0.1",
+              "ports": [
+                {
+                  "port": 443,
+                  "targetPort": 6443,
+                  "protocol": "TCP"
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "starterManifest": "",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Configure Iptables NAT Masquerade",
+          "instruction": "Append a NAT POSTROUTING rule to masquerade traffic originating from `10.200.1.0/24` destined outside `br0`.",
+          "commandHint": "iptables -t nat -A POSTROUTING -s 10.200.1.0/24 ! -o br0 -j MASQUERADE"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Configure Iptables Forwarding Rules",
+          "instruction": "Allow forwarding for inbound packets on `br0` destined externally.",
+          "commandHint": "iptables -A FORWARD -i br0 ! -o br0 -j ACCEPT"
+        },
+        {
+          "stepNumber": 3,
+          "title": "Verify CoreDNS Resolution",
+          "instruction": "Query CoreDNS for `kubernetes.default.svc.cluster.local` using `dig +short`.",
+          "commandHint": "dig +short kubernetes.default.svc.cluster.local"
+        },
+        {
+          "stepNumber": 4,
+          "title": "Inspect API Server TLS Certificate",
+          "instruction": "Audit the x509 certificate attributes of `/etc/kubernetes/pki/apiserver.crt` and perform a TLS client handshake against port 6443.",
+          "commandHint": "openssl x509 -in /etc/kubernetes/pki/apiserver.crt -text -noout && openssl s_client -connect 127.0.0.1:6443 -showcerts"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "val-net-nat-01",
+          "description": "Iptables NAT masquerade rule configured for subnet outbound traffic",
+          "type": "command_executed",
+          "commandSubstring": "iptables -t nat -A POSTROUTING",
+          "remediation": "Run 'iptables -t nat -A POSTROUTING -s 10.200.1.0/24 ! -o br0 -j MASQUERADE'."
+        },
+        {
+          "id": "val-net-dns-02",
+          "description": "CoreDNS query executed with dig +short for kubernetes.default.svc.cluster.local",
+          "type": "command_executed",
+          "commandSubstring": "dig +short kubernetes.default.svc.cluster.local",
+          "remediation": "Verify CoreDNS configuration and test resolution using 'dig +short kubernetes.default.svc.cluster.local'."
+        },
+        {
+          "id": "val-net-tls-03",
+          "description": "Executed OpenSSL s_client handshake check against apiserver port 6443",
+          "type": "command_executed",
+          "commandSubstring": "openssl s_client",
+          "remediation": "Run 'openssl s_client -connect 127.0.0.1:6443 -showcerts' to verify TLS handshake negotiation."
+        }
+      ],
+      "solutionCommands": [
+        "iptables -t nat -A POSTROUTING -s 10.200.1.0/24 ! -o br0 -j MASQUERADE",
+        "iptables -A FORWARD -i br0 ! -o br0 -j ACCEPT",
+        "dig +short kubernetes.default.svc.cluster.local",
+        "openssl x509 -in /etc/kubernetes/pki/apiserver.crt -text -noout",
+        "openssl s_client -connect 127.0.0.1:6443 -showcerts"
+      ],
+      "troubleshootingGuide": "Ensure iptables NAT masquerade rule is added to POSTROUTING, dig resolves 10.96.0.1, and openssl audits the apiserver certificate."
+    }
+  ],
+  "assessmentQuestions": [
+    {
+      "id": "q-net-fund-01",
+      "question": "What is the primary architectural purpose of a Linux virtual ethernet (veth) pair?",
+      "options": [
+        "To connect two isolated network namespaces or attach a container namespace to a host bridge",
+        "To encrypt L2 payloads between two physical network interface controllers (NICs)",
+        "To provide hardware-accelerated TCP offloading for physical fiber links",
+        "To replace the kernel routing table with an eBPF map"
+      ],
+      "correctIndex": 0,
+      "explanation": "A veth pair acts as a bi-directional virtual patch cable: packets transmitted into one peer instantly emerge out of the other peer, enabling communication across network namespace boundaries."
+    },
+    {
+      "id": "q-net-fund-02",
+      "question": "Which iptables table and chain are responsible for translating private container source IPs into the host node IP for internet egress (SNAT / Masquerading)?",
+      "options": [
+        "nat table, POSTROUTING chain",
+        "filter table, FORWARD chain",
+        "mangle table, PREROUTING chain",
+        "raw table, OUTPUT chain"
+      ],
+      "correctIndex": 0,
+      "explanation": "The nat table's POSTROUTING chain alters packet headers immediately before they leave the host network interface, replacing private subnet source IPs with the host's routable IP via MASQUERADE."
+    }
+  ]
+}

@@ -714,11 +714,21 @@ class VirtualFileSystem {
       { mode: 0o644, uid: 0, gid: 0 }
     );
 
-    // PKI Certificate Authority
+    // PKI Certificate Authority & Control Plane Certs
     this.writeFile(
       '/etc/kubernetes/pki/ca.crt',
       `-----BEGIN CERTIFICATE-----\nMIICyDCCAbCgAwIBAgIBADANBgkqhkiG9w0BAQsFADAVMRMwEQYDVQQDEwprdWJl\ncm5ldGVzMB4XDTI2MTExMjAwMDAwMFoXDTM2MTExMDAwMDAwMFowFTETMBEGA1UE\nAxMKa3ViZXJuZXRlczCCASIwDQYJKoZIhvcNAQEBBQADggEPADCCAQoCggEBAL0=\n-----END CERTIFICATE-----\n`,
       { mode: 0o644, uid: 0, gid: 0 }
+    );
+    this.writeFile(
+      '/etc/kubernetes/pki/apiserver.crt',
+      `-----BEGIN CERTIFICATE-----\nMIIDITCCAgmgAwIBAgIIZ1vMOCKCERTIFICATEFORKUBELABSINSPECTION...\n-----END CERTIFICATE-----\n`,
+      { mode: 0o644, uid: 0, gid: 0 }
+    );
+    this.writeFile(
+      '/etc/kubernetes/pki/apiserver.key',
+      `-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA0mockKeyGeneratedByKubeLabs2048bitKeyValidIsomorphic==\n-----END RSA PRIVATE KEY-----\n`,
+      { mode: 0o600, uid: 0, gid: 0 }
     );
 
     // Kubernetes Admin Kubeconfig

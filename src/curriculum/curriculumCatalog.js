@@ -151,3 +151,4 @@ module.exports = {
   DOMAINS_DIR,
   SCHEMA_PATH
 };
+
