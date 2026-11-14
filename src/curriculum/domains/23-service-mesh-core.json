@@ -1,0 +1,212 @@
+{
+  "id": "service-mesh-core",
+  "title": "Service Mesh Architecture, Envoy Proxy & Ambient Data Planes",
+  "category": "Service Mesh & Networking",
+  "trackId": "track-devsecops",
+  "version": "1.0.0",
+  "difficulty": "Intermediate",
+  "estimatedHours": 8,
+  "summary": "Master cloud-native service mesh architecture: sidecar proxy injection vs sidecarless ambient data planes (ztunnel / waypoint), Envoy xDS dynamic configuration APIs (CDS, LDS, EDS, RDS), distributed request tracing, and mesh traffic debugging.",
+  "prerequisites": [
+    "k8s-networking",
+    "kubernetes-core-v4"
+  ],
+  "learningObjectives": [
+    "Compare sidecar vs sidecarless ambient service mesh architectures and evaluate memory/CPU tradeoffs.",
+    "Inspect and debug Envoy proxy xDS configuration states (CDS, LDS, EDS, RDS) using istioctl proxy-status.",
+    "Enforce namespace-wide automated sidecar injection labels and verify proxy container attachment."
+  ],
+  "curriculumModules": [
+    {
+      "id": "mod-mesh-01",
+      "title": "Data Plane Architectures: Sidecar Proxies vs Ambient Mesh",
+      "conceptSummary": "Traditional service meshes inject an Envoy sidecar proxy into every application Pod, consuming 50-100MB RAM per pod. Ambient mesh separates the data plane into node-shared L4 zero-trust tunnels (ztunnel) and opt-in per-service L7 waypoint proxies, eliminating sidecar lifecycle coupling and reducing cluster memory footprints.",
+      "productionArchitecturePattern": "Adopt sidecar injection on high-density sensitive namespaces requiring fine-grained L7 policies; utilize ambient mesh for high-scale, multi-tenant clusters to reduce compute costs and eliminate restart cycles on mesh upgrades.",
+      "keyCommands": [
+        "kubectl label namespace default istio-injection=enabled",
+        "istioctl proxy-status",
+        "kubectl get pods -l istio.io/rev"
+      ]
+    },
+    {
+      "id": "mod-mesh-02",
+      "title": "Envoy xDS Dynamic Configuration & Proxy Diagnostics",
+      "conceptSummary": "The control plane programs Envoy proxies via xDS gRPC streams: Cluster Discovery (CDS), Listener Discovery (LDS), Endpoint Discovery (EDS), and Route Discovery (RDS). Mismatches or sync delays trigger stale routing and 503 Service Unavailable errors.",
+      "productionArchitecturePattern": "Automate istioctl analyze in continuous delivery pipelines to detect route misconfigurations before deployment, and monitor Envoy cluster_manager.cds.version telemetry.",
+      "keyCommands": [
+        "istioctl analyze -n production",
+        "istioctl proxy-config endpoints <pod>",
+        "istioctl proxy-config routes <pod>"
+      ]
+    }
+  ],
+  "labs": [
+    {
+      "id": "lab-mesh-01-sidecar-injection",
+      "title": "Enforcing Automated Sidecar Injection and Validating xDS Sync",
+      "difficulty": "Intermediate",
+      "durationMinutes": 20,
+      "xpReward": 150,
+      "scenario": "Configure service mesh namespace governance: label namespace mesh-apps with istio-injection=enabled, deploy application Pod web-frontend in namespace mesh-apps, and run istioctl proxy-status to verify Envoy proxy synchronization.",
+      "productionContext": "Automated sidecar injection ensures all microservices within a tenant boundary inherit cryptographic mutual TLS and distributed observability without application code modification.",
+      "prerequisites": [
+        "lab-k8snet-01-cni-services-dns"
+      ],
+      "objectives": [
+        "Create and label namespace mesh-apps with istio-injection=enabled.",
+        "Deploy Pod web-frontend in namespace mesh-apps.",
+        "Verify Envoy proxy synchronization via istioctl proxy-status."
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "apiVersion: v1\nkind: Pod\nmetadata:\n  name: web-frontend\n  namespace: mesh-apps\n  labels:\n    app: web-frontend\nspec:\n  containers:\n    - name: web\n      image: nginx:1.27-alpine\n",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Create and label namespace",
+          "instruction": "Create namespace mesh-apps and apply label istio-injection=enabled.",
+          "commandHint": "kubectl create namespace mesh-apps\nkubectl label namespace mesh-apps istio-injection=enabled"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Deploy application workload",
+          "instruction": "Save and apply the Pod manifest to namespace mesh-apps.",
+          "commandHint": "cat << 'EOF' > /mesh/web-frontend.yaml\n...\nEOF\nkubectl apply -f /mesh/web-frontend.yaml"
+        },
+        {
+          "stepNumber": 3,
+          "title": "Inspect proxy status",
+          "instruction": "Execute istioctl proxy-status to verify proxy synchronization with Istiod.",
+          "commandHint": "istioctl proxy-status"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "namespace-mesh-apps-labeled",
+          "description": "Namespace mesh-apps has label istio-injection=enabled",
+          "type": "resource_field_equals",
+          "kind": "Namespace",
+          "name": "mesh-apps",
+          "fieldPath": "metadata.labels['istio-injection']",
+          "expectedValue": "enabled",
+          "remediation": "Run kubectl label namespace mesh-apps istio-injection=enabled"
+        },
+        {
+          "id": "pod-web-frontend-running",
+          "description": "Pod web-frontend exists in namespace mesh-apps",
+          "type": "resource_exists",
+          "kind": "Pod",
+          "namespace": "mesh-apps",
+          "name": "web-frontend",
+          "remediation": "Deploy Pod web-frontend in namespace mesh-apps"
+        },
+        {
+          "id": "istioctl-proxy-status-executed",
+          "description": "istioctl proxy-status executed",
+          "type": "command_executed",
+          "commandSubstring": "istioctl proxy-status",
+          "remediation": "Execute istioctl proxy-status"
+        }
+      ],
+      "solutionCommands": [
+        "mkdir -p /mesh",
+        "kubectl create namespace mesh-apps",
+        "kubectl label namespace mesh-apps istio-injection=enabled",
+        "cat << 'EOF' > /mesh/web-frontend.yaml\napiVersion: v1\nkind: Pod\nmetadata:\n  name: web-frontend\n  namespace: mesh-apps\n  labels:\n    app: web-frontend\nspec:\n  containers:\n    - name: web\n      image: nginx:1.27-alpine\nEOF",
+        "kubectl apply -f /mesh/web-frontend.yaml",
+        "istioctl proxy-status"
+      ],
+      "troubleshootingGuide": [
+        {
+          "problem": "Namespace label missing or istioctl command not executed.",
+          "cause": "Label was omitted or proxy-status check was not run.",
+          "solution": "Execute kubectl label namespace mesh-apps istio-injection=enabled and istioctl proxy-status."
+        }
+      ]
+    },
+    {
+      "id": "lab-mesh-02-mesh-diagnostics",
+      "title": "Running Automated Mesh Configuration Audits with istioctl analyze",
+      "difficulty": "Intermediate",
+      "durationMinutes": 20,
+      "xpReward": 150,
+      "scenario": "Execute proactive configuration analysis on namespace production using istioctl analyze, save the audit log to /mesh/analyze-report.txt, and confirm zero syntax or reference errors exist in the mesh topology.",
+      "productionContext": "Running istioctl analyze catches orphaned VirtualServices, invalid DestinationRule subsets, and Gateway port mismatches before traffic disruption occurs in production.",
+      "prerequisites": [
+        "lab-mesh-01-sidecar-injection"
+      ],
+      "objectives": [
+        "Execute istioctl analyze on namespace production.",
+        "Redirect audit findings to /mesh/analyze-report.txt.",
+        "Verify output contains validation success confirmation."
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "# istioctl analyze configuration diagnostic\n# Namespace: production\n# Output target: /mesh/analyze-report.txt\n",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Run mesh analysis",
+          "instruction": "Execute istioctl analyze on namespace production redirecting output to /mesh/analyze-report.txt.",
+          "commandHint": "istioctl analyze -n production > /mesh/analyze-report.txt"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "istioctl-analyze-executed",
+          "description": "istioctl analyze executed",
+          "type": "command_executed",
+          "commandSubstring": "istioctl analyze",
+          "remediation": "Execute istioctl analyze -n production"
+        },
+        {
+          "id": "analyze-report-file-exists",
+          "description": "/mesh/analyze-report.txt contains audit results",
+          "type": "vfs_file_contains",
+          "path": "/mesh/analyze-report.txt",
+          "pattern": "No validation issues found",
+          "remediation": "Redirect istioctl analyze output to /mesh/analyze-report.txt"
+        }
+      ],
+      "solutionCommands": [
+        "mkdir -p /mesh",
+        "istioctl analyze -n production > /mesh/analyze-report.txt"
+      ],
+      "troubleshootingGuide": [
+        {
+          "problem": "/mesh/analyze-report.txt missing or empty.",
+          "cause": "Command was executed without output redirection.",
+          "solution": "Run istioctl analyze -n production > /mesh/analyze-report.txt."
+        }
+      ]
+    }
+  ],
+  "assessmentQuestions": [
+    {
+      "id": "q-mesh-01",
+      "question": "What is the primary architectural advantage of Istio Ambient Mesh over traditional sidecar-based service meshes?",
+      "options": [
+        "Ambient mesh compiles application binaries into WebAssembly modules.",
+        "Ambient mesh separates L4 transport zero-trust encryption (ztunnel on each node) from optional L7 application processing (waypoint proxies), reducing per-pod memory overhead from 50MB+ to zero and avoiding application pod restarts during mesh upgrades.",
+        "Ambient mesh replaces all Kubernetes services with DNS SRV records.",
+        "Ambient mesh bypasses Linux kernel packet routing entirely."
+      ],
+      "correctIndex": 1,
+      "explanation": "Ambient mesh eliminates the sidecar proxy from application pods. Node-level ztunnels handle mTLS at Layer 4 with negligible memory overhead, while Layer 7 waypoint proxies scale independently per service."
+    },
+    {
+      "id": "q-mesh-02",
+      "question": "In Envoy proxy terminology, what do CDS and EDS represent in the dynamic xDS control plane protocol?",
+      "options": [
+        "CDS is Container Delivery Service and EDS is Endpoint Delivery Service.",
+        "CDS is Cluster Discovery Service (discovering upstream service clusters) and EDS is Endpoint Discovery Service (discovering dynamic backend pod IP/port endpoints).",
+        "CDS is Certificate Distribution Service and EDS is Encryption Distribution Service.",
+        "CDS is ConfigMap Data Source and EDS is Etcd Data Source."
+      ],
+      "correctIndex": 1,
+      "explanation": "CDS (Cluster Discovery Service) informs Envoy about upstream clusters (services), while EDS (Endpoint Discovery Service) dynamically streams the individual Pod IP endpoints backing those clusters without requiring configuration reload."
+    }
+  ]
+}

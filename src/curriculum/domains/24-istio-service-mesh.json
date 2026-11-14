@@ -1,0 +1,211 @@
+{
+  "id": "istio-service-mesh",
+  "title": "Istio Service Mesh Traffic Management, Security & mTLS",
+  "category": "Service Mesh & Networking",
+  "trackId": "track-devsecops",
+  "version": "1.0.0",
+  "difficulty": "Intermediate",
+  "estimatedHours": 8,
+  "summary": "Master advanced Istio service mesh operations: Ingress Gateways, VirtualService canary routing, weighted splits, HTTP fault injection, DestinationRule connection pools and outlier detection, and STRICT PeerAuthentication mTLS encryption.",
+  "prerequisites": [
+    "service-mesh-core",
+    "k8s-networking"
+  ],
+  "learningObjectives": [
+    "Implement progressive canary rollouts and weighted traffic splits using Istio VirtualService custom resources.",
+    "Configure circuit breaking and outlier detection using DestinationRule connectionPool and outlierDetection.",
+    "Enforce zero-trust encrypted transit across the mesh using PeerAuthentication STRICT mutual TLS."
+  ],
+  "curriculumModules": [
+    {
+      "id": "mod-istio-01",
+      "title": "Traffic Routing, Canary Splits & Fault Injection",
+      "conceptSummary": "Istio decouples traffic management from application deployment. VirtualServices route HTTP traffic by URI prefix, headers, or query parameters, distributing weighted splits across DestinationRule subsets (e.g. 90% v1, 10% v2). Fault injection introduces controlled latency delays or HTTP aborts to test resiliency.",
+      "productionArchitecturePattern": "Shift production traffic gradually to canary subsets (10% -> 25% -> 50% -> 100%) while observing error rates and P99 latency via Prometheus ServiceMonitors before completing deployment.",
+      "keyCommands": [
+        "kubectl get virtualservices -A",
+        "kubectl get destinationrules -A",
+        "kubectl get gateways -A"
+      ]
+    },
+    {
+      "id": "mod-istio-02",
+      "title": "Resiliency & Zero-Trust mTLS Encryption",
+      "conceptSummary": "DestinationRules configure upstream connection pools, max connections, and outlier detection (circuit breaking) to eject unhealthy pods failing consecutive 5xx errors. PeerAuthentication enforces mTLS mode (STRICT vs PERMISSIVE), guaranteeing cryptographic identity and encryption in transit.",
+      "productionArchitecturePattern": "Mandate PeerAuthentication mode: STRICT in root namespace istio-system, preventing unauthenticated plaintext traffic between mesh workloads.",
+      "keyCommands": [
+        "kubectl get peerauthentications -A",
+        "istioctl authn tls-check reviews.production.svc.cluster.local"
+      ]
+    }
+  ],
+  "labs": [
+    {
+      "id": "lab-istio-01-canary-routing",
+      "title": "Configuring Istio VirtualService Canary Traffic Routing",
+      "difficulty": "Intermediate",
+      "durationMinutes": 20,
+      "xpReward": 150,
+      "scenario": "Configure progressive delivery: author and apply a VirtualService named checkout-vs in namespace default with host checkout.kubelabs.io matching prefix /checkout and routing to destination host checkout-service with subset v1. Also apply DestinationRule checkout-dr defining subset v1 with labels version: v1.",
+      "productionContext": "Canary routing enables risk-free deployment testing by directing specific paths or canary cohorts to new release subsets without risking broader traffic.",
+      "prerequisites": [
+        "lab-mesh-01-sidecar-injection"
+      ],
+      "objectives": [
+        "Apply DestinationRule checkout-dr with subset v1.",
+        "Apply VirtualService checkout-vs routing /checkout to checkout-service:v1.",
+        "Verify route resolution matches checkout-service:v1."
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "apiVersion: networking.istio.io/v1beta1\nkind: DestinationRule\nmetadata:\n  name: checkout-dr\n  namespace: default\nspec:\n  host: checkout-service\n  subsets:\n    - name: v1\n      labels:\n        version: v1\n---\napiVersion: networking.istio.io/v1beta1\nkind: VirtualService\nmetadata:\n  name: checkout-vs\n  namespace: default\nspec:\n  hosts:\n    - checkout.kubelabs.io\n  http:\n    - match:\n        - uri:\n            prefix: /checkout\n      route:\n        - destination:\n            host: checkout-service\n            subset: v1\n",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Author DestinationRule and VirtualService",
+          "instruction": "Save the routing manifests to /mesh/checkout-mesh.yaml and apply to default namespace.",
+          "commandHint": "cat << 'EOF' > /mesh/checkout-mesh.yaml\n...\nEOF\nkubectl apply -f /mesh/checkout-mesh.yaml"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "checkout-dr-exists",
+          "description": "DestinationRule checkout-dr exists in default",
+          "type": "resource_exists",
+          "kind": "DestinationRule",
+          "namespace": "default",
+          "name": "checkout-dr",
+          "remediation": "Apply DestinationRule checkout-dr in default namespace"
+        },
+        {
+          "id": "checkout-vs-exists",
+          "description": "VirtualService checkout-vs exists in default",
+          "type": "resource_exists",
+          "kind": "VirtualService",
+          "namespace": "default",
+          "name": "checkout-vs",
+          "remediation": "Apply VirtualService checkout-vs in default namespace"
+        },
+        {
+          "id": "istio-route-matches-v1",
+          "description": "Route /checkout resolves to checkout-service:v1",
+          "type": "istio_route_matches",
+          "virtualService": "checkout-vs",
+          "uri": "/checkout",
+          "expectedHost": "checkout-service",
+          "expectedSubset": "v1",
+          "remediation": "Configure VirtualService checkout-vs to route prefix /checkout to checkout-service:v1"
+        }
+      ],
+      "solutionCommands": [
+        "mkdir -p /mesh",
+        "cat << 'EOF' > /mesh/checkout-mesh.yaml\napiVersion: networking.istio.io/v1beta1\nkind: DestinationRule\nmetadata:\n  name: checkout-dr\n  namespace: default\nspec:\n  host: checkout-service\n  subsets:\n    - name: v1\n      labels:\n        version: v1\n---\napiVersion: networking.istio.io/v1beta1\nkind: VirtualService\nmetadata:\n  name: checkout-vs\n  namespace: default\nspec:\n  hosts:\n    - checkout.kubelabs.io\n  http:\n    - match:\n        - uri:\n            prefix: /checkout\n      route:\n        - destination:\n            host: checkout-service\n            subset: v1\nEOF",
+        "kubectl apply -f /mesh/checkout-mesh.yaml"
+      ],
+      "troubleshootingGuide": [
+        {
+          "problem": "Route matching fails or destination host/subset does not match.",
+          "cause": "The VirtualService match prefix or destination subset was incorrectly defined.",
+          "solution": "Verify uri.prefix is /checkout and destination.subset is v1."
+        }
+      ]
+    },
+    {
+      "id": "lab-istio-02-peer-authentication-mtls",
+      "title": "Enforcing Mesh-Wide STRICT Mutual TLS (mTLS)",
+      "difficulty": "Intermediate",
+      "durationMinutes": 20,
+      "xpReward": 150,
+      "scenario": "Enforce zero-trust encryption across all workloads: create namespace istio-system and apply a root PeerAuthentication named default with mtls.mode set to STRICT.",
+      "productionContext": "Enforcing STRICT mTLS guarantees that all service-to-service communication is authenticated and encrypted via x509 certificates managed by Istiod.",
+      "prerequisites": [
+        "lab-istio-01-canary-routing"
+      ],
+      "objectives": [
+        "Create namespace istio-system.",
+        "Apply PeerAuthentication default in namespace istio-system with mtls.mode: STRICT.",
+        "Verify mtls.mode is set to STRICT."
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "apiVersion: security.istio.io/v1beta1\nkind: PeerAuthentication\nmetadata:\n  name: default\n  namespace: istio-system\nspec:\n  mtls:\n    mode: STRICT\n",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Create istio-system namespace",
+          "instruction": "Create the root control plane namespace istio-system.",
+          "commandHint": "kubectl create namespace istio-system"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Apply root PeerAuthentication",
+          "instruction": "Save and apply PeerAuthentication with mode STRICT to istio-system.",
+          "commandHint": "cat << 'EOF' > /mesh/strict-mtls.yaml\n...\nEOF\nkubectl apply -f /mesh/strict-mtls.yaml"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "peerauth-default-exists",
+          "description": "PeerAuthentication default exists in namespace istio-system",
+          "type": "resource_exists",
+          "kind": "PeerAuthentication",
+          "namespace": "istio-system",
+          "name": "default",
+          "remediation": "Apply PeerAuthentication default in namespace istio-system"
+        },
+        {
+          "id": "peerauth-mode-strict",
+          "description": "PeerAuthentication mtls.mode is STRICT",
+          "type": "resource_field_equals",
+          "kind": "PeerAuthentication",
+          "namespace": "istio-system",
+          "name": "default",
+          "fieldPath": "spec.mtls.mode",
+          "expectedValue": "STRICT",
+          "remediation": "Set spec.mtls.mode: STRICT on PeerAuthentication default"
+        }
+      ],
+      "solutionCommands": [
+        "mkdir -p /mesh",
+        "kubectl create namespace istio-system",
+        "cat << 'EOF' > /mesh/strict-mtls.yaml\napiVersion: security.istio.io/v1beta1\nkind: PeerAuthentication\nmetadata:\n  name: default\n  namespace: istio-system\nspec:\n  mtls:\n    mode: STRICT\nEOF",
+        "kubectl apply -f /mesh/strict-mtls.yaml"
+      ],
+      "troubleshootingGuide": [
+        {
+          "problem": "PeerAuthentication mode is not STRICT.",
+          "cause": "The spec.mtls.mode property was omitted or set to PERMISSIVE.",
+          "solution": "Update /mesh/strict-mtls.yaml with spec.mtls.mode: STRICT and re-apply."
+        }
+      ]
+    }
+  ],
+  "assessmentQuestions": [
+    {
+      "id": "q-istio-01",
+      "question": "What happens when an Istio PeerAuthentication resource is applied with mtls.mode: STRICT?",
+      "options": [
+        "All ingress HTTP traffic is converted to gRPC automatically.",
+        "Workloads in that namespace (or root mesh-wide) reject any plaintext connection and require valid mTLS x509 client certificates issued by Istiod.",
+        "Pods are immediately scaled to 5 replicas.",
+        "External internet access is blocked for worker nodes."
+      ],
+      "correctIndex": 1,
+      "explanation": "In STRICT mode, Envoy sidecars only accept mutual TLS traffic with valid SPIFFE identities. Any client attempting to send unencrypted plaintext requests receives a connection reset."
+    },
+    {
+      "id": "q-istio-02",
+      "question": "In Istio traffic management, what is the distinct function of a DestinationRule compared to a VirtualService?",
+      "options": [
+        "DestinationRules only manage DNS resolution while VirtualServices configure IP routing.",
+        "VirtualServices match incoming traffic and define routing rules, while DestinationRules configure policies applied to traffic arriving at upstream destinations (subsets, load balancing algorithms, circuit breaking, outlier detection, and mTLS).",
+        "DestinationRules are deprecated in favor of Kubernetes Ingress.",
+        "VirtualServices run exclusively on the control plane while DestinationRules run on client laptops."
+      ],
+      "correctIndex": 1,
+      "explanation": "VirtualServices specify where traffic should go (routing rules, URL rewrites, canary splits). DestinationRules define how to handle traffic when connecting to those targets (connection pools, subsets, outlier ejection)."
+    }
+  ]
+}

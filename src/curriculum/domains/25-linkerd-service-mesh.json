@@ -1,0 +1,212 @@
+{
+  "id": "linkerd-service-mesh",
+  "title": "Linkerd Service Mesh, Rust Micro-Proxies & ServiceProfiles",
+  "category": "Service Mesh & Networking",
+  "trackId": "track-devsecops",
+  "version": "1.0.0",
+  "difficulty": "Intermediate",
+  "estimatedHours": 8,
+  "summary": "Master Linkerd lightweight service mesh operations: ultra-fast Rust micro-proxy (linkerd2-proxy) data planes, automatic zero-configuration mutual TLS (mTLS), ServiceProfile route classification, retry budgets, circuit breaking, and Linkerd Viz telemetry observability.",
+  "prerequisites": [
+    "service-mesh-core",
+    "k8s-networking"
+  ],
+  "learningObjectives": [
+    "Understand Linkerd micro-proxy (linkerd2-proxy) architecture in Rust and automatic zero-configuration mutual TLS.",
+    "Configure Linkerd ServiceProfiles with dynamic route classification and retry budgets to prevent cascading retry storms.",
+    "Utilize linkerd check and linkerd viz stat to monitor service mesh golden signals (success rate, RPS, latency)."
+  ],
+  "curriculumModules": [
+    {
+      "id": "mod-linkerd-01",
+      "title": "Rust Data Plane & Zero-Configuration mTLS",
+      "conceptSummary": "Linkerd emphasizes simplicity and ultra-low resource utilization by using a purpose-built micro-proxy written in Rust (linkerd2-proxy) rather than general-purpose Envoy. It automatically provisions transient mutual TLS between meshed workloads with zero configuration, rotating short-lived cryptographic identities managed by the Linkerd Identity controller.",
+      "productionArchitecturePattern": "Deploy Linkerd in resource-constrained Kubernetes environments or low-latency microservices architectures where sub-millisecond proxy overhead and minimal memory consumption (<20MB per pod) are required.",
+      "keyCommands": [
+        "linkerd check",
+        "linkerd version",
+        "linkerd identity"
+      ]
+    },
+    {
+      "id": "mod-linkerd-02",
+      "title": "ServiceProfiles, Retry Budgets & TrafficSplit",
+      "conceptSummary": "Linkerd ServiceProfiles define per-route client-side metrics, retries, and timeouts. Unlike naive infinite retries that trigger cascading overload, Linkerd retry budgets define a maximum ratio of additional retry requests (e.g. retryRatio: 0.2 allows at most 20% extra retry traffic), protecting struggling upstream services from collapse.",
+      "productionArchitecturePattern": "Author ServiceProfiles for all critical API endpoints, explicitly marking idempotent GET routes as isRetryable: true with bounded retryRatio budgets to safeguard upstream backends.",
+      "keyCommands": [
+        "kubectl get serviceprofiles -A",
+        "linkerd viz stat",
+        "linkerd viz top deploy/orders-api"
+      ]
+    }
+  ],
+  "labs": [
+    {
+      "id": "lab-linkerd-01-service-profile",
+      "title": "Configuring Linkerd ServiceProfiles & Resilient Retry Budgets",
+      "difficulty": "Intermediate",
+      "durationMinutes": 20,
+      "xpReward": 150,
+      "scenario": "Define service resiliency for payment processing: author and apply a Linkerd ServiceProfile for payment-service.default.svc.cluster.local in namespace default. Configure a retry budget with retryRatio 0.2, minRetriesPerSecond 10, ttl 10s, and define route GetPayment matching regex /api/v1/payments.* with isRetryable set to true.",
+      "productionContext": "Retry budgets protect backend microservices from cascading retry storms during partial outages by strictly capping the proportion of retry requests proxies may issue.",
+      "prerequisites": [
+        "lab-mesh-01-sidecar-injection"
+      ],
+      "objectives": [
+        "Create and apply ServiceProfile payment-service.default.svc.cluster.local in default namespace.",
+        "Configure retryBudget with retryRatio 0.2 and minRetriesPerSecond 10.",
+        "Define route GetPayment matching pathRegex /api/v1/payments.* with isRetryable: true."
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "apiVersion: linkerd.io/v1alpha2\nkind: ServiceProfile\nmetadata:\n  name: payment-service.default.svc.cluster.local\n  namespace: default\nspec:\n  retryBudget:\n    retryRatio: 0.2\n    minRetriesPerSecond: 10\n    ttl: 10s\n  routes:\n    - name: GetPayment\n      condition:\n        method: GET\n        pathRegex: /api/v1/payments.*\n      isRetryable: true\n",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Author ServiceProfile Manifest",
+          "instruction": "Save the ServiceProfile manifest with retryBudget and GetPayment route to /mesh/payment-serviceprofile.yaml.",
+          "commandHint": "cat << 'EOF' > /mesh/payment-serviceprofile.yaml\n...\nEOF"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Apply ServiceProfile to Cluster",
+          "instruction": "Apply the ServiceProfile to namespace default.",
+          "commandHint": "kubectl apply -f /mesh/payment-serviceprofile.yaml"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "sp-payment-exists",
+          "description": "ServiceProfile payment-service exists in default namespace",
+          "type": "resource_exists",
+          "kind": "ServiceProfile",
+          "namespace": "default",
+          "name": "payment-service.default.svc.cluster.local",
+          "remediation": "Apply ServiceProfile payment-service.default.svc.cluster.local in default namespace"
+        },
+        {
+          "id": "sp-retry-budget-ratio",
+          "description": "ServiceProfile retryBudget.retryRatio is 0.2",
+          "type": "resource_field_equals",
+          "kind": "ServiceProfile",
+          "namespace": "default",
+          "name": "payment-service.default.svc.cluster.local",
+          "fieldPath": "spec.retryBudget.retryRatio",
+          "expectedValue": 0.2,
+          "remediation": "Set spec.retryBudget.retryRatio: 0.2 on ServiceProfile"
+        },
+        {
+          "id": "sp-route-getpayment-name",
+          "description": "ServiceProfile has route GetPayment",
+          "type": "resource_field_equals",
+          "kind": "ServiceProfile",
+          "namespace": "default",
+          "name": "payment-service.default.svc.cluster.local",
+          "fieldPath": "spec.routes[0].name",
+          "expectedValue": "GetPayment",
+          "remediation": "Define route named GetPayment in spec.routes"
+        }
+      ],
+      "solutionCommands": [
+        "mkdir -p /mesh",
+        "cat << 'EOF' > /mesh/payment-serviceprofile.yaml\napiVersion: linkerd.io/v1alpha2\nkind: ServiceProfile\nmetadata:\n  name: payment-service.default.svc.cluster.local\n  namespace: default\nspec:\n  retryBudget:\n    retryRatio: 0.2\n    minRetriesPerSecond: 10\n    ttl: 10s\n  routes:\n    - name: GetPayment\n      condition:\n        method: GET\n        pathRegex: /api/v1/payments.*\n      isRetryable: true\nEOF",
+        "kubectl apply -f /mesh/payment-serviceprofile.yaml"
+      ],
+      "troubleshootingGuide": [
+        {
+          "problem": "ServiceProfile not found or retryRatio incorrect.",
+          "cause": "The ServiceProfile name must match the full service FQDN payment-service.default.svc.cluster.local.",
+          "solution": "Verify metadata.name is payment-service.default.svc.cluster.local and re-apply."
+        }
+      ]
+    },
+    {
+      "id": "lab-linkerd-02-viz-telemetry",
+      "title": "Auditing Mesh Control Plane Health and Golden Signals with Linkerd Viz",
+      "difficulty": "Intermediate",
+      "durationMinutes": 20,
+      "xpReward": 150,
+      "scenario": "Verify service mesh runtime health and live telemetry: execute linkerd check to validate control plane controller pods and API connectivity, then execute linkerd viz stat to inspect real-time success rates, requests per second (RPS), and P50-P99 latency distribution across meshed workloads.",
+      "productionContext": "Linkerd Viz telemetry provides instantaneous L7 golden signals without requiring dedicated Prometheus dashboards, making rapid diagnostics possible during production incidents.",
+      "prerequisites": [
+        "lab-linkerd-01-service-profile"
+      ],
+      "objectives": [
+        "Execute linkerd check to verify control plane and extension readiness.",
+        "Execute linkerd viz stat to inspect live golden signals and mesh success rates."
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "# Linkerd control plane audit and telemetry diagnostic\n# Run: linkerd check && linkerd viz stat\n",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Run linkerd check",
+          "instruction": "Execute linkerd check to verify control plane status.",
+          "commandHint": "linkerd check"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Run linkerd viz stat",
+          "instruction": "Execute linkerd viz stat to inspect real-time telemetry metrics.",
+          "commandHint": "linkerd viz stat"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "linkerd-check-executed",
+          "description": "linkerd check executed",
+          "type": "command_executed",
+          "commandSubstring": "linkerd check",
+          "remediation": "Execute linkerd check"
+        },
+        {
+          "id": "linkerd-viz-stat-executed",
+          "description": "linkerd viz stat executed",
+          "type": "command_executed",
+          "commandSubstring": "linkerd viz stat",
+          "remediation": "Execute linkerd viz stat"
+        }
+      ],
+      "solutionCommands": [
+        "linkerd check",
+        "linkerd viz stat"
+      ],
+      "troubleshootingGuide": [
+        {
+          "problem": "linkerd commands fail or return unready status.",
+          "cause": "Commands were not invoked or linkerd CLI was omitted.",
+          "solution": "Execute linkerd check and linkerd viz stat in the terminal."
+        }
+      ]
+    }
+  ],
+  "assessmentQuestions": [
+    {
+      "id": "q-linkerd-01",
+      "question": "What is the primary design philosophy and architectural difference between Linkerd's data plane proxy (linkerd2-proxy) and Envoy?",
+      "options": [
+        "Linkerd compiles all routing rules directly into the Linux eBPF kernel without any user-space proxy.",
+        "Linkerd uses a dedicated, ultra-lightweight micro-proxy written in Rust (linkerd2-proxy) designed specifically for service mesh sidecar operations with minimal memory (<20MB) and CPU footprint, whereas Envoy is a general-purpose C++ proxy with a broader feature set and higher memory usage.",
+        "Linkerd runs as a Python daemon process inside the control plane.",
+        "Linkerd requires manual SSH key exchange between pods to establish TLS tunnels."
+      ],
+      "correctIndex": 1,
+      "explanation": "linkerd2-proxy is written in Rust to provide memory safety, deterministic low resource consumption (typically <20MB), and minimal latency overhead compared to general-purpose proxies."
+    },
+    {
+      "id": "q-linkerd-02",
+      "question": "In a Linkerd ServiceProfile, what is the role of a retryBudget?",
+      "options": [
+        "It limits the maximum monetary cost of cloud egress bandwidth.",
+        "It defines the maximum allowable ratio of retry requests (e.g. retryRatio: 0.2 allows at most 20% retries on top of normal traffic) to prevent cascading retry storms from overwhelming an already degraded upstream service.",
+        "It automatically increases Pod CPU requests whenever response latency exceeds 500ms.",
+        "It restarts any pod whose container memory exceeds the retry limit."
+      ],
+      "correctIndex": 1,
+      "explanation": "A retry budget bounds the proportion of extra traffic proxies can send as retries. This prevents the catastrophic retry storm phenomenon where retries multiply and crash degraded backends."
+    }
+  ]
+}
