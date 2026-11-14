@@ -1,0 +1,258 @@
+{
+  "id": "platform-engineering",
+  "title": "Platform Engineering, Internal Developer Platforms (IDP) & Developer Portals",
+  "category": "Platform Engineering & Security",
+  "trackId": "track-platform",
+  "version": "1.0.0",
+  "difficulty": "Advanced",
+  "estimatedHours": 8,
+  "summary": "Master modern enterprise platform engineering and Internal Developer Platforms (IDP): architecting self-service Golden Paths to replace ticket-based DevOps queues, configuring Backstage software catalogs (catalog-info.yaml) and declarative Scaffolder templates, standardizing workload definitions with Score (score.yaml), and provisioning self-service multi-tenant developer sandboxes with ResourceQuotas and LimitRanges.",
+  "prerequisites": [
+    "system-design",
+    "microservices-architecture"
+  ],
+  "learningObjectives": [
+    "Architect Internal Developer Platforms (IDP) with self-service Golden Paths that reduce cognitive load for application developers.",
+    "Configure Backstage software catalog components and declarative software templates for standardized service scaffolding.",
+    "Implement Score workload specifications and automated developer sandbox tenant provisioning with strict resource quotas."
+  ],
+  "curriculumModules": [
+    {
+      "id": "mod-plat-01",
+      "title": "Internal Developer Platforms (IDP), Golden Paths & Backstage Catalog",
+      "conceptSummary": "Platform Engineering treats the underlying cloud and Kubernetes platform as a product, providing paved roads (Golden Paths) that allow application developers to ship code independently without managing Kubernetes primitives. Spotify Backstage unifies software ownership through a centralized Software Catalog (catalog-info.yaml), technical documentation, and Scaffolder templates that automate repository initialization, CI/CD pipelines, and cloud resources with a single click.",
+      "productionArchitecturePattern": "Register declarative catalog-info.yaml metadata manifests in application repositories to track microservice ownership, lifecycle stage, and system dependencies in the central developer portal.",
+      "keyCommands": [
+        "cat /idp/catalog-info.yaml",
+        "kubectl apply -f /idp/backstage-catalog.yaml"
+      ]
+    },
+    {
+      "id": "mod-plat-02",
+      "title": "Score Workload Specification & Self-Service Tenant Sandboxes",
+      "conceptSummary": "Infrastructure abstraction requires declarative workload contracts. The Score specification (score.yaml) defines container requirements, environment variables, and resource dependencies without coupling to Kubernetes or cloud-specific syntax; platform orchestrators translate Score files into target environment manifests. To prevent noisy neighbor resource starvation, self-service developer sandboxes enforce namespace isolation paired with strict ResourceQuota and LimitRange compute caps.",
+      "productionArchitecturePattern": "Automate self-service developer tenant namespaces provisioned with non-overcommittable CPU/memory ResourceQuotas and default container memory LimitRanges.",
+      "keyCommands": [
+        "kubectl apply -f /idp/tenant-sandbox.yaml",
+        "kubectl get resourcequotas -A",
+        "kubectl get limitranges -A"
+      ]
+    }
+  ],
+  "labs": [
+    {
+      "id": "lab-plat-01-backstage-catalog",
+      "title": "Backstage Software Catalog Component & Service Ownership Metadata",
+      "difficulty": "Advanced",
+      "durationMinutes": 20,
+      "xpReward": 150,
+      "scenario": "Standardize service ownership and architecture metadata in the developer portal: author a Backstage component manifest in /idp/backstage-catalog.yaml defining ConfigMap backstage-catalog-manifest in namespace production with componentName: payment-gateway, componentType: service, lifecycle: production, and owner: team-fintech. Apply to namespace production.",
+      "productionContext": "Centralized software catalog manifests eliminate orphaned microservices, accelerate incident response by displaying on-call ownership, and automate dependency graph tracking.",
+      "prerequisites": [
+        "lab-sys-02-token-bucket-ratelimit"
+      ],
+      "objectives": [
+        "Create namespace production if not present.",
+        "Author ConfigMap backstage-catalog-manifest.",
+        "Configure componentName to payment-gateway.",
+        "Configure owner to team-fintech.",
+        "Apply ConfigMap to namespace production."
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: backstage-catalog-manifest\n  namespace: production\ndata:\n  componentName: \"payment-gateway\"\n  componentType: \"service\"\n  lifecycle: \"production\"\n  owner: \"team-fintech\"\n  catalogInfoYaml: \"apiVersion: backstage.io/v1alpha1\\nkind: Component\\nmetadata:\\n  name: payment-gateway\\nspec:\\n  type: service\\n  lifecycle: production\\n  owner: team-fintech\\n\"\n",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Create production namespace",
+          "instruction": "Create namespace production if not present.",
+          "commandHint": "kubectl create namespace production"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Author Backstage catalog manifest",
+          "instruction": "Author manifest /idp/backstage-catalog.yaml defining ConfigMap backstage-catalog-manifest.",
+          "commandHint": "cat << 'EOF' > /idp/backstage-catalog.yaml\n...\nEOF"
+        },
+        {
+          "stepNumber": 3,
+          "title": "Apply catalog manifest",
+          "instruction": "Apply manifest to namespace production.",
+          "commandHint": "kubectl apply -f /idp/backstage-catalog.yaml"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "cm-backstage-exists",
+          "description": "ConfigMap backstage-catalog-manifest exists in namespace production",
+          "type": "resource_exists",
+          "kind": "ConfigMap",
+          "namespace": "production",
+          "name": "backstage-catalog-manifest",
+          "remediation": "Apply ConfigMap backstage-catalog-manifest in namespace production"
+        },
+        {
+          "id": "cm-backstage-name",
+          "description": "ConfigMap componentName is payment-gateway",
+          "type": "resource_field_equals",
+          "kind": "ConfigMap",
+          "namespace": "production",
+          "name": "backstage-catalog-manifest",
+          "fieldPath": "data.componentName",
+          "expectedValue": "payment-gateway",
+          "remediation": "Set data.componentName: payment-gateway on ConfigMap backstage-catalog-manifest"
+        },
+        {
+          "id": "cm-backstage-owner",
+          "description": "ConfigMap owner is team-fintech",
+          "type": "resource_field_equals",
+          "kind": "ConfigMap",
+          "namespace": "production",
+          "name": "backstage-catalog-manifest",
+          "fieldPath": "data.owner",
+          "expectedValue": "team-fintech",
+          "remediation": "Set data.owner: team-fintech on ConfigMap backstage-catalog-manifest"
+        }
+      ],
+      "solutionCommands": [
+        "mkdir -p /idp",
+        "kubectl create namespace production",
+        "cat << 'EOF' > /idp/backstage-catalog.yaml\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: backstage-catalog-manifest\n  namespace: production\ndata:\n  componentName: \"payment-gateway\"\n  componentType: \"service\"\n  lifecycle: \"production\"\n  owner: \"team-fintech\"\n  catalogInfoYaml: \"apiVersion: backstage.io/v1alpha1\\nkind: Component\\nmetadata:\\n  name: payment-gateway\\nspec:\\n  type: service\\n  lifecycle: production\\n  owner: team-fintech\\n\"\nEOF",
+        "kubectl apply -f /idp/backstage-catalog.yaml"
+      ],
+      "troubleshootingGuide": [
+        {
+          "problem": "ConfigMap missing or metadata fields incorrect.",
+          "cause": "ConfigMap must define data.componentName as payment-gateway and data.owner as team-fintech.",
+          "solution": "Apply /idp/backstage-catalog.yaml to namespace production."
+        }
+      ]
+    },
+    {
+      "id": "lab-plat-02-self-service-sandbox",
+      "title": "Self-Service Developer Tenant Sandbox with ResourceQuotas & LimitRanges",
+      "difficulty": "Advanced",
+      "durationMinutes": 20,
+      "xpReward": 150,
+      "scenario": "Provision an isolated, self-service developer tenant sandbox for team-alpha: author a manifest in /idp/tenant-sandbox.yaml provisioning namespace sandbox-team-alpha, ResourceQuota sandbox-compute-quota capping requests.cpu to '4000m', requests.memory to '8Gi', and limits.memory to '16Gi', and LimitRange sandbox-limit-range setting default container memory limit to '1Gi'. Apply all manifests to the cluster.",
+      "productionContext": "Automated tenant sandboxes with quota enforcement give product teams total deployment freedom without risking shared cluster stability or exceeding cloud cloud computing budgets.",
+      "prerequisites": [
+        "lab-plat-01-backstage-catalog"
+      ],
+      "objectives": [
+        "Author manifest /idp/tenant-sandbox.yaml.",
+        "Create namespace sandbox-team-alpha.",
+        "Configure ResourceQuota sandbox-compute-quota with CPU and memory caps.",
+        "Configure LimitRange sandbox-limit-range with default memory limit of 1Gi.",
+        "Apply all manifests to the cluster."
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "apiVersion: v1\nkind: Namespace\nmetadata:\n  name: sandbox-team-alpha\n  labels:\n    platform.kubelabs.io/tier: sandbox\n    platform.kubelabs.io/tenant: team-alpha\n---\napiVersion: v1\nkind: ResourceQuota\nmetadata:\n  name: sandbox-compute-quota\n  namespace: sandbox-team-alpha\nspec:\n  hard:\n    requests.cpu: \"4000m\"\n    requests.memory: \"8Gi\"\n    limits.memory: \"16Gi\"\n---\napiVersion: v1\nkind: LimitRange\nmetadata:\n  name: sandbox-limit-range\n  namespace: sandbox-team-alpha\nspec:\n  limits:\n    - type: Container\n      default:\n        memory: \"1Gi\"\n",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Author tenant sandbox manifest",
+          "instruction": "Author manifest /idp/tenant-sandbox.yaml defining Namespace, ResourceQuota, and LimitRange.",
+          "commandHint": "cat << 'EOF' > /idp/tenant-sandbox.yaml\n...\nEOF"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Apply tenant sandbox manifest",
+          "instruction": "Apply manifest to the cluster.",
+          "commandHint": "kubectl apply -f /idp/tenant-sandbox.yaml"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "ns-sandbox-exists",
+          "description": "Namespace sandbox-team-alpha exists",
+          "type": "resource_exists",
+          "kind": "Namespace",
+          "name": "sandbox-team-alpha",
+          "remediation": "Create Namespace sandbox-team-alpha"
+        },
+        {
+          "id": "quota-sandbox-exists",
+          "description": "ResourceQuota sandbox-compute-quota exists in namespace sandbox-team-alpha",
+          "type": "resource_exists",
+          "kind": "ResourceQuota",
+          "namespace": "sandbox-team-alpha",
+          "name": "sandbox-compute-quota",
+          "remediation": "Apply ResourceQuota sandbox-compute-quota in namespace sandbox-team-alpha"
+        },
+        {
+          "id": "quota-requests-cpu",
+          "description": "ResourceQuota requests.cpu is '4000m'",
+          "type": "resource_field_equals",
+          "kind": "ResourceQuota",
+          "namespace": "sandbox-team-alpha",
+          "name": "sandbox-compute-quota",
+          "fieldPath": "spec.hard.requests.cpu",
+          "expectedValue": "4000m",
+          "remediation": "Set spec.hard.requests.cpu: '4000m' on ResourceQuota sandbox-compute-quota"
+        },
+        {
+          "id": "quota-limits-mem",
+          "description": "ResourceQuota limits.memory is '16Gi'",
+          "type": "resource_field_equals",
+          "kind": "ResourceQuota",
+          "namespace": "sandbox-team-alpha",
+          "name": "sandbox-compute-quota",
+          "fieldPath": "spec.hard.limits.memory",
+          "expectedValue": "16Gi",
+          "remediation": "Set spec.hard.limits.memory: '16Gi' on ResourceQuota sandbox-compute-quota"
+        },
+        {
+          "id": "limitrange-sandbox-exists",
+          "description": "LimitRange sandbox-limit-range exists in namespace sandbox-team-alpha",
+          "type": "resource_exists",
+          "kind": "LimitRange",
+          "namespace": "sandbox-team-alpha",
+          "name": "sandbox-limit-range",
+          "remediation": "Apply LimitRange sandbox-limit-range in namespace sandbox-team-alpha"
+        }
+      ],
+      "solutionCommands": [
+        "mkdir -p /idp",
+        "cat << 'EOF' > /idp/tenant-sandbox.yaml\napiVersion: v1\nkind: Namespace\nmetadata:\n  name: sandbox-team-alpha\n  labels:\n    platform.kubelabs.io/tier: sandbox\n    platform.kubelabs.io/tenant: team-alpha\n---\napiVersion: v1\nkind: ResourceQuota\nmetadata:\n  name: sandbox-compute-quota\n  namespace: sandbox-team-alpha\nspec:\n  hard:\n    requests.cpu: \"4000m\"\n    requests.memory: \"8Gi\"\n    limits.memory: \"16Gi\"\n---\napiVersion: v1\nkind: LimitRange\nmetadata:\n  name: sandbox-limit-range\n  namespace: sandbox-team-alpha\nspec:\n  limits:\n    - type: Container\n      default:\n        memory: \"1Gi\"\nEOF",
+        "kubectl apply -f /idp/tenant-sandbox.yaml"
+      ],
+      "troubleshootingGuide": [
+        {
+          "problem": "ResourceQuota or LimitRange missing or quotas not matching.",
+          "cause": "Manifest must create namespace sandbox-team-alpha, ResourceQuota with requests.cpu: 4000m, and LimitRange.",
+          "solution": "Apply /idp/tenant-sandbox.yaml to the cluster."
+        }
+      ]
+    }
+  ],
+  "assessmentQuestions": [
+    {
+      "id": "q-plat-01",
+      "question": "What is the primary objective of an Internal Developer Platform (IDP) and 'Golden Paths' in enterprise engineering?",
+      "options": [
+        "To replace all human developers with automated scripts.",
+        "To reduce developer cognitive load by providing standardized, self-service infrastructure blueprints that allow product teams to build, deploy, and monitor services autonomously without opening support tickets.",
+        "To enforce that all applications use the exact same programming language.",
+        "To restrict developers from testing code in local environments."
+      ],
+      "correctIndex": 1,
+      "explanation": "Platform engineering treats internal platforms as products. Golden Paths offer supported, automated paved roads that eliminate ticket handoffs and cognitive overhead while maintaining organizational governance."
+    },
+    {
+      "id": "q-plat-02",
+      "question": "How do ResourceQuotas and LimitRanges collaborate to enforce multi-tenant isolation in a shared Kubernetes cluster?",
+      "options": [
+        "ResourceQuotas delete the master nodes if memory is exceeded.",
+        "ResourceQuotas place an aggregate cap on total compute resources (CPU/memory requests and limits) a namespace can consume; LimitRanges set min, max, and default resource boundaries per individual container, ensuring pods without explicit resource requests are constrained by default values that conform to the quota.",
+        "LimitRanges encrypt network traffic between pods.",
+        "ResourceQuotas restart pods every 24 hours."
+      ],
+      "correctIndex": 1,
+      "explanation": "ResourceQuotas cap cumulative compute consumption across the namespace, while LimitRanges enforce individual container defaults and constraints so that unconfigured pods don't exceed namespace allocations."
+    }
+  ]
+}
