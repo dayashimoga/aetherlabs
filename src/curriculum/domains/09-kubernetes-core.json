@@ -1,0 +1,275 @@
+{
+  "id": "kubernetes-core-v4",
+  "title": "Kubernetes Core Architecture, Control Plane & RBAC",
+  "category": "Kubernetes & CNCF",
+  "trackId": "track-k8s-admin",
+  "version": "1.0.0",
+  "difficulty": "Intermediate",
+  "estimatedHours": 8,
+  "summary": "Master core Kubernetes architecture, declarative control plane reconciliation, Deployments, ReplicaSets, ServiceAccounts, least-privilege RBAC Roles, and authorization auditing.",
+  "prerequisites": [
+    "kustomize-manifests",
+    "helm-packaging"
+  ],
+  "learningObjectives": [
+    "Deploy, scale, and manage high-availability multi-replica Deployments with rolling update strategies.",
+    "Configure least-privilege Role-Based Access Control using ServiceAccounts, Roles, and RoleBindings.",
+    "Audit and verify API authorization permissions across namespaces using kubectl auth can-i."
+  ],
+  "curriculumModules": [
+    {
+      "id": "mod-k8s-01",
+      "title": "Control Plane Architecture: apiserver, etcd, scheduler & controller-manager",
+      "conceptSummary": "The Kubernetes control plane maintains the global cluster state machine. kube-apiserver is the stateless front-end communicating with etcd. kube-scheduler assigns unassigned Pods to healthy nodes based on affinity and resources, while kube-controller-manager runs core reconciliation loops.",
+      "productionArchitecturePattern": "Always deploy a minimum of 3 control plane nodes across distinct availability zones with stacked or external etcd topologies to survive single-node quorum failures.",
+      "keyCommands": [
+        "kubectl get componentstatuses",
+        "kubectl get nodes",
+        "kubectl cluster-info"
+      ]
+    },
+    {
+      "id": "mod-k8s-02",
+      "title": "Workload Controllers: Deployments, ReplicaSets & Rolling Updates",
+      "conceptSummary": "Deployments provide declarative updates for Pods and ReplicaSets. By configuring maxSurge and maxUnavailable, platform engineers achieve seamless zero-downtime rolling updates with instant rollback capabilities to prior deployment revisions.",
+      "productionArchitecturePattern": "Configure readiness probes, PodDisruptionBudgets (PDBs), and topologySpreadConstraints across availability zones to guarantee continuous availability during voluntary and involuntary disruptions.",
+      "keyCommands": [
+        "kubectl create deployment <name> --image=<image>",
+        "kubectl scale deployment <name> --replicas=<n>",
+        "kubectl rollout status deployment/<name>"
+      ]
+    },
+    {
+      "id": "mod-k8s-03",
+      "title": "RBAC Security: ServiceAccounts, Roles, RoleBindings & Authorization Auditing",
+      "conceptSummary": "Kubernetes Role-Based Access Control (RBAC) enforces least-privilege access by binding subjects (Users, Groups, ServiceAccounts) to specific API groups, resources, and verbs within a namespace (Role) or across the cluster (ClusterRole).",
+      "productionArchitecturePattern": "Disable default automountServiceAccountToken on workloads and bind dedicated ServiceAccounts with tightly scoped Roles rather than using cluster-admin.",
+      "keyCommands": [
+        "kubectl create serviceaccount <name>",
+        "kubectl create role <name> --verb=<verbs> --resource=<resources>",
+        "kubectl create rolebinding <name> --role=<role> --serviceaccount=<ns>:<sa>",
+        "kubectl auth can-i <verb> <resource>"
+      ]
+    }
+  ],
+  "labs": [
+    {
+      "id": "lab-k8s-01-ha-deployments",
+      "title": "Deploying High-Availability Microservices with Zero-Downtime Rollouts",
+      "difficulty": "Intermediate",
+      "durationMinutes": 20,
+      "xpReward": 150,
+      "scenario": "Deploy the payments-api microservice in namespace core-production with 3 replicas for multi-zone fault tolerance, expose it via a ClusterIP Service on port 8080, and verify rolling update status.",
+      "productionContext": "High-availability services in production require multiple replicas spread across nodes, coupled with health probes and backing Services to maintain zero dropped requests.",
+      "prerequisites": [
+        "lab-kust-01-overlays-patching"
+      ],
+      "objectives": [
+        "Create core-production namespace for workload isolation",
+        "Deploy payments-api with 3 replicas using image nginx:1.27-alpine",
+        "Expose payments-api on port 8080 via ClusterIP Service",
+        "Verify rollout status reaches complete state"
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Create Core Production Namespace",
+          "instruction": "Create namespace `core-production` using `kubectl create namespace core-production`.",
+          "commandHint": "kubectl create namespace core-production"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Deploy Multi-Replica Workload",
+          "instruction": "Deploy `payments-api` with 3 replicas in `core-production`.",
+          "commandHint": "kubectl create deployment payments-api --image=nginx:1.27-alpine -n core-production --replicas=3"
+        },
+        {
+          "stepNumber": 3,
+          "title": "Expose Workload as ClusterIP Service",
+          "instruction": "Expose `payments-api` on port 8080 mapping to target port 80.",
+          "commandHint": "kubectl expose deployment payments-api --port=8080 --target-port=80 -n core-production"
+        },
+        {
+          "stepNumber": 4,
+          "title": "Verify Rollout Status",
+          "instruction": "Verify the deployment rollout completed successfully.",
+          "commandHint": "kubectl rollout status deployment/payments-api -n core-production"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "val-k8s-ns-prod",
+          "description": "Created core-production namespace for workload isolation",
+          "type": "resource_exists",
+          "kind": "Namespace",
+          "name": "core-production",
+          "remediation": "Run 'kubectl create namespace core-production' to create the namespace."
+        },
+        {
+          "id": "val-k8s-dep-prod",
+          "description": "Deployed payments-api Deployment in core-production namespace",
+          "type": "resource_exists",
+          "kind": "Deployment",
+          "name": "payments-api",
+          "namespace": "core-production",
+          "remediation": "Run 'kubectl create deployment payments-api --image=nginx:1.27-alpine -n core-production --replicas=3'."
+        },
+        {
+          "id": "val-k8s-replicas-3",
+          "description": "Verified payments-api has at least 3 replicas configured",
+          "type": "replica_count_min",
+          "kind": "Deployment",
+          "name": "payments-api",
+          "namespace": "core-production",
+          "expectedValue": 3,
+          "remediation": "Run 'kubectl scale deployment payments-api --replicas=3 -n core-production'."
+        },
+        {
+          "id": "val-k8s-svc-prod",
+          "description": "Exposed payments-api via Service in core-production namespace",
+          "type": "resource_exists",
+          "kind": "Service",
+          "name": "payments-api",
+          "namespace": "core-production",
+          "remediation": "Run 'kubectl expose deployment payments-api --port=8080 --target-port=80 -n core-production'."
+        }
+      ],
+      "solutionCommands": [
+        "kubectl create namespace core-production",
+        "kubectl create deployment payments-api --image=nginx:1.27-alpine -n core-production --replicas=3",
+        "kubectl expose deployment payments-api --port=8080 --target-port=80 -n core-production",
+        "kubectl rollout status deployment/payments-api -n core-production"
+      ],
+      "troubleshootingGuide": "Ensure you create namespace core-production, deploy payments-api with 3 replicas, expose it on port 8080, and verify rollout status."
+    },
+    {
+      "id": "lab-k8s-02-rbac-least-privilege",
+      "title": "Least-Privilege RBAC: ServiceAccount, Role, RoleBinding & Authorization Audit",
+      "difficulty": "Intermediate",
+      "durationMinutes": 20,
+      "xpReward": 175,
+      "scenario": "Security compliance mandates restricting automated CI/CD access. Provision a dedicated ServiceAccount deploy-bot in namespace staging, grant it scoped permissions to read pods and deployments via Role pod-reader, bind them using RoleBinding deploy-bot-binding, and audit permissions using kubectl auth can-i.",
+      "productionContext": "Least-privilege RBAC minimizes blast radius in multi-tenant clusters, preventing compromised automation credentials from performing unauthorized mutations or cluster-wide escalations.",
+      "prerequisites": [
+        "lab-k8s-01-ha-deployments"
+      ],
+      "objectives": [
+        "Create namespace staging for isolated environment",
+        "Provision ServiceAccount deploy-bot in namespace staging",
+        "Create Role pod-reader granting get, list, and watch on pods and deployments",
+        "Bind deploy-bot to pod-reader using RoleBinding deploy-bot-binding",
+        "Audit permissions using kubectl auth can-i"
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Create Staging Namespace",
+          "instruction": "Create namespace `staging` using `kubectl create namespace staging`.",
+          "commandHint": "kubectl create namespace staging"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Create Dedicated ServiceAccount",
+          "instruction": "Provision ServiceAccount `deploy-bot` in `staging`.",
+          "commandHint": "kubectl create serviceaccount deploy-bot -n staging"
+        },
+        {
+          "stepNumber": 3,
+          "title": "Create Scoped RBAC Role",
+          "instruction": "Create Role `pod-reader` granting `get`, `list`, and `watch` verbs on `pods` and `deployments`.",
+          "commandHint": "kubectl create role pod-reader --verb=get,list,watch --resource=pods,deployments -n staging"
+        },
+        {
+          "stepNumber": 4,
+          "title": "Bind ServiceAccount to Role",
+          "instruction": "Create RoleBinding `deploy-bot-binding` binding `deploy-bot` to `pod-reader` in `staging`.",
+          "commandHint": "kubectl create rolebinding deploy-bot-binding --role=pod-reader --serviceaccount=staging:deploy-bot -n staging"
+        },
+        {
+          "stepNumber": 5,
+          "title": "Audit Authorized Permissions",
+          "instruction": "Verify that `deploy-bot` is authorized to get pods using `kubectl auth can-i`.",
+          "commandHint": "kubectl auth can-i get pods --as=system:serviceaccount:staging:deploy-bot -n staging"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "val-k8s-sa-bot",
+          "description": "Created ServiceAccount deploy-bot in staging namespace",
+          "type": "resource_exists",
+          "kind": "ServiceAccount",
+          "name": "deploy-bot",
+          "namespace": "staging",
+          "remediation": "Run 'kubectl create serviceaccount deploy-bot -n staging'."
+        },
+        {
+          "id": "val-k8s-role-reader",
+          "description": "Created scoped RBAC Role pod-reader in staging namespace",
+          "type": "resource_exists",
+          "kind": "Role",
+          "name": "pod-reader",
+          "namespace": "staging",
+          "remediation": "Run 'kubectl create role pod-reader --verb=get,list,watch --resource=pods,deployments -n staging'."
+        },
+        {
+          "id": "val-k8s-rb-binding",
+          "description": "Bound deploy-bot to pod-reader via RoleBinding deploy-bot-binding",
+          "type": "resource_exists",
+          "kind": "RoleBinding",
+          "name": "deploy-bot-binding",
+          "namespace": "staging",
+          "remediation": "Run 'kubectl create rolebinding deploy-bot-binding --role=pod-reader --serviceaccount=staging:deploy-bot -n staging'."
+        },
+        {
+          "id": "val-k8s-auth-audit",
+          "description": "Audited authorization permissions with kubectl auth can-i",
+          "type": "command_executed",
+          "commandSubstring": "kubectl auth can-i get pods",
+          "remediation": "Run 'kubectl auth can-i get pods --as=system:serviceaccount:staging:deploy-bot -n staging' to verify RBAC."
+        }
+      ],
+      "solutionCommands": [
+        "kubectl create namespace staging",
+        "kubectl create serviceaccount deploy-bot -n staging",
+        "kubectl create role pod-reader --verb=get,list,watch --resource=pods,deployments -n staging",
+        "kubectl create rolebinding deploy-bot-binding --role=pod-reader --serviceaccount=staging:deploy-bot -n staging",
+        "kubectl auth can-i get pods --as=system:serviceaccount:staging:deploy-bot -n staging"
+      ],
+      "troubleshootingGuide": "Ensure namespace staging, ServiceAccount deploy-bot, Role pod-reader, and RoleBinding deploy-bot-binding exist, and verify with kubectl auth can-i."
+    }
+  ],
+  "assessmentQuestions": [
+    {
+      "id": "q-k8s-01",
+      "question": "Which Kubernetes control-plane component is exclusively responsible for interacting directly with etcd storage?",
+      "options": [
+        "(Recommended) kube-apiserver",
+        "kube-scheduler",
+        "kube-controller-manager",
+        "kubelet"
+      ],
+      "correctIndex": 0,
+      "explanation": "kube-apiserver is the only component in a Kubernetes cluster that communicates directly with the etcd key-value datastore. All other components (scheduler, controller manager, kubelet) communicate with etcd indirectly through the apiserver's REST API."
+    },
+    {
+      "id": "q-k8s-02",
+      "question": "When configuring RBAC in Kubernetes, what is the key difference between a Role and a ClusterRole?",
+      "options": [
+        "(Recommended) A Role is scoped to a specific namespace, whereas a ClusterRole applies cluster-wide across all namespaces and cluster-scoped resources like Nodes.",
+        "A Role applies to human users, while a ClusterRole applies only to ServiceAccounts.",
+        "A Role can only grant read permissions, while a ClusterRole grants write permissions.",
+        "A Role is managed by Docker, whereas a ClusterRole is managed by containerd."
+      ],
+      "correctIndex": 0,
+      "explanation": "Roles are namespace-scoped and grant access only to resources within that single namespace. ClusterRoles are cluster-scoped and can grant access to cluster-wide resources (Nodes, PVs, Namespaces) or serve as reusable permission templates across multiple namespaces when bound via RoleBindings."
+    }
+  ]
+}

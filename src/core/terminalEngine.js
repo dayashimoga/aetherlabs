@@ -1702,6 +1702,127 @@ class TerminalEngine {
       return { exitCode: 0, output: `cronjob.batch/${name} created` };
     }
 
+    if (kind === 'Role') {
+      let verbs = ['get', 'list', 'watch'];
+      let resources = ['pods'];
+      for (const arg of subArgs) {
+        if (arg.startsWith('--verb=')) verbs = arg.slice(7).split(',').map((s) => s.trim());
+        if (arg.startsWith('--verbs=')) verbs = arg.slice(8).split(',').map((s) => s.trim());
+        if (arg.startsWith('--resource=')) resources = arg.slice(11).split(',').map((s) => s.trim());
+        if (arg.startsWith('--resources=')) resources = arg.slice(12).split(',').map((s) => s.trim());
+      }
+      this.cluster.applyResource({
+        apiVersion: 'rbac.authorization.k8s.io/v1',
+        kind: 'Role',
+        metadata: { name, namespace: flags.namespace },
+        rules: [
+          {
+            apiGroups: [''],
+            resources,
+            verbs
+          }
+        ]
+      });
+      return { exitCode: 0, output: `role.rbac.authorization.k8s.io/${name} created` };
+    }
+
+    if (kind === 'RoleBinding') {
+      let roleName = name;
+      let isClusterRole = false;
+      const subjects = [];
+      for (const arg of subArgs) {
+        if (arg.startsWith('--role=')) {
+          roleName = arg.slice(7);
+          isClusterRole = false;
+        } else if (arg.startsWith('--clusterrole=')) {
+          roleName = arg.slice(14);
+          isClusterRole = true;
+        } else if (arg.startsWith('--serviceaccount=')) {
+          const val = arg.slice(17);
+          const parts = val.split(':');
+          if (parts.length >= 2) {
+            subjects.push({ kind: 'ServiceAccount', name: parts[1], namespace: parts[0] });
+          } else {
+            subjects.push({ kind: 'ServiceAccount', name: val, namespace: flags.namespace });
+          }
+        } else if (arg.startsWith('--user=')) {
+          subjects.push({ kind: 'User', name: arg.slice(7), apiGroup: 'rbac.authorization.k8s.io' });
+        } else if (arg.startsWith('--group=')) {
+          subjects.push({ kind: 'Group', name: arg.slice(8), apiGroup: 'rbac.authorization.k8s.io' });
+        }
+      }
+      this.cluster.applyResource({
+        apiVersion: 'rbac.authorization.k8s.io/v1',
+        kind: 'RoleBinding',
+        metadata: { name, namespace: flags.namespace },
+        roleRef: {
+          apiGroup: 'rbac.authorization.k8s.io',
+          kind: isClusterRole ? 'ClusterRole' : 'Role',
+          name: roleName
+        },
+        subjects
+      });
+      return { exitCode: 0, output: `rolebinding.rbac.authorization.k8s.io/${name} created` };
+    }
+
+    if (kind === 'ClusterRole') {
+      let verbs = ['get', 'list', 'watch'];
+      let resources = ['pods'];
+      for (const arg of subArgs) {
+        if (arg.startsWith('--verb=')) verbs = arg.slice(7).split(',').map((s) => s.trim());
+        if (arg.startsWith('--verbs=')) verbs = arg.slice(8).split(',').map((s) => s.trim());
+        if (arg.startsWith('--resource=')) resources = arg.slice(11).split(',').map((s) => s.trim());
+        if (arg.startsWith('--resources=')) resources = arg.slice(12).split(',').map((s) => s.trim());
+      }
+      this.cluster.applyResource({
+        apiVersion: 'rbac.authorization.k8s.io/v1',
+        kind: 'ClusterRole',
+        metadata: { name },
+        rules: [
+          {
+            apiGroups: ['*'],
+            resources,
+            verbs
+          }
+        ]
+      });
+      return { exitCode: 0, output: `clusterrole.rbac.authorization.k8s.io/${name} created` };
+    }
+
+    if (kind === 'ClusterRoleBinding') {
+      let roleName = name;
+      const subjects = [];
+      for (const arg of subArgs) {
+        if (arg.startsWith('--clusterrole=') || arg.startsWith('--role=')) {
+          roleName = arg.split('=')[1];
+        } else if (arg.startsWith('--serviceaccount=')) {
+          const val = arg.slice(17);
+          const parts = val.split(':');
+          if (parts.length >= 2) {
+            subjects.push({ kind: 'ServiceAccount', name: parts[1], namespace: parts[0] });
+          } else {
+            subjects.push({ kind: 'ServiceAccount', name: val, namespace: 'default' });
+          }
+        } else if (arg.startsWith('--user=')) {
+          subjects.push({ kind: 'User', name: arg.slice(7), apiGroup: 'rbac.authorization.k8s.io' });
+        } else if (arg.startsWith('--group=')) {
+          subjects.push({ kind: 'Group', name: arg.slice(8), apiGroup: 'rbac.authorization.k8s.io' });
+        }
+      }
+      this.cluster.applyResource({
+        apiVersion: 'rbac.authorization.k8s.io/v1',
+        kind: 'ClusterRoleBinding',
+        metadata: { name },
+        roleRef: {
+          apiGroup: 'rbac.authorization.k8s.io',
+          kind: 'ClusterRole',
+          name: roleName
+        },
+        subjects
+      });
+      return { exitCode: 0, output: `clusterrolebinding.rbac.authorization.k8s.io/${name} created` };
+    }
+
     this.cluster.applyResource({
       apiVersion: 'v1',
       kind,

@@ -1,0 +1,259 @@
+{
+  "id": "cka-administrator",
+  "title": "Certified Kubernetes Administrator (CKA) Cluster Operations & Maintenance",
+  "category": "Kubernetes & CNCF",
+  "trackId": "track-k8s-admin",
+  "version": "1.0.0",
+  "difficulty": "Intermediate",
+  "estimatedHours": 8,
+  "summary": "Master CKA cluster operations: safe node maintenance (cordon, drain, uncordon, taints), control-plane lifecycle upgrades via kubeadm, and etcd disaster recovery snapshot management.",
+  "prerequisites": [
+    "kubernetes-core-v4",
+    "ckad-developer"
+  ],
+  "learningObjectives": [
+    "Execute safe worker node maintenance procedures using kubectl cordon, drain with daemonset tolerations, taints, and uncordon.",
+    "Perform end-to-end Kubernetes control plane version upgrades using kubeadm upgrade plan and apply workflows.",
+    "Execute disaster recovery snapshots and integrity audits of the distributed etcd datastore using etcdctl snapshot tools."
+  ],
+  "curriculumModules": [
+    {
+      "id": "mod-cka-01",
+      "title": "Node Maintenance: Cordon, Drain, Uncordon, Taints & Tolerations",
+      "conceptSummary": "Node lifecycle management allows administrators to isolate worker nodes for OS patching, kernel upgrades, or hardware maintenance. Cordoning marks a node unschedulable. Draining evicts existing workloads respecting PodDisruptionBudgets. Taints repel pods lacking matching tolerations.",
+      "productionArchitecturePattern": "Always specify --ignore-daemonsets during drains because DaemonSets are managed per-node and will block drain indefinitely. Configure PodDisruptionBudgets (PDBs) to ensure high-availability quorum is maintained during maintenance windows.",
+      "keyCommands": [
+        "kubectl cordon <node>",
+        "kubectl drain <node> --ignore-daemonsets",
+        "kubectl taint nodes <node> <key>=<val>:<effect>",
+        "kubectl uncordon <node>"
+      ]
+    },
+    {
+      "id": "mod-cka-02",
+      "title": "Control Plane Lifecycle: Kubeadm Upgrades & Static Pod Management",
+      "conceptSummary": "Kubernetes control plane components run as static pods supervised directly by kubelet in /etc/kubernetes/manifests. kubeadm streamlines zero-downtime upgrades across control plane nodes, validating component versions, certificates, and API deprecations.",
+      "productionArchitecturePattern": "Never upgrade worker nodes before control-plane nodes. Always upgrade sequentially one minor version at a time (e.g., v1.31 -> v1.32), and take an etcd snapshot immediately prior to running kubeadm upgrade apply.",
+      "keyCommands": [
+        "kubeadm upgrade plan",
+        "kubeadm upgrade apply <version>",
+        "kubectl get nodes"
+      ]
+    },
+    {
+      "id": "mod-cka-03",
+      "title": "Disaster Recovery: Etcdctl Snapshot Backup & Quorum Restoration",
+      "conceptSummary": "etcd is the single source of truth for all Kubernetes cluster state. etcdctl provides atomic point-in-time snapshot creation and verification. In disaster scenarios, restoring an etcd snapshot reconstructs all API resources and namespaces across the cluster.",
+      "productionArchitecturePattern": "Automate hourly etcdctl snapshot saves to encrypted object storage, monitor etcd disk fsync latency (< 10ms threshold), and test bare-metal restoration drills in staging clusters periodically.",
+      "keyCommands": [
+        "etcdctl snapshot save <path>",
+        "etcdctl snapshot status <path>",
+        "etcdctl endpoint health"
+      ]
+    }
+  ],
+  "labs": [
+    {
+      "id": "lab-cka-01-node-maintenance",
+      "title": "Zero-Downtime Worker Node Maintenance: Cordon, Drain & Taints",
+      "difficulty": "Intermediate",
+      "durationMinutes": 20,
+      "xpReward": 150,
+      "scenario": "Perform an operational maintenance drill on worker node kubelabs-worker-01: cordon the node to stop new pod scheduling, safely drain existing workloads while ignoring DaemonSets, apply a maintenance taint dedicated=special:NoSchedule, and uncordon the node after maintenance completes.",
+      "productionContext": "Operating Kubernetes in production requires executing kernel patches and hardware upgrades without interrupting customer traffic, requiring safe eviction and node cordoning workflows.",
+      "prerequisites": [
+        "lab-k8s-01-ha-deployments"
+      ],
+      "objectives": [
+        "Cordon worker node kubelabs-worker-01 to mark it unschedulable",
+        "Drain existing workloads safely with --ignore-daemonsets",
+        "Apply maintenance taint dedicated=special:NoSchedule",
+        "Uncordon worker node to resume normal scheduling"
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Cordon Worker Node",
+          "instruction": "Mark `kubelabs-worker-01` unschedulable using `kubectl cordon kubelabs-worker-01`.",
+          "commandHint": "kubectl cordon kubelabs-worker-01"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Drain Workloads Safely",
+          "instruction": "Evict pods from `kubelabs-worker-01` ignoring DaemonSet pods.",
+          "commandHint": "kubectl drain kubelabs-worker-01 --ignore-daemonsets"
+        },
+        {
+          "stepNumber": 3,
+          "title": "Apply Maintenance Taint",
+          "instruction": "Apply taint `dedicated=special:NoSchedule` to `kubelabs-worker-01`.",
+          "commandHint": "kubectl taint nodes kubelabs-worker-01 dedicated=special:NoSchedule"
+        },
+        {
+          "stepNumber": 4,
+          "title": "Uncordon Worker Node",
+          "instruction": "Mark `kubelabs-worker-01` schedulable again using `kubectl uncordon kubelabs-worker-01`.",
+          "commandHint": "kubectl uncordon kubelabs-worker-01"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "val-cka-cordon-exec",
+          "description": "Executed kubectl cordon on kubelabs-worker-01",
+          "type": "command_executed",
+          "commandSubstring": "kubectl cordon kubelabs-worker-01",
+          "remediation": "Run 'kubectl cordon kubelabs-worker-01'."
+        },
+        {
+          "id": "val-cka-drain-exec",
+          "description": "Executed kubectl drain on kubelabs-worker-01",
+          "type": "command_executed",
+          "commandSubstring": "kubectl drain kubelabs-worker-01",
+          "remediation": "Run 'kubectl drain kubelabs-worker-01 --ignore-daemonsets'."
+        },
+        {
+          "id": "val-cka-node-tainted",
+          "description": "Applied dedicated=special:NoSchedule taint to worker node",
+          "type": "resource_field_contains",
+          "kind": "Node",
+          "name": "kubelabs-worker-01",
+          "fieldPath": "spec.taints",
+          "expectedValue": "dedicated",
+          "remediation": "Run 'kubectl taint nodes kubelabs-worker-01 dedicated=special:NoSchedule'."
+        },
+        {
+          "id": "val-cka-node-uncordoned",
+          "description": "Uncordoned kubelabs-worker-01 restoring schedulable status",
+          "type": "resource_field_equals",
+          "kind": "Node",
+          "name": "kubelabs-worker-01",
+          "fieldPath": "spec.unschedulable",
+          "expectedValue": false,
+          "remediation": "Run 'kubectl uncordon kubelabs-worker-01'."
+        }
+      ],
+      "solutionCommands": [
+        "kubectl cordon kubelabs-worker-01",
+        "kubectl drain kubelabs-worker-01 --ignore-daemonsets",
+        "kubectl taint nodes kubelabs-worker-01 dedicated=special:NoSchedule",
+        "kubectl uncordon kubelabs-worker-01"
+      ],
+      "troubleshootingGuide": "Cordon the node, drain with --ignore-daemonsets, apply taint dedicated=special:NoSchedule, and uncordon the node."
+    },
+    {
+      "id": "lab-cka-02-etcd-dr-kubeadm",
+      "title": "Cluster Disaster Recovery & Kubeadm Control-Plane Lifecycle",
+      "difficulty": "Intermediate",
+      "durationMinutes": 20,
+      "xpReward": 175,
+      "scenario": "Execute a critical disaster recovery snapshot of the etcd datastore before planning and applying a control-plane upgrade to v1.32.0 using kubeadm.",
+      "productionContext": "Taking a verified etcd snapshot before executing kubeadm control-plane upgrades is a non-negotiable CKA operational best practice that guarantees cluster rollback capability.",
+      "prerequisites": [
+        "lab-cka-01-node-maintenance"
+      ],
+      "objectives": [
+        "Save etcd point-in-time snapshot to /var/lib/etcd/backup.db",
+        "Inspect and verify snapshot status using etcdctl",
+        "Generate control-plane upgrade plan using kubeadm upgrade plan",
+        "Apply control plane upgrade to version v1.32.0"
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Save Etcd Snapshot",
+          "instruction": "Create an atomic backup using `etcdctl snapshot save /var/lib/etcd/backup.db`.",
+          "commandHint": "etcdctl snapshot save /var/lib/etcd/backup.db"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Verify Snapshot Integrity",
+          "instruction": "Inspect snapshot metadata using `etcdctl snapshot status /var/lib/etcd/backup.db`.",
+          "commandHint": "etcdctl snapshot status /var/lib/etcd/backup.db"
+        },
+        {
+          "stepNumber": 3,
+          "title": "Plan Control Plane Upgrade",
+          "instruction": "Check component upgrade availability using `kubeadm upgrade plan`.",
+          "commandHint": "kubeadm upgrade plan"
+        },
+        {
+          "stepNumber": 4,
+          "title": "Apply Control Plane Upgrade",
+          "instruction": "Upgrade control plane components using `kubeadm upgrade apply v1.32.0`.",
+          "commandHint": "kubeadm upgrade apply v1.32.0"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "val-cka-etcd-save",
+          "description": "Saved etcd point-in-time snapshot to /var/lib/etcd/backup.db",
+          "type": "command_executed",
+          "commandSubstring": "etcdctl snapshot save",
+          "remediation": "Run 'etcdctl snapshot save /var/lib/etcd/backup.db'."
+        },
+        {
+          "id": "val-cka-etcd-status",
+          "description": "Verified etcd snapshot status and hash integrity",
+          "type": "command_executed",
+          "commandSubstring": "etcdctl snapshot status",
+          "remediation": "Run 'etcdctl snapshot status /var/lib/etcd/backup.db'."
+        },
+        {
+          "id": "val-cka-kubeadm-plan",
+          "description": "Generated kubeadm control plane upgrade plan",
+          "type": "command_executed",
+          "commandSubstring": "kubeadm upgrade plan",
+          "remediation": "Run 'kubeadm upgrade plan'."
+        },
+        {
+          "id": "val-cka-kubeadm-apply",
+          "description": "Applied control plane upgrade to v1.32.0",
+          "type": "command_executed",
+          "commandSubstring": "kubeadm upgrade apply",
+          "remediation": "Run 'kubeadm upgrade apply v1.32.0'."
+        }
+      ],
+      "solutionCommands": [
+        "etcdctl snapshot save /var/lib/etcd/backup.db",
+        "etcdctl snapshot status /var/lib/etcd/backup.db",
+        "kubeadm upgrade plan",
+        "kubeadm upgrade apply v1.32.0"
+      ],
+      "troubleshootingGuide": "Run etcdctl snapshot save followed by etcdctl snapshot status, then run kubeadm upgrade plan and kubeadm upgrade apply v1.32.0."
+    }
+  ],
+  "assessmentQuestions": [
+    {
+      "id": "q-cka-01",
+      "question": "Why is the --ignore-daemonsets flag typically required when executing kubectl drain on a worker node?",
+      "options": [
+        "(Recommended) DaemonSets manage pods on every node automatically, so evicting a DaemonSet pod causes its controller to immediately recreate it, preventing the drain command from ever completing.",
+        "DaemonSets run directly in the Linux kernel and cannot be stopped by the kubelet.",
+        "DaemonSets do not use network namespaces and cannot be evicted.",
+        "The --ignore-daemonsets flag bypasses RBAC permission checks on the cluster."
+      ],
+      "correctIndex": 0,
+      "explanation": "DaemonSets run an instance of a Pod on all matching nodes. If kubectl drain attempts to evict a DaemonSet-managed Pod, the DaemonSet controller immediately creates a replacement Pod on that same node. Therefore, kubectl drain requires --ignore-daemonsets to explicitly bypass DaemonSet pods."
+    },
+    {
+      "id": "q-cka-02",
+      "question": "When performing an etcd snapshot restore using 'etcdctl snapshot restore', what is the recommended procedure regarding the kube-apiserver?",
+      "options": [
+        "(Recommended) Stop all kube-apiserver instances before restoring the snapshot to prevent write skew and conflicting mutations, then restart kube-apiserver pointing to the restored data directory.",
+        "Leave kube-apiserver running so it can coordinate the restore across all worker nodes.",
+        "Delete all Namespaces using kubectl delete ns --all before running the restore.",
+        "Scale the etcd cluster to zero replicas using kubectl scale."
+      ],
+      "correctIndex": 0,
+      "explanation": "To prevent split-brain conditions or writes occurring during snapshot restoration, all kube-apiserver instances must be temporarily stopped (e.g., moving static pod manifests out of /etc/kubernetes/manifests). After etcdctl snapshot restore initializes the new data directory, kube-apiserver is restarted."
+    }
+  ]
+}

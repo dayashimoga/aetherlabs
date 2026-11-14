@@ -373,6 +373,12 @@ function evaluateJsonPath(obj, expr) {
   return results.map((r) => (typeof r === 'object' ? JSON.stringify(r) : String(r))).join(' ');
 }
 
+let parseYamlFn = null;
+try {
+  const yp = require('./yamlParser');
+  parseYamlFn = yp.parseYaml;
+} catch (_) {}
+
 function parseManifests(manifestText) {
   if (!manifestText || !String(manifestText).trim()) return [];
   const text = String(manifestText).trim();
@@ -384,7 +390,15 @@ function parseManifests(manifestText) {
   const results = [];
   for (const doc of docs) {
     if (!doc.trim()) continue;
-    const obj = parseSimpleYamlDocument(doc);
+    let obj = null;
+    if (parseYamlFn) {
+      try {
+        obj = parseYamlFn(doc);
+      } catch (_) {}
+    }
+    if (!obj || !obj.kind) {
+      obj = parseSimpleYamlDocument(doc);
+    }
     if (obj && typeof obj === 'object' && obj.kind) {
       results.push(obj);
     }

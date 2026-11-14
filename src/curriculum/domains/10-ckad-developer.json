@@ -1,0 +1,307 @@
+{
+  "id": "ckad-developer",
+  "title": "Certified Kubernetes Application Developer (CKAD) Workloads & Patterns",
+  "category": "Kubernetes & CNCF",
+  "trackId": "track-k8s-admin",
+  "version": "1.0.0",
+  "difficulty": "Intermediate",
+  "estimatedHours": 8,
+  "summary": "Master CKAD core competencies: multi-container Pod patterns (InitContainers, Sidecars, Adapters), container lifecycle health probes (liveness, readiness, startup), batch Jobs, and scheduled CronJobs.",
+  "prerequisites": [
+    "kubernetes-core-v4",
+    "kustomize-manifests"
+  ],
+  "learningObjectives": [
+    "Design and deploy resilient multi-container Pods utilizing InitContainers for sequential startup gating and Sidecars for log shipping and processing.",
+    "Implement robust container health probes including HTTP GET, TCP Socket, and Exec liveness, readiness, and startup checks with realistic thresholds.",
+    "Orchestrate batch workloads and recurring automations with Kubernetes Jobs and CronJobs, configuring backoff limits, active deadlines, and concurrency policies."
+  ],
+  "curriculumModules": [
+    {
+      "id": "mod-ckad-01",
+      "title": "Multi-Container Pod Patterns: InitContainers, Sidecars, Adapters & Ambassadors",
+      "conceptSummary": "Pods encapsulate tightly coupled containers sharing network, IPC, and volume storage namespaces. InitContainers run to completion sequentially before application containers start. Sidecars run concurrently alongside main containers to handle logging, telemetry, caching, or proxying.",
+      "productionArchitecturePattern": "Use shared emptyDir volumes for inter-container data exchange, set container-level resource limits, and utilize native Kubernetes 1.28+ built-in sidecar containers (restartPolicy: Always in initContainers) for deterministic startup and teardown ordering.",
+      "keyCommands": [
+        "kubectl get pods",
+        "kubectl logs <pod> -c <container>",
+        "kubectl exec -it <pod> -c <container> -- sh"
+      ]
+    },
+    {
+      "id": "mod-ckad-02",
+      "title": "Container Health Probes: Startup, Liveness, and Readiness Lifecycle Management",
+      "conceptSummary": "The Kubelet monitors container health via probes. Startup probes protect slow-starting applications by delaying liveness checks. Liveness probes detect deadlocks and trigger automated container restarts. Readiness probes govern whether a Pod receives traffic from backing Services.",
+      "productionArchitecturePattern": "Decouple liveness checks from external downstream dependencies to prevent cascading restart storms across the cluster; only probe lightweight internal endpoints for liveness, and verify network dependencies in readiness probes.",
+      "keyCommands": [
+        "kubectl describe pod <name>",
+        "kubectl get pods -w",
+        "kubectl rollout status deployment/<name>"
+      ]
+    },
+    {
+      "id": "mod-ckad-03",
+      "title": "Batch & Scheduled Processing: Jobs, CronJobs, Deadlines & Concurrency",
+      "conceptSummary": "Jobs coordinate batch computation, running Pods to successful completion (exit code 0) with configurable completions, parallelism, and backoffLimits. CronJobs automate time-scheduled executions via cron syntax with concurrencyPolicies (Allow, Forbid, Replace).",
+      "productionArchitecturePattern": "Always specify activeDeadlineSeconds and backoffLimit on Jobs to prevent runaway zombie pods and unbounded retries consuming cluster compute quotas.",
+      "keyCommands": [
+        "kubectl create job <name> --image=<image>",
+        "kubectl create cronjob <name> --image=<image> --schedule=\"<cron>\"",
+        "kubectl get cronjobs"
+      ]
+    }
+  ],
+  "labs": [
+    {
+      "id": "lab-ckad-01-multicontainer-sidecar",
+      "title": "Multi-Container Pod Patterns: InitContainer Preconditions & Log-Processing Sidecars",
+      "difficulty": "Intermediate",
+      "durationMinutes": 20,
+      "xpReward": 150,
+      "scenario": "Configure an order processing microservice in namespace ecommerce requiring data preparation before the core application starts, alongside a log-processing sidecar container streaming events to a shared volume.",
+      "productionContext": "Enterprise production workloads frequently separate cross-cutting concerns (data pre-fetching, log aggregation, TLS termination) into distinct helper containers within the same Pod boundary.",
+      "prerequisites": [
+        "lab-k8s-01-ha-deployments"
+      ],
+      "objectives": [
+        "Create namespace ecommerce for isolated commerce workloads",
+        "Define Pod order-processor with initContainer init-data and shared emptyDir volume",
+        "Add primary container app and sidecar container log-shipper mounted to the shared volume",
+        "Apply Pod manifest and verify Running phase in namespace ecommerce"
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Create Commerce Namespace",
+          "instruction": "Create namespace `ecommerce` using `kubectl create namespace ecommerce`.",
+          "commandHint": "kubectl create namespace ecommerce"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Generate Multi-Container Manifest",
+          "instruction": "Create `/home/learner/order-processor.yaml` defining Pod `order-processor` with initContainer `init-data` and containers `app` and `log-shipper`.",
+          "commandHint": "echo -e \"...\" > /home/learner/order-processor.yaml"
+        },
+        {
+          "stepNumber": 3,
+          "title": "Apply Multi-Container Pod",
+          "instruction": "Deploy the Pod using `kubectl apply -f /home/learner/order-processor.yaml`.",
+          "commandHint": "kubectl apply -f /home/learner/order-processor.yaml"
+        },
+        {
+          "stepNumber": 4,
+          "title": "Inspect Running Pod",
+          "instruction": "Verify that Pod `order-processor` is in `Running` state.",
+          "commandHint": "kubectl get pod order-processor -n ecommerce"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "val-ckad-ns-ecommerce",
+          "description": "Created ecommerce namespace for commerce workloads",
+          "type": "resource_exists",
+          "kind": "Namespace",
+          "name": "ecommerce",
+          "remediation": "Run 'kubectl create namespace ecommerce'."
+        },
+        {
+          "id": "val-ckad-pod-exists",
+          "description": "Created order-processor Pod in ecommerce namespace",
+          "type": "resource_exists",
+          "kind": "Pod",
+          "name": "order-processor",
+          "namespace": "ecommerce",
+          "remediation": "Apply the pod manifest containing order-processor in namespace ecommerce."
+        },
+        {
+          "id": "val-ckad-init-container",
+          "description": "Configured initContainer init-data for data pre-population",
+          "type": "resource_field_contains",
+          "kind": "Pod",
+          "name": "order-processor",
+          "namespace": "ecommerce",
+          "fieldPath": "spec.initContainers",
+          "expectedValue": "init-data",
+          "remediation": "Add initContainer named init-data in spec.initContainers."
+        },
+        {
+          "id": "val-ckad-sidecar-container",
+          "description": "Configured sidecar container log-shipper for log processing",
+          "type": "resource_field_contains",
+          "kind": "Pod",
+          "name": "order-processor",
+          "namespace": "ecommerce",
+          "fieldPath": "spec.containers",
+          "expectedValue": "log-shipper",
+          "remediation": "Add container named log-shipper to spec.containers."
+        },
+        {
+          "id": "val-ckad-pod-running",
+          "description": "Verified order-processor Pod reaches Running phase",
+          "type": "pod_status_running",
+          "name": "order-processor",
+          "namespace": "ecommerce",
+          "remediation": "Ensure all containers in Pod order-processor start successfully."
+        }
+      ],
+      "solutionCommands": [
+        "kubectl create namespace ecommerce",
+        "echo -e \"apiVersion: v1\\nkind: Pod\\nmetadata:\\n  name: order-processor\\n  namespace: ecommerce\\nspec:\\n  initContainers:\\n  - name: init-data\\n    image: busybox:1.36\\n  containers:\\n  - name: app\\n    image: nginx:1.27-alpine\\n  - name: log-shipper\\n    image: busybox:1.36\" > /home/learner/order-processor.yaml",
+        "kubectl apply -f /home/learner/order-processor.yaml",
+        "kubectl get pod order-processor -n ecommerce"
+      ],
+      "troubleshootingGuide": "Ensure namespace ecommerce exists, verify order-processor.yaml contains both init-data and log-shipper containers, and apply via kubectl apply -f."
+    },
+    {
+      "id": "lab-ckad-02-probes-cronjobs",
+      "title": "Container Health Probes & Scheduled Batch Automations",
+      "difficulty": "Intermediate",
+      "durationMinutes": 20,
+      "xpReward": 175,
+      "scenario": "Deploy an inventory management API with HTTP liveness and readiness health checks, and configure a scheduled inventory synchronization CronJob executing every 5 minutes in namespace logistics.",
+      "productionContext": "Production Kubernetes services rely on health probes for automatic healing and traffic gating, paired with CronJobs for scheduled data synchronization and periodic maintenance tasks.",
+      "prerequisites": [
+        "lab-ckad-01-multicontainer-sidecar"
+      ],
+      "objectives": [
+        "Create namespace logistics for inventory workloads",
+        "Deploy inventory-api with HTTP liveness and readiness health probes",
+        "Schedule recurring CronJob inventory-sync executing every 5 minutes",
+        "Execute a one-off batch Job inventory-manual-sync to verify immediate execution"
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Create Logistics Namespace",
+          "instruction": "Create namespace `logistics` using `kubectl create namespace logistics`.",
+          "commandHint": "kubectl create namespace logistics"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Author Deployment Manifest with Probes",
+          "instruction": "Create `/home/learner/inventory-api.yaml` with liveness probe on `/healthz` and readiness probe on `/ready`.",
+          "commandHint": "echo -e \"...\" > /home/learner/inventory-api.yaml"
+        },
+        {
+          "stepNumber": 3,
+          "title": "Deploy API Workload",
+          "instruction": "Apply the Deployment manifest using `kubectl apply -f /home/learner/inventory-api.yaml`.",
+          "commandHint": "kubectl apply -f /home/learner/inventory-api.yaml"
+        },
+        {
+          "stepNumber": 4,
+          "title": "Create Scheduled CronJob",
+          "instruction": "Create CronJob `inventory-sync` scheduled every 5 minutes in `logistics`.",
+          "commandHint": "kubectl create cronjob inventory-sync --image=busybox:1.36 -n logistics"
+        },
+        {
+          "stepNumber": 5,
+          "title": "Create One-Off Batch Job",
+          "instruction": "Execute an immediate batch job `inventory-manual-sync` in `logistics`.",
+          "commandHint": "kubectl create job inventory-manual-sync --image=busybox:1.36 -n logistics"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "val-ckad-ns-logistics",
+          "description": "Created logistics namespace for inventory workloads",
+          "type": "resource_exists",
+          "kind": "Namespace",
+          "name": "logistics",
+          "remediation": "Run 'kubectl create namespace logistics'."
+        },
+        {
+          "id": "val-ckad-dep-inventory",
+          "description": "Deployed inventory-api Deployment in logistics namespace",
+          "type": "resource_exists",
+          "kind": "Deployment",
+          "name": "inventory-api",
+          "namespace": "logistics",
+          "remediation": "Apply the inventory-api Deployment in namespace logistics."
+        },
+        {
+          "id": "val-ckad-liveness-probe",
+          "description": "Configured HTTP livenessProbe on inventory-api container",
+          "type": "resource_field_contains",
+          "kind": "Deployment",
+          "name": "inventory-api",
+          "namespace": "logistics",
+          "fieldPath": "spec.template.spec.containers",
+          "expectedValue": "livenessProbe",
+          "remediation": "Configure livenessProbe in spec.template.spec.containers[0]."
+        },
+        {
+          "id": "val-ckad-readiness-probe",
+          "description": "Configured HTTP readinessProbe on inventory-api container",
+          "type": "resource_field_contains",
+          "kind": "Deployment",
+          "name": "inventory-api",
+          "namespace": "logistics",
+          "fieldPath": "spec.template.spec.containers",
+          "expectedValue": "readinessProbe",
+          "remediation": "Configure readinessProbe in spec.template.spec.containers[0]."
+        },
+        {
+          "id": "val-ckad-cronjob-sync",
+          "description": "Created recurring CronJob inventory-sync in logistics namespace",
+          "type": "resource_exists",
+          "kind": "CronJob",
+          "name": "inventory-sync",
+          "namespace": "logistics",
+          "remediation": "Run 'kubectl create cronjob inventory-sync --image=busybox:1.36 -n logistics'."
+        },
+        {
+          "id": "val-ckad-job-manual",
+          "description": "Created batch Job inventory-manual-sync in logistics namespace",
+          "type": "resource_exists",
+          "kind": "Job",
+          "name": "inventory-manual-sync",
+          "namespace": "logistics",
+          "remediation": "Run 'kubectl create job inventory-manual-sync --image=busybox:1.36 -n logistics'."
+        }
+      ],
+      "solutionCommands": [
+        "kubectl create namespace logistics",
+        "echo -e \"apiVersion: apps/v1\\nkind: Deployment\\nmetadata:\\n  name: inventory-api\\n  namespace: logistics\\nspec:\\n  replicas: 2\\n  selector:\\n    matchLabels:\\n      app: inventory-api\\n  template:\\n    metadata:\\n      labels:\\n        app: inventory-api\\n    spec:\\n      containers:\\n      - name: inventory-api\\n        image: nginx:1.27-alpine\\n        livenessProbe:\\n          httpGet:\\n            path: /healthz\\n            port: 80\\n          initialDelaySeconds: 5\\n          periodSeconds: 10\\n        readinessProbe:\\n          httpGet:\\n            path: /ready\\n            port: 80\\n          initialDelaySeconds: 2\\n          periodSeconds: 5\" > /home/learner/inventory-api.yaml",
+        "kubectl apply -f /home/learner/inventory-api.yaml",
+        "kubectl create cronjob inventory-sync --image=busybox:1.36 -n logistics",
+        "kubectl create job inventory-manual-sync --image=busybox:1.36 -n logistics"
+      ],
+      "troubleshootingGuide": "Ensure namespace logistics exists, apply deployment with liveness and readiness probes, and create CronJob inventory-sync and Job inventory-manual-sync."
+    }
+  ],
+  "assessmentQuestions": [
+    {
+      "id": "q-ckad-01",
+      "question": "What is the primary behavioral difference between a failed livenessProbe versus a failed readinessProbe?",
+      "options": [
+        "(Recommended) A failed livenessProbe causes kubelet to kill and restart the container, whereas a failed readinessProbe removes the Pod's IP from Service endpoints without restarting the container.",
+        "A failed livenessProbe scales down the Deployment, while a failed readinessProbe terminates the worker node.",
+        "A failed readinessProbe restarts the container immediately, whereas a livenessProbe logs a warning in etcd.",
+        "There is no functional difference; both probes trigger identical kubelet restart policies."
+      ],
+      "correctIndex": 0,
+      "explanation": "Liveness probes govern container lifecycle (restarting deadlocked or wedged processes). Readiness probes govern network visibility (removing unready pods from backing Service endpoints so traffic is never sent to containers that cannot serve requests)."
+    },
+    {
+      "id": "q-ckad-02",
+      "question": "When configuring a multi-container Pod with InitContainers, what is the default behavior if an InitContainer exits with a non-zero code?",
+      "options": [
+        "(Recommended) The Pod restarts the failing InitContainer according to the Pod's restartPolicy, and the application containers never start until all InitContainers finish with exit code 0.",
+        "The kubelet skips the failing InitContainer and starts the application containers immediately.",
+        "The Pod is permanently deleted from the cluster without notification.",
+        "The worker node enters NotReady state until manual operator intervention."
+      ],
+      "correctIndex": 0,
+      "explanation": "InitContainers execute sequentially to successful completion (exit code 0). If an InitContainer fails, kubelet repeatedly restarts it according to the restartPolicy (unless Never is set), blocking application containers from initializing until preconditions are satisfied."
+    }
+  ]
+}
