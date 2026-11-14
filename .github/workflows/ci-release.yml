@@ -173,44 +173,41 @@ jobs:
             });
           '
 
-      - name: Upload Universal Distribution Bundle
-        uses: actions/upload-artifact@v4
-        with:
-          name: kubelabs-universal-bundle
-          path: dist/*universal*
-
-      - name: Upload Web & PWA Standalone App
-        uses: actions/upload-artifact@v4
-        with:
-          name: kubelabs-web-pwa
-          path: dist/*web-pwa*
-
       - name: Upload Windows Portable App
         uses: actions/upload-artifact@v4
         with:
-          name: kubelabs-windows-portable
-          path: dist/*windows*
+          name: kubelabs-windows-app
+          path: dist/apps/windows
 
       - name: Upload Linux Portable App
         uses: actions/upload-artifact@v4
         with:
-          name: kubelabs-linux-portable
-          path: dist/*linux*
+          name: kubelabs-linux-app
+          path: dist/apps/linux
 
       - name: Upload macOS Portable App
         uses: actions/upload-artifact@v4
         with:
-          name: kubelabs-macos-portable
-          path: dist/*darwin*
+          name: kubelabs-macos-app
+          path: dist/apps/macos
+
+      - name: Upload Web & PWA Standalone App
+        uses: actions/upload-artifact@v4
+        with:
+          name: kubelabs-web-pwa-app
+          path: dist/apps/web-pwa
 
       - name: Upload Kubernetes & Helm Package
         uses: actions/upload-artifact@v4
         with:
-          name: kubelabs-helm-k8s
-          path: dist/*helm-k8s*
+          name: kubelabs-helm-k8s-app
+          path: dist/apps/helm-k8s
 
-      - name: Upload Release Bundle Artifacts
+      - name: Upload Standalone Release Packages & Checksums
         uses: actions/upload-artifact@v4
         with:
-          name: kubelabs-universal-release
-          path: dist/*
+          name: kubelabs-release-packages
+          path: |
+            dist/*.zip
+            dist/*.tar.gz
+            dist/SHA256SUMS.txt

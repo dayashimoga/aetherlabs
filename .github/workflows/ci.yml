@@ -52,51 +52,47 @@ jobs:
         run: |
           node scripts/package-release.js
 
-      - name: Upload Universal Distribution Bundle
-        if: matrix.os == 'ubuntu-latest'
-        uses: actions/upload-artifact@v4
-        with:
-          name: kubelabs-universal-app
-          path: dist/*universal*
-
-      - name: Upload Web & PWA Standalone App
-        if: matrix.os == 'ubuntu-latest'
-        uses: actions/upload-artifact@v4
-        with:
-          name: kubelabs-web-pwa-app
-          path: dist/*web-pwa*
-
       - name: Upload Windows Portable App
         if: matrix.os == 'ubuntu-latest'
         uses: actions/upload-artifact@v4
         with:
           name: kubelabs-windows-app
-          path: dist/*windows*
+          path: dist/apps/windows
 
       - name: Upload Linux Portable App
         if: matrix.os == 'ubuntu-latest'
         uses: actions/upload-artifact@v4
         with:
           name: kubelabs-linux-app
-          path: dist/*linux*
+          path: dist/apps/linux
 
       - name: Upload macOS Portable App
         if: matrix.os == 'ubuntu-latest'
         uses: actions/upload-artifact@v4
         with:
           name: kubelabs-macos-app
-          path: dist/*darwin*
+          path: dist/apps/macos
+
+      - name: Upload Web & PWA Standalone App
+        if: matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: kubelabs-web-pwa-app
+          path: dist/apps/web-pwa
 
       - name: Upload Kubernetes & Helm Deployment Package
         if: matrix.os == 'ubuntu-latest'
         uses: actions/upload-artifact@v4
         with:
           name: kubelabs-helm-k8s-app
-          path: dist/*helm-k8s*
+          path: dist/apps/helm-k8s
 
-      - name: Upload Complete App Release Suite (All Packages & Checksums)
+      - name: Upload Standalone Release Packages & Checksums
         if: matrix.os == 'ubuntu-latest'
         uses: actions/upload-artifact@v4
         with:
-          name: kubelabs-all-release-artifacts
-          path: dist/*
+          name: kubelabs-release-packages
+          path: |
+            dist/*.zip
+            dist/*.tar.gz
+            dist/SHA256SUMS.txt
