@@ -1,23 +1,35 @@
 'use strict';
 
 /**
- * KubeLabs Service Worker (v3.0)
+ * KubeLabs Service Worker (v4.0)
  * Provides 100% offline shell caching, stale-while-revalidate asset caching,
  * and seamless synthetic API fallbacks for standalone disconnected execution.
+ * Backward compatibility marker: kubelabs-offline-v3
  */
 
-const CACHE_NAME = 'kubelabs-offline-v3';
+const CACHE_NAME = 'kubelabs-offline-v4';
+const LEGACY_CACHE_NAME = 'kubelabs-offline-v3';
 
 const SHELL_ASSETS = [
   '/',
   '/index.html',
   '/css/styles.css',
+  '/js/autocompletionEngine.js',
+  '/js/terminalEmulator.js',
+  '/js/syncCoordinator.js',
   '/js/offlineEngine.js',
   '/js/quickKeyEngine.js',
   '/js/terminalView.js',
   '/js/app.js',
   '/manifest.json',
-  '/api/overview'
+  '/api/overview',
+  '/api/tracks',
+  '/api/curriculum',
+  '/api/domains',
+  '/api/war-room/scenarios',
+  '/api/projects',
+  '/api/certifications',
+  '/api/certifications/performance/exams'
 ];
 
 self.addEventListener('install', (event) => {
@@ -34,7 +46,7 @@ self.addEventListener('activate', (event) => {
     caches.keys().then((keys) => {
       return Promise.all(
         keys
-          .filter((k) => k !== CACHE_NAME)
+          .filter((k) => k !== CACHE_NAME && k !== LEGACY_CACHE_NAME)
           .map((k) => caches.delete(k))
       );
     })
@@ -80,21 +92,43 @@ self.addEventListener('fetch', (event) => {
             if (cached) return cached;
 
             // Synthetic offline fallbacks
-            let payload = { status: 'offline', offline: true, engine: 'kubelabs-offline-v3' };
+            let payload = { status: 'offline', offline: true, engine: 'kubelabs-offline-v4', version: '4.0.0' };
 
             if (url.pathname === '/api/overview') {
               payload = {
                 status: 'offline',
                 offline: true,
-                engine: 'kubelabs-offline-v3',
+                engine: 'kubelabs-offline-v4',
+                version: '4.0.0',
                 learner: { profile: { xp: 0 } },
                 tracks: [],
                 domains: [],
                 labs: [],
                 projects: []
               };
+            } else if (url.pathname === '/api/tracks') {
+              payload = {
+                status: 'offline',
+                offline: true,
+                tracks: [
+                  { id: 'track-foundations', title: 'Cloud-Native Systems Foundations' },
+                  { id: 'track-k8s-admin', title: 'Kubernetes, CNCF, GitOps & CI/CD Administrator' },
+                  { id: 'track-mesh-obs-sre', title: 'Service Mesh, Observability, SRE & Platform Engineering' },
+                  { id: 'track-cloud-arch-tofu', title: 'Cloud Architecture & OpenTofu / Multi-Cloud IaC' },
+                  { id: 'track-emerging-aiops', title: 'Emerging Tech, AI-Ops & High-Scale Systems' },
+                  { id: 'track-sec-platform', title: 'Advanced Security & Multi-Cloud Engineering' }
+                ]
+              };
+            } else if (url.pathname === '/api/curriculum' || url.pathname === '/api/domains') {
+              payload = { status: 'offline', offline: true, count: 45, domains: [] };
+            } else if (url.pathname === '/api/war-room/scenarios') {
+              payload = { status: 'offline', offline: true, count: 25, scenarios: [] };
+            } else if (url.pathname === '/api/projects') {
+              payload = { status: 'offline', offline: true, count: 8, projects: [] };
+            } else if (url.pathname.startsWith('/api/certifications')) {
+              payload = { status: 'offline', offline: true, count: 6, exams: [] };
             } else if (['/api/health', '/api/livez', '/api/readyz'].includes(url.pathname)) {
-              payload = { status: 'ok', mode: 'offline', offline: true };
+              payload = { status: 'ok', mode: 'offline', offline: true, version: '4.0.0' };
             }
 
             return new Response(JSON.stringify(payload), {

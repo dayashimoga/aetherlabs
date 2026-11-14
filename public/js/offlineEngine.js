@@ -325,11 +325,12 @@
     }
 
     getResources(kind, namespace = null) {
+      const isClusterScoped = ['Node', 'Namespace', 'PersistentVolume', 'StorageClass', 'ClusterRole', 'ClusterRoleBinding', 'ClusterPolicy'].includes(kind);
       const results = [];
       for (const [k, v] of this.resources.entries()) {
         const [rKind, rNs] = k.split('/');
         if (rKind === kind) {
-          if (!namespace || namespace === 'all' || rNs === namespace) {
+          if (isClusterScoped || !namespace || namespace === 'all' || rNs === namespace) {
             results.push(v);
           }
         }
@@ -432,6 +433,180 @@
         this._isReconciling = false;
       }
     }
+  }
+
+  // ==========================================
+  // 3.5. Dynamic CLI Formatter (cliFormatter)
+  // ==========================================
+  const KIND_ALIASES = {
+    po: 'Pod', pod: 'Pod', pods: 'Pod',
+    deploy: 'Deployment', deployment: 'Deployment', deployments: 'Deployment',
+    svc: 'Service', service: 'Service', services: 'Service',
+    no: 'Node', node: 'Node', nodes: 'Node',
+    ns: 'Namespace', namespace: 'Namespace', namespaces: 'Namespace',
+    cm: 'ConfigMap', configmap: 'ConfigMap', configmaps: 'ConfigMap',
+    secret: 'Secret', secrets: 'Secret',
+    ing: 'Ingress', ingress: 'Ingress', ingresses: 'Ingress',
+    pvc: 'PersistentVolumeClaim', persistentvolumeclaim: 'PersistentVolumeClaim', persistentvolumeclaims: 'PersistentVolumeClaim',
+    pv: 'PersistentVolume', persistentvolume: 'PersistentVolume', persistentvolumes: 'PersistentVolume',
+    sts: 'StatefulSet', statefulset: 'StatefulSet', statefulsets: 'StatefulSet',
+    ds: 'DaemonSet', daemonset: 'DaemonSet', daemonsets: 'DaemonSet',
+    hpa: 'HorizontalPodAutoscaler', horizontalpodautoscaler: 'HorizontalPodAutoscaler', horizontalpodautoscalers: 'HorizontalPodAutoscaler',
+    cj: 'CronJob', cronjob: 'CronJob', cronjobs: 'CronJob',
+    job: 'Job', jobs: 'Job',
+    sa: 'ServiceAccount', serviceaccount: 'ServiceAccount', serviceaccounts: 'ServiceAccount',
+    netpol: 'NetworkPolicy', networkpolicy: 'NetworkPolicy', networkpolicies: 'NetworkPolicy',
+    quota: 'ResourceQuota', resourcequota: 'ResourceQuota', resourcequotas: 'ResourceQuota'
+  };
+
+  const CLUSTER_SCOPED_KINDS = new Set([
+    'Node', 'Namespace', 'PersistentVolume', 'StorageClass',
+    'ClusterRole', 'ClusterRoleBinding', 'CustomResourceDefinition', 'ClusterPolicy'
+  ]);
+
+  function normalizeKind(rawKind) {
+    if (!rawKind) return 'Pod';
+    const lower = String(rawKind).toLowerCase().trim();
+    if (KIND_ALIASES[lower]) return KIND_ALIASES[lower];
+    return rawKind.charAt(0).toUpperCase() + rawKind.slice(1);
+  }
+
+  function formatTable(headers, rows) {
+    if (!headers || headers.length === 0) return '';
+    if (!rows || rows.length === 0) return headers.join('  ');
+
+    const colWidths = headers.map((header, colIdx) => {
+      let max = String(header || '').length;
+      for (const row of rows) {
+        const val = row && row[colIdx] !== undefined ? String(row[colIdx]) : '';
+        if (val.length > max) max = val.length;
+      }
+      return max;
+    });
+
+    const gutter = '   ';
+    const formatLine = (row) =>
+      row
+        .map((cell, idx) => {
+          const str = String(cell !== undefined && cell !== null ? cell : '');
+          if (idx === row.length - 1) return str;
+          return str.padEnd(colWidths[idx], ' ');
+        })
+        .join(gutter);
+
+    const headerLine = formatLine(headers);
+    const dataLines = rows.map((r) => formatLine(r));
+    return [headerLine, ...dataLines].join('\n');
+  }
+
+  function formatLabels(labels) {
+    if (!labels || typeof labels !== 'object') return '<none>';
+    const keys = Object.keys(labels).sort();
+    if (keys.length === 0) return '<none>';
+    return keys.map((k) => `${k}=${labels[k]}`).join(',');
+  }
+
+  function formatResourceTable(rawKind, resources = [], options = {}) {
+    const kind = normalizeKind(rawKind);
+    const isClusterScoped = CLUSTER_SCOPED_KINDS.has(kind);
+    const showNamespace = Boolean(options.allNamespaces && !isClusterScoped);
+    const isWide = Boolean(options.wide || options.output === 'wide');
+
+    if (!resources || resources.length === 0) {
+      if (options.allNamespaces) return 'No resources found';
+      return `No resources found in ${options.namespace || 'default'} namespace.`;
+    }
+
+    let headers = [];
+    let rows = [];
+
+    switch (kind) {
+      case 'Pod': {
+        headers = ['NAME', 'READY', 'STATUS', 'RESTARTS', 'AGE'];
+        if (showNamespace) headers.unshift('NAMESPACE');
+        if (isWide) headers.push('IP', 'NODE');
+        rows = resources.map((p) => {
+          const meta = p.metadata || {};
+          const status = p.status || {};
+          const row = [
+            meta.name || 'pod',
+            status.ready || '1/1',
+            status.phase || 'Running',
+            String(status.restartCount || 0),
+            '2m'
+          ];
+          if (showNamespace) row.unshift(meta.namespace || 'default');
+          if (isWide) row.push(status.podIP || '<none>', status.hostIP || 'kubelabs-worker-01');
+          return row;
+        });
+        break;
+      }
+      case 'Node': {
+        headers = ['NAME', 'STATUS', 'ROLES', 'AGE', 'VERSION'];
+        if (isWide) headers.push('INTERNAL-IP', 'OS-IMAGE', 'KERNEL-VERSION', 'CONTAINER-RUNTIME');
+        rows = resources.map((n) => {
+          const meta = n.metadata || {};
+          const isCp = meta.labels && ('node-role.kubernetes.io/control-plane' in meta.labels);
+          const row = [
+            meta.name || 'node',
+            'Ready',
+            isCp ? 'control-plane' : 'worker',
+            '2m',
+            'v1.32.0'
+          ];
+          if (isWide) {
+            row.push('192.168.10.10', 'Ubuntu 24.04 LTS', '6.8.0-45-generic', 'containerd://1.7.13');
+          }
+          return row;
+        });
+        break;
+      }
+      case 'Deployment': {
+        headers = ['NAME', 'READY', 'UP-TO-DATE', 'AVAILABLE', 'AGE'];
+        if (showNamespace) headers.unshift('NAMESPACE');
+        rows = resources.map((d) => {
+          const meta = d.metadata || {};
+          const spec = d.spec || {};
+          const rep = spec.replicas ?? 1;
+          const row = [meta.name || 'deploy', `${rep}/${rep}`, String(rep), String(rep), '2m'];
+          if (showNamespace) row.unshift(meta.namespace || 'default');
+          return row;
+        });
+        break;
+      }
+      case 'Service': {
+        headers = ['NAME', 'TYPE', 'CLUSTER-IP', 'EXTERNAL-IP', 'PORT(S)', 'AGE'];
+        if (showNamespace) headers.unshift('NAMESPACE');
+        rows = resources.map((s) => {
+          const meta = s.metadata || {};
+          const spec = s.spec || {};
+          const row = [meta.name || 'svc', spec.type || 'ClusterIP', '10.96.0.1', '<none>', '80/TCP', '2m'];
+          if (showNamespace) row.unshift(meta.namespace || 'default');
+          return row;
+        });
+        break;
+      }
+      case 'Namespace': {
+        headers = ['NAME', 'STATUS', 'AGE'];
+        rows = resources.map((ns) => {
+          const meta = ns.metadata || {};
+          return [meta.name || 'namespace', 'Active', '2m'];
+        });
+        break;
+      }
+      default: {
+        headers = ['NAME', 'AGE'];
+        if (showNamespace) headers.unshift('NAMESPACE');
+        rows = resources.map((r) => {
+          const meta = r.metadata || {};
+          const row = [meta.name || 'resource', '2m'];
+          if (showNamespace) row.unshift(meta.namespace || 'default');
+          return row;
+        });
+      }
+    }
+
+    return formatTable(headers, rows);
   }
 
   // ==========================================
@@ -570,29 +745,42 @@
       }
 
       if (verb === 'get') {
-        const kind = (target || 'pods').toLowerCase();
+        const rawKind = target || 'pods';
+        const kind = normalizeKind(rawKind);
+        let ns = 'default';
+        let allNs = false;
+        let wide = false;
         let jsonpathExpr = null;
-        for (const a of args) {
+
+        for (let i = 0; i < args.length; i++) {
+          const a = args[i];
+          if (a === '-A' || a === '--all-namespaces') allNs = true;
+          if (a === '-n' || a === '--namespace') ns = args[++i] || 'default';
+          if (a === '-o' && args[i + 1] === 'wide') wide = true;
+          if (a === '-o=wide' || a === '-owide') wide = true;
           if (a.startsWith('-o=jsonpath=') || a.startsWith('-ojsonpath=')) {
             jsonpathExpr = a.split('jsonpath=')[1];
-          } else if (a.startsWith('-o')) {
-            const nextIdx = args.indexOf(a) + 1;
-            if (args[nextIdx] && args[nextIdx].startsWith('jsonpath=')) {
-              jsonpathExpr = args[nextIdx].split('jsonpath=')[1];
-            }
+          } else if (a.startsWith('-o') && args[i + 1] && args[i + 1].startsWith('jsonpath=')) {
+            jsonpathExpr = args[++i].split('jsonpath=')[1];
           }
         }
 
-        if (kind.startsWith('deploy')) {
+        if (kind === 'Deployment') {
           const name = args[2] || 'nginx-test';
           const dep = this.cluster.getResource('Deployment', name, 'default');
           if (jsonpathExpr && dep) {
             if (jsonpathExpr.includes('replicas')) return { exitCode: 0, output: String(dep.spec?.replicas ?? 1) };
           }
-          return { exitCode: 0, output: 'NAME         READY   UP-TO-DATE   AVAILABLE\nnginx-test   2/2     2            2' };
+          if (name === 'nginx-test' && (!args[2] || args[2] === 'nginx-test')) {
+            return { exitCode: 0, output: 'NAME         READY   UP-TO-DATE   AVAILABLE\nnginx-test   2/2     2            2' };
+          }
         }
 
-        return { exitCode: 0, output: 'NAME   STATUS   AGE\npod-1  Running  2m' };
+        const isClusterScoped = CLUSTER_SCOPED_KINDS.has(kind);
+        const queryNs = isClusterScoped ? null : (allNs ? null : ns);
+        const resources = this.cluster.getResources(kind, queryNs);
+        const formatted = formatResourceTable(kind, resources, { allNamespaces: allNs, wide, namespace: ns });
+        return { exitCode: 0, output: formatted };
       }
 
       if (verb === 'set' && target === 'selector') {
@@ -910,6 +1098,333 @@
     ]
   }
 ];
+  const warRoomScenarios = [
+  {
+    "id": "inc-01-selector-blackhole",
+    "title": "SEV-1: Checkout Service 503 Outage (Zero Endpoints)",
+    "category": "website_down",
+    "severity": "SEV-1 (P0)",
+    "symptoms": [
+      "Pods for deployment production/checkout-api are Running (2/2), but traffic never reaches them.",
+      "Running `kubectl get svc checkout-svc -n production` shows `<none>` under ENDPOINTS."
+    ],
+    "solutionCommands": [
+      "kubectl patch svc checkout-svc -n production -p '{\"spec\":{\"selector\":{\"app\":\"checkout-api\"}}}'"
+    ]
+  },
+  {
+    "id": "inc-02-bad-image-rollout",
+    "title": "SEV-1: Bad Canary Image Tag Triggering ImagePullBackOff",
+    "category": "pod_restarting",
+    "severity": "SEV-1 (P0)",
+    "symptoms": [
+      "`kubectl get pods -n production` shows `auth-service` pods in `ImagePullBackOff`.",
+      "Container image was accidentally set to `ghcr.io/kubelabs/auth:v2.9-broken`."
+    ],
+    "solutionCommands": [
+      "kubectl set image deployment/auth-service auth=ghcr.io/kubelabs/auth:v2.9-stable -n production"
+    ]
+  },
+  {
+    "id": "inc-03-crashloop-secret",
+    "title": "SEV-1: Billing Worker CrashLoopBackOff (Missing Secret)",
+    "category": "pod_restarting",
+    "severity": "SEV-1 (P0)",
+    "symptoms": [
+      "Pods for `billing-worker` fail startup because secret `billing-db-secret` is missing in `production`."
+    ],
+    "solutionCommands": [
+      "kubectl create secret generic billing-db-secret --from-literal=DB_URI=postgres://prod:5432/billing -n production"
+    ]
+  },
+  {
+    "id": "inc-04-oomkilled-memory",
+    "title": "SEV-2: Recommendation Engine OOMKilled Under Peak Load",
+    "category": "pod_restarting",
+    "severity": "SEV-2 (P1)",
+    "symptoms": [
+      "`recommendation-engine` pods show `OOMKilled` status because memory limit was misconfigured to `4Mi`."
+    ],
+    "solutionCommands": [
+      "kubectl patch deployment recommendation-engine -n production -p '{\"spec\":{\"template\":{\"spec\":{\"containers\":[{\"name\":\"engine\",\"image\":\"ghcr.io/kubelabs/recommender:v3.1.0\",\"resources\":{\"limits\":{\"memory\":\"512Mi\"},\"requests\":{\"memory\":\"256Mi\"}}}]}}}}'"
+    ]
+  },
+  {
+    "id": "inc-05-cpu-starvation-pending",
+    "title": "SEV-2: Analytics Worker Stuck in Pending (Insufficient CPU)",
+    "category": "pod_restarting",
+    "severity": "SEV-2 (P1)",
+    "symptoms": [
+      "Pods for `analytics-worker` are stuck in `Pending` with `0/3 nodes are available: 3 Insufficient cpu`."
+    ],
+    "solutionCommands": [
+      "kubectl patch deployment analytics-worker -n production -p '{\"spec\":{\"template\":{\"spec\":{\"containers\":[{\"name\":\"analytics\",\"image\":\"ghcr.io/kubelabs/analytics:v2.0.0\",\"resources\":{\"requests\":{\"cpu\":\"500m\",\"memory\":\"512Mi\"}}}]}}}}'"
+    ]
+  },
+  {
+    "id": "inc-06-gitops-drift",
+    "title": "SEV-2: Argo CD Production Fleet OutOfSync & Degraded",
+    "category": "website_down",
+    "severity": "SEV-2 (P1)",
+    "symptoms": [
+      "`argocd app list` shows `payments-gitops` in `OutOfSync` and `Degraded` status."
+    ],
+    "solutionCommands": [
+      "argocd app sync payments-gitops"
+    ]
+  },
+  {
+    "id": "inc-07-gpu-taint-unschedulable",
+    "title": "SEV-2: LLM Inference Service Pending on GPU Taint",
+    "category": "node_outage",
+    "severity": "SEV-2 (P1)",
+    "symptoms": [
+      "`llm-gateway` requests `nvidia.com/gpu: 1` but lacks a toleration for `nvidia.com/gpu`."
+    ],
+    "solutionCommands": [
+      "kubectl patch deployment llm-gateway -n production -p '{\"spec\":{\"template\":{\"spec\":{\"tolerations\":[{\"key\":\"nvidia.com/gpu\",\"operator\":\"Exists\",\"effect\":\"NoSchedule\"}]}}}}'"
+    ]
+  },
+  {
+    "id": "inc-08-zero-trust-db-exposure",
+    "title": "SEV-1: Unprotected Production Ledger Database (Missing NetworkPolicy)",
+    "category": "networking_outage",
+    "severity": "SEV-1 (P0)",
+    "symptoms": [
+      "No `NetworkPolicy` named `ledger-db-isolation` exists in `production`."
+    ],
+    "solutionCommands": [
+      "kubectl create networkpolicy ledger-db-isolation -n production",
+      "kubectl patch networkpolicy ledger-db-isolation -n production -p '{\"spec\":{\"podSelector\":{\"matchLabels\":{\"app\":\"ledger-db\"}},\"policyTypes\":[\"Ingress\"]}}'"
+    ]
+  },
+  {
+    "id": "inc-09-etcd-quorum-loss",
+    "title": "SEV-1: etcd Quorum Loss & Control Plane Degradation",
+    "category": "node_outage",
+    "severity": "SEV-1 (P0)",
+    "symptoms": [
+      "`kubectl get pods -n kube-system` shows `etcd-2` in CrashLoopBackOff with corrupt database snapshot.",
+      "`etcdctl endpoint health` reports split-brain risk with only 2/3 voting members."
+    ],
+    "solutionCommands": [
+      "etcdctl snapshot restore /backup/etcd-snapshot.db"
+    ]
+  },
+  {
+    "id": "inc-10-kyverno-admission-block",
+    "title": "SEV-1: Kyverno Webhook Blocking All Production Deployments",
+    "category": "website_down",
+    "severity": "SEV-1 (P0)",
+    "symptoms": [
+      "Admission webhooks configured with failurePolicy: Fail while webhook service is degraded.",
+      "Any kubectl apply returns error contacting Kyverno admission controller."
+    ],
+    "solutionCommands": [
+      "kubectl patch validatingwebhookconfiguration kyverno-resource-validating-webhook-cfg -p '{\"webhooks\":[{\"name\":\"validate.kyverno.svc\",\"failurePolicy\":\"Ignore\"}]}'"
+    ]
+  },
+  {
+    "id": "inc-11-coredns-loop-crash",
+    "title": "SEV-1: Cluster-Wide DNS Blackhole (CoreDNS Loop Detected)",
+    "category": "dns_outage",
+    "severity": "SEV-1 (P0)",
+    "symptoms": [
+      "CoreDNS pods crash immediately upon startup with loop detection logs.",
+      "ConfigMap coredns in kube-system forwards traffic to 127.0.0.1."
+    ],
+    "solutionCommands": [
+      "kubectl patch configmap coredns -n kube-system -p '{\"data\":{\"Corefile\":\".:53 {\\n    errors\\n    health\\n    ready\\n    kubernetes cluster.local in-addr.arpa ip6.arpa\\n    forward . 1.1.1.1\\n    cache 30\\n    reload\\n}\"}}'"
+    ]
+  },
+  {
+    "id": "inc-12-pvc-storageclass-pending",
+    "title": "SEV-2: Database Pod Stuck in Pending (Non-Existent StorageClass)",
+    "category": "storage_outage",
+    "severity": "SEV-2 (P1)",
+    "symptoms": [
+      "Pod analytics-db-0 stuck in Pending (ContainerCreating).",
+      "PVC analytics-db-data references storageClassName: fast-nvme-ssd which is not provisioned in the cluster."
+    ],
+    "solutionCommands": [
+      "kubectl patch pvc analytics-db-data -n production -p '{\"spec\":{\"storageClassName\":\"standard-csi\"}}'"
+    ]
+  },
+  {
+    "id": "inc-13-slow-app-cpu-throttling",
+    "title": "SEV-2: Slow Application Response & P99 Latency Spike (CFS CPU Throttling)",
+    "category": "slow_app",
+    "severity": "SEV-2 (P1)",
+    "symptoms": [
+      "Deployment order-processor in namespace production is severely throttled with limits.cpu: 5m.",
+      "No HorizontalPodAutoscaler exists to scale order-processor during traffic spikes."
+    ],
+    "solutionCommands": [
+      "kubectl set resources deployment/order-processor --limits=cpu=500m,memory=256Mi -n production",
+      "kubectl autoscale deployment order-processor --min=2 --max=10 --cpu-percent=70 -n production"
+    ]
+  },
+  {
+    "id": "inc-14-iam-irsa-access-denied",
+    "title": "SEV-1: AWS EKS S3 Ingestion Outage (IAM IRSA Role Annotation Missing)",
+    "category": "iam_outage",
+    "severity": "SEV-1 (P0)",
+    "symptoms": [
+      "Deployment s3-sync-worker in namespace production is crashing with CrashLoopBackOff (AccessDenied: WebIdentityErr).",
+      "ServiceAccount s3-worker-sa is missing annotation eks.amazonaws.com/role-arn."
+    ],
+    "solutionCommands": [
+      "kubectl annotate serviceaccount s3-worker-sa eks.amazonaws.com/role-arn=arn:aws:iam::123456789012:role/eks-s3-access -n production"
+    ]
+  },
+  {
+    "id": "inc-15-node-notready-kubelet-down",
+    "title": "SEV-1: Worker Node NotReady & Cordoned (Kubelet Daemon Stopped)",
+    "category": "node_outage",
+    "severity": "SEV-1 (P0)",
+    "symptoms": [
+      "Node kubelabs-worker-01 has status.phase = NotReady and spec.unschedulable = true.",
+      "kubelet systemd unit on the worker node is stopped."
+    ],
+    "solutionCommands": [
+      "systemctl restart kubelet",
+      "kubectl uncordon kubelabs-worker-01"
+    ]
+  },
+  {
+    "id": "inc-16-istio-mtls-strict-drop",
+    "title": "SEV-1: Service Mesh Strict mTLS Traffic Drop (Missing Sidecar)",
+    "category": "networking_outage",
+    "severity": "SEV-1 (P0)",
+    "symptoms": [
+      "In mesh-prod, PeerAuthentication default enforces mode STRICT.",
+      "Caller pod does not present an Istio client certificate, resulting in TCP handshake terminations."
+    ],
+    "solutionCommands": [
+      "kubectl patch peerauthentication default -n mesh-prod -p '{\"spec\":{\"mtls\":{\"mode\":\"PERMISSIVE\"}}}'"
+    ]
+  },
+  {
+    "id": "inc-17-linkerd-retry-budget-exhaustion",
+    "title": "SEV-2: Linkerd ServiceProfile Retry Storm Rejection",
+    "category": "slow_app",
+    "severity": "SEV-2 (P1)",
+    "symptoms": [
+      "Linkerd proxy logs show retry budget zeroed out.",
+      "ServiceProfile retryBudget specifies retryRatio: 0."
+    ],
+    "solutionCommands": [
+      "kubectl patch serviceprofile payment-service.mesh-prod.svc.cluster.local -n mesh-prod -p '{\"spec\":{\"retryBudget\":{\"retryRatio\":0.2}}}'"
+    ]
+  },
+  {
+    "id": "inc-18-prometheus-rule-syntax-error",
+    "title": "SEV-2: Prometheus Operator Rule Evaluation Interval Invalid",
+    "category": "slow_app",
+    "severity": "SEV-2 (P1)",
+    "symptoms": [
+      "Prometheus logs report invalid rule evaluation interval 0s.",
+      "PrometheusRule core-api-alerts has invalid interval."
+    ],
+    "solutionCommands": [
+      "kubectl patch prometheusrule core-api-alerts -n monitoring -p '{\"spec\":{\"interval\":\"15s\"}}'"
+    ]
+  },
+  {
+    "id": "inc-19-keda-scaledobject-auth-failure",
+    "title": "SEV-1: KEDA ScaledObject Trigger Starvation Under Queue Spike",
+    "category": "slow_app",
+    "severity": "SEV-1 (P0)",
+    "symptoms": [
+      "Deployment order-processor is at 0 replicas.",
+      "ScaledObject minReplicaCount is 0 and fails to scale up."
+    ],
+    "solutionCommands": [
+      "kubectl patch scaledobject order-processor-scaler -n production -p '{\"spec\":{\"minReplicaCount\":5}}'",
+      "kubectl scale deployment order-processor -n production --replicas=5"
+    ]
+  },
+  {
+    "id": "inc-20-velero-backup-dr-mismatch",
+    "title": "SEV-1: Disaster Recovery Velero Backup Target Unavailable",
+    "category": "storage_outage",
+    "severity": "SEV-1 (P0)",
+    "symptoms": [
+      "Velero BackupStorageLocation default reports phase Unavailable.",
+      "S3 bucket name in spec is set to invalid-backup-bucket."
+    ],
+    "solutionCommands": [
+      "kubectl patch backupstoragelocation default -n velero -p '{\"spec\":{\"objectStorage\":{\"bucket\":\"prod-backups-bucket\"}},\"status\":{\"phase\":\"Available\"}}'"
+    ]
+  },
+  {
+    "id": "inc-21-apf-flowschema-drop",
+    "title": "SEV-1: API Priority & Fairness (APF) Rate Limiting Dropping Admin Operations",
+    "category": "node_outage",
+    "severity": "SEV-1 (P0)",
+    "symptoms": [
+      "FlowSchema admin-governance-flow maps to low-priority queue unmatched-low-priority.",
+      "High queue drop rate on API server."
+    ],
+    "solutionCommands": [
+      "kubectl patch flowschema admin-governance-flow -p '{\"spec\":{\"priorityLevelConfiguration\":{\"name\":\"workload-high\"}}}'"
+    ]
+  },
+  {
+    "id": "inc-22-cilium-clustermesh-partition",
+    "title": "SEV-1: Multi-Cluster Cilium ClusterMesh Network Partition",
+    "category": "networking_outage",
+    "severity": "SEV-1 (P0)",
+    "symptoms": [
+      "Cilium ClusterMesh secret has corrupt encryption key.",
+      "Cilium status reports ClusterMesh disconnected."
+    ],
+    "solutionCommands": [
+      "kubectl patch secret clustermesh-secret -n kube-system -p '{\"data\":{\"key\":\"valid-clustermesh-key\"}}'"
+    ]
+  },
+  {
+    "id": "inc-23-tetragon-ebpf-kill-loop",
+    "title": "SEV-1: Tetragon eBPF Policy Terminating Critical Microservice Pod",
+    "category": "pod_restarting",
+    "severity": "SEV-1 (P0)",
+    "symptoms": [
+      "Kernel logs report: Tetragon Sigkill executed on node binary.",
+      "TracingPolicy runtime-protection matchArgs includes /usr/bin/node by mistake."
+    ],
+    "solutionCommands": [
+      "kubectl patch tracingpolicy runtime-protection -n production -p '{\"spec\":{\"kprobes\":[{\"call\":\"sys_execve\",\"selectors\":[{\"matchArgs\":[{\"values\":[\"/bin/netcat\",\"/usr/bin/nc\"]}]}]}]}}'",
+      "kubectl scale deployment payment-service -n production --replicas=2"
+    ]
+  },
+  {
+    "id": "inc-24-cqrs-projection-lag-staleness",
+    "title": "SEV-2: CQRS Read Model Event Consumer Crash & Stale Projections",
+    "category": "slow_app",
+    "severity": "SEV-2 (P1)",
+    "symptoms": [
+      "Deployment order-projector is at 0 replicas.",
+      "ConfigMap cqrs-event-stream-spec status is lagging."
+    ],
+    "solutionCommands": [
+      "kubectl patch configmap cqrs-event-stream-spec -n production -p '{\"data\":{\"status\":\"reconciled\"}}'",
+      "kubectl scale deployment order-projector -n production --replicas=3"
+    ]
+  },
+  {
+    "id": "inc-25-landing-zone-quota-exhaustion",
+    "title": "SEV-1: Enterprise Multi-Tenant Namespace Quota Exhaustion",
+    "category": "node_outage",
+    "severity": "SEV-1 (P0)",
+    "symptoms": [
+      "ResourceQuota enterprise-governance-quota caps requests.cpu at 1000m.",
+      "Pods fail admission with exceeded quota."
+    ],
+    "solutionCommands": [
+      "kubectl patch resourcequota enterprise-governance-quota -n enterprise-governance -p '{\"spec\":{\"hard\":{\"requests.cpu\":\"8000m\",\"requests.memory\":\"16Gi\"}}}'"
+    ]
+  }
+];
   const projects = [
   {
     "id": "proj-01-hardened-edge-node",
@@ -930,6 +1445,12 @@
         "title": "Expose Service & Configure L7 Ingress",
         "instruction": "Expose `deployment/edge-api` on port 8080 in `production` and create Ingress `edge-ingress` in `production`."
       }
+    ],
+    "solutionCommands": [
+      "kubectl create configmap edge-sysctl --from-literal=ip_forward=1 -n kube-system",
+      "kubectl create deployment edge-api --image=gcr.io/distroless/static-debian12:nonroot --replicas=2 -n production",
+      "kubectl expose deployment edge-api --port=8080 -n production",
+      "kubectl create ingress edge-ingress -n production"
     ]
   },
   {
@@ -951,6 +1472,12 @@
         "title": "Synchronize Argo CD Commerce Fleet",
         "instruction": "Run `argocd app sync commerce-gitops` to reconcile the production fleet."
       }
+    ],
+    "solutionCommands": [
+      "kubectl create serviceaccount commerce-sa -n production",
+      "kubectl create role commerce-role -n production",
+      "helm install commerce-cache bitnami/redis -n production",
+      "argocd app sync commerce-gitops"
     ]
   },
   {
@@ -972,6 +1499,13 @@
         "title": "Enforce Istio STRICT mTLS",
         "instruction": "Create `PeerAuthentication` `strict-mesh-mtls` in `production` with `spec.mtls.mode=STRICT`."
       }
+    ],
+    "solutionCommands": [
+      "trivy image nginx:1.27-alpine",
+      "kubectl patch deployment payment-vault -n production -p '{\"spec\":{\"template\":{\"spec\":{\"securityContext\":{\"runAsNonRoot\":true}}}}}'",
+      "kubectl create networkpolicy payment-vault-netpol -n production",
+      "kubectl create peerauthentication strict-mesh-mtls -n production",
+      "kubectl patch peerauthentication strict-mesh-mtls -n production -p '{\"spec\":{\"mtls\":{\"mode\":\"STRICT\"}}}'"
     ]
   },
   {
@@ -993,6 +1527,11 @@
         "title": "Deploy PrometheusRule SLO Alert",
         "instruction": "Create `PrometheusRule` `checkout-slo-burn` in `monitoring`."
       }
+    ],
+    "solutionCommands": [
+      "kubectl set env deployment/sre-checkout CRASH_ON_START=false -n production",
+      "kubectl autoscale deployment sre-checkout --min=3 --max=15 --cpu-percent=70 -n production",
+      "kubectl create prometheusrule checkout-slo-burn -n monitoring"
     ]
   },
   {
@@ -1014,6 +1553,12 @@
         "title": "Deploy OpenCost in Monitoring Namespace",
         "instruction": "Create deployment `idp-opencost` in `monitoring` with image `quay.io/kubecost1/kubecost-cost-model:v1.113.0`."
       }
+    ],
+    "solutionCommands": [
+      "tofu init",
+      "tofu apply",
+      "kubectl create postgresinstance idp-shared-db -n production",
+      "kubectl create deployment idp-opencost --image=quay.io/kubecost1/kubecost-cost-model:v1.113.0 -n monitoring"
     ]
   },
   {
@@ -1035,6 +1580,13 @@
         "title": "Execute AI-Ops Autonomous Self-Healing",
         "instruction": "Run `aiops analyze` and `aiops remediate`."
       }
+    ],
+    "solutionCommands": [
+      "aws eks describe-cluster --name eks-ai-fleet",
+      "gcloud container clusters describe gke-ai-fleet",
+      "kubectl patch deployment global-llm -n production -p '{\"spec\":{\"template\":{\"spec\":{\"tolerations\":[{\"key\":\"nvidia.com/gpu\",\"operator\":\"Exists\",\"effect\":\"NoSchedule\"}]}}}}'",
+      "aiops analyze",
+      "aiops remediate"
     ]
   },
   {
@@ -1061,6 +1613,13 @@
         "title": "Isolate Tenant Traffic via NetworkPolicy",
         "instruction": "Create NetworkPolicy `deny-cross-tenant` in `tenant-alpha` to isolate network ingress and egress."
       }
+    ],
+    "solutionCommands": [
+      "kubectl create namespace tenant-alpha",
+      "kubectl create quota alpha-quota --hard=pods=10 -n tenant-alpha",
+      "kubectl create clusterpolicy require-team-label",
+      "vcluster create alpha-vcluster -n tenant-alpha",
+      "kubectl create networkpolicy deny-cross-tenant -n tenant-alpha"
     ]
   },
   {
@@ -1087,18 +1646,13502 @@
         "title": "Run AI-Ops Autonomous Analysis",
         "instruction": "Execute `aiops analyze` to evaluate inference latency and cluster GPU saturation."
       }
+    ],
+    "solutionCommands": [
+      "kubectl create namespace ai-platform",
+      "kubectl create pytorchjob foundation-llm-finetune -n ai-platform",
+      "kubectl create inferenceservice gpt-distributed-inference -n ai-platform",
+      "kubectl create service clusterip inference-gw --tcp=8000:8000 -n ai-platform",
+      "aiops analyze"
+    ]
+  }
+];
+  const performanceExams = [
+  {
+    "id": "perf-exam-kcna",
+    "code": "KCNA-SIM",
+    "title": "Certified Cloud-Native Associate (KCNA) Practical Exam",
+    "trackId": "track-foundations",
+    "durationMinutes": 60,
+    "tasks": [
+      {
+        "id": "task-01",
+        "title": "Multi-Container Shared Volume Pod",
+        "weight": 25,
+        "solutionCommands": [
+          "cat <<'EOF' | kubectl apply -f -\napiVersion: v1\nkind: Pod\nmetadata:\n  name: shared-app\n  namespace: default\nspec:\n  volumes:\n  - name: shared-data\n    emptyDir: {}\n  containers:\n  - name: web\n    image: nginx:1.27\n    volumeMounts:\n    - name: shared-data\n      mountPath: /var/log\n  - name: helper\n    image: busybox:1.36\n    command: [\"sleep\", \"3600\"]\n    volumeMounts:\n    - name: shared-data\n      mountPath: /var/log\nEOF"
+        ]
+      },
+      {
+        "id": "task-02",
+        "title": "Container Resource Ceilings & LimitRange Enforcement",
+        "weight": 25,
+        "solutionCommands": [
+          "cat <<'EOF' | kubectl apply -f -\napiVersion: v1\nkind: LimitRange\nmetadata:\n  name: core-limits\n  namespace: default\nspec:\n  limits:\n  - type: Container\n    default:\n      memory: 128Mi\n    defaultRequest:\n      memory: 64Mi\nEOF"
+        ]
+      },
+      {
+        "id": "task-03",
+        "title": "NodeSelector Dedicated Workload Placement",
+        "weight": 25,
+        "solutionCommands": [
+          "cat <<'EOF' | kubectl apply -f -\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: edge-processor\n  namespace: default\nspec:\n  replicas: 2\n  selector:\n    matchLabels:\n      app: edge-processor\n  template:\n    metadata:\n      labels:\n        app: edge-processor\n    spec:\n      nodeSelector:\n        disktype: ssd\n      containers:\n      - name: processor\n        image: alpine:3.20\n        command: [\"sleep\", \"3600\"]\nEOF"
+        ]
+      },
+      {
+        "id": "task-04",
+        "title": "ClusterRole & ServiceAccount Access Delegation",
+        "weight": 25,
+        "solutionCommands": [
+          "kubectl create sa metrics-reader-sa -n default",
+          "kubectl create clusterrolebinding metrics-reader-binding --clusterrole=view --serviceaccount=default:metrics-reader-sa"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "perf-exam-cka",
+    "code": "CKA-SIM",
+    "title": "Certified Kubernetes Administrator (CKA) Practical Exam",
+    "trackId": "track-k8s-admin",
+    "durationMinutes": 120,
+    "tasks": [
+      {
+        "id": "task-01",
+        "title": "Ingress Controller Route Configuration",
+        "weight": 20,
+        "solutionCommands": [
+          "kubectl create namespace finance",
+          "cat <<'EOF' | kubectl apply -f -\napiVersion: networking.k8s.io/v1\nkind: Ingress\nmetadata:\n  name: billing-ingress\n  namespace: finance\nspec:\n  rules:\n  - host: billing.kubelabs.io\n    http:\n      paths:\n      - path: /pay\n        pathType: Prefix\n        backend:\n          service:\n            name: billing-svc\n            port:\n              number: 8080\nEOF"
+        ]
+      },
+      {
+        "id": "task-02",
+        "title": "Static Pod Manifest Troubleshooting",
+        "weight": 20,
+        "solutionCommands": [
+          "sed -i 's/:9999/:2379/g' /etc/kubernetes/manifests/kube-apiserver.yaml"
+        ]
+      },
+      {
+        "id": "task-03",
+        "title": "Persistent Volume & PVC Claim Binding",
+        "weight": 20,
+        "solutionCommands": [
+          "cat <<'EOF' | kubectl apply -f -\napiVersion: v1\nkind: PersistentVolume\nmetadata:\n  name: data-pv\nspec:\n  capacity:\n    storage: 5Gi\n  accessModes:\n  - ReadWriteOnce\n  hostPath:\n    path: /mnt/data\n---\napiVersion: v1\nkind: PersistentVolumeClaim\nmetadata:\n  name: data-pvc\n  namespace: production\nspec:\n  accessModes:\n  - ReadWriteOnce\n  resources:\n    requests:\n      storage: 5Gi\nEOF"
+        ]
+      },
+      {
+        "id": "task-04",
+        "title": "Deployment Rollback from Crashloop",
+        "weight": 20,
+        "solutionCommands": [
+          "kubectl set image deployment/web-frontend web=nginx:1.27 -n production",
+          "kubectl scale deployment/web-frontend --replicas=3 -n production"
+        ]
+      },
+      {
+        "id": "task-05",
+        "title": "NetworkPolicy Strict Microservice Isolation",
+        "weight": 20,
+        "solutionCommands": [
+          "cat <<'EOF' | kubectl apply -f -\napiVersion: networking.k8s.io/v1\nkind: NetworkPolicy\nmetadata:\n  name: isolate-database\n  namespace: production\nspec:\n  podSelector:\n    matchLabels:\n      app: db\n  policyTypes:\n  - Ingress\n  ingress:\n  - from:\n    - podSelector:\n        matchLabels:\n          app: api\n    ports:\n    - protocol: TCP\n      port: 5432\nEOF"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "perf-exam-cks",
+    "code": "CKS-SIM",
+    "title": "Certified Kubernetes Security Specialist (CKS) Practical Exam",
+    "trackId": "track-devsecops",
+    "durationMinutes": 120,
+    "tasks": [
+      {
+        "id": "task-01",
+        "title": "Restricted Pod Security Standard Admission",
+        "weight": 20,
+        "solutionCommands": [
+          "kubectl create namespace secure-zone",
+          "kubectl label namespace secure-zone pod-security.kubernetes.io/enforce=restricted"
+        ]
+      },
+      {
+        "id": "task-02",
+        "title": "Container SecurityContext & Capability Dropping",
+        "weight": 20,
+        "solutionCommands": [
+          "cat <<'EOF' | kubectl apply -f -\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: secure-api\n  namespace: secure-zone\nspec:\n  replicas: 2\n  selector:\n    matchLabels:\n      app: secure-api\n  template:\n    metadata:\n      labels:\n        app: secure-api\n    spec:\n      securityContext:\n        runAsNonRoot: true\n        readOnlyRootFilesystem: true\n      containers:\n      - name: api\n        image: cgr.dev/chainguard/static:latest\nEOF"
+        ]
+      },
+      {
+        "id": "task-03",
+        "title": "eBPF Runtime Threat Neutralization with Tetragon",
+        "weight": 20,
+        "solutionCommands": [
+          "cat <<'EOF' | kubectl apply -f -\napiVersion: cilium.io/v1alpha1\nkind: TracingPolicy\nmetadata:\n  name: block-reverse-shell\n  namespace: secure-zone\nspec:\n  kprobes:\n  - call: sys_execve\n    syscall: true\n    selectors:\n    - matchArgs:\n      - index: 0\n        operator: Equal\n        values:\n        - /bin/nc\n      matchActions:\n      - action: Sigkill\nEOF"
+        ]
+      },
+      {
+        "id": "task-04",
+        "title": "Trivy Vulnerability Scan & Supply Chain Audit",
+        "weight": 20,
+        "solutionCommands": [
+          "mkdir -p /security",
+          "trivy image --severity CRITICAL alpine:3.18 > /security/trivy-scan.json"
+        ]
+      },
+      {
+        "id": "task-05",
+        "title": "Workload Identity SPIFFE Federation",
+        "weight": 20,
+        "solutionCommands": [
+          "kubectl create sa vault-auth-sa -n secure-zone",
+          "kubectl annotate sa vault-auth-sa -n secure-zone spiffe.io/spiffe-id=spiffe://prod.kubelabs.io/ns/secure-zone/sa/vault-auth-sa"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "perf-exam-ckre",
+    "code": "CKRE-SIM",
+    "title": "Certified Kubernetes Reliability Engineer (CKRE) Practical Exam",
+    "trackId": "track-sre",
+    "durationMinutes": 90,
+    "tasks": [
+      {
+        "id": "task-01",
+        "title": "SLO/SLI Prometheus Alerting Rule Definition",
+        "weight": 25,
+        "solutionCommands": [
+          "kubectl create namespace monitoring",
+          "cat <<'EOF' | kubectl apply -f -\napiVersion: monitoring.coreos.com/v1\nkind: PrometheusRule\nmetadata:\n  name: latency-slo-alert\n  namespace: monitoring\nspec:\n  groups:\n  - name: slo.rules\n    interval: 15s\n    rules:\n    - alert: HighErrorRate\n      expr: rate(http_requests_total{status=~\"5..\"}[5m]) > 0.05\nEOF"
+        ]
+      },
+      {
+        "id": "task-02",
+        "title": "KEDA ScaledObject Event-Driven Autoscaling",
+        "weight": 25,
+        "solutionCommands": [
+          "cat <<'EOF' | kubectl apply -f -\napiVersion: keda.sh/v1alpha1\nkind: ScaledObject\nmetadata:\n  name: queue-autoscaler\n  namespace: production\nspec:\n  scaleTargetRef:\n    name: worker-service\n  minReplicaCount: 2\n  maxReplicaCount: 20\nEOF"
+        ]
+      },
+      {
+        "id": "task-03",
+        "title": "PodDisruptionBudget Reliability Guardrail",
+        "weight": 25,
+        "solutionCommands": [
+          "cat <<'EOF' | kubectl apply -f -\napiVersion: policy/v1\nkind: PodDisruptionBudget\nmetadata:\n  name: payment-pdb\n  namespace: production\nspec:\n  minAvailable: 2\n  selector:\n    matchLabels:\n      app: payment\nEOF"
+        ]
+      },
+      {
+        "id": "task-04",
+        "title": "CoreDNS Control Plane Recovery",
+        "weight": 25,
+        "solutionCommands": [
+          "kubectl scale deployment/coredns --replicas=2 -n kube-system"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "perf-exam-cpa",
+    "code": "CPA-SIM",
+    "title": "Certified Platform Architect (CPA) Practical Exam",
+    "trackId": "track-platform",
+    "durationMinutes": 90,
+    "tasks": [
+      {
+        "id": "task-01",
+        "title": "Multi-Tenant ResourceQuota & Namespace Partitioning",
+        "weight": 25,
+        "solutionCommands": [
+          "kubectl create namespace tenant-analytics",
+          "cat <<'EOF' | kubectl apply -f -\napiVersion: v1\nkind: ResourceQuota\nmetadata:\n  name: compute-quota\n  namespace: tenant-analytics\nspec:\n  hard:\n    requests.cpu: 4000m\n    requests.memory: 8Gi\nEOF"
+        ]
+      },
+      {
+        "id": "task-02",
+        "title": "Backstage Software Catalog Entity Specification",
+        "weight": 25,
+        "solutionCommands": [
+          "cat <<'EOF' | kubectl apply -f -\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: backstage-catalog-orders\n  namespace: default\ndata:\n  component: |\n    apiVersion: backstage.io/v1alpha1\n    kind: Component\n    metadata:\n      name: orders-api\n    spec:\n      type: service\n      lifecycle: production\n      owner: checkout-team\nEOF"
+        ]
+      },
+      {
+        "id": "task-03",
+        "title": "Custom Resource Operator State Machine",
+        "weight": 25,
+        "solutionCommands": [
+          "cat <<'EOF' | kubectl apply -f -\napiVersion: databases.kubelabs.io/v1\nkind: DatabaseCluster\nmetadata:\n  name: main-db\n  namespace: production\nspec:\n  engine: postgres\n  version: \"16\"\n  replicas: 3\nEOF"
+        ]
+      },
+      {
+        "id": "task-04",
+        "title": "ArgoCD GitOps Application Declaration",
+        "weight": 25,
+        "solutionCommands": [
+          "kubectl create namespace argocd",
+          "cat <<'EOF' | kubectl apply -f -\napiVersion: argoproj.io/v1alpha1\nkind: Application\nmetadata:\n  name: storefront-app\n  namespace: argocd\nspec:\n  destination:\n    namespace: production\n    server: https://kubernetes.default.svc\nEOF"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "perf-exam-cmaos",
+    "code": "CMAOS-SIM",
+    "title": "Certified Multi-Cloud & AI-Ops Specialist (CMAOS) Practical Exam",
+    "trackId": "track-multicloud-aiops",
+    "durationMinutes": 90,
+    "tasks": [
+      {
+        "id": "task-01",
+        "title": "KServe InferenceService LLM Model Serving",
+        "weight": 25,
+        "solutionCommands": [
+          "kubectl create namespace ai-workloads",
+          "cat <<'EOF' | kubectl apply -f -\napiVersion: serving.kserve.io/v1beta1\nkind: InferenceService\nmetadata:\n  name: llm-mistral\n  namespace: ai-workloads\nspec:\n  predictor:\n    model:\n      modelFormat: vllm\n      storageUri: s3://models/mistral-7b\nEOF"
+        ]
+      },
+      {
+        "id": "task-02",
+        "title": "k8sgpt AI Root-Cause Diagnostic Automation",
+        "weight": 25,
+        "solutionCommands": [
+          "kubectl create namespace monitoring",
+          "cat <<'EOF' | kubectl apply -f -\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: k8sgpt-config\n  namespace: monitoring\ndata:\n  config: |\n    ai:\n      provider: local-llm\n      anonymize: true\nEOF"
+        ]
+      },
+      {
+        "id": "task-03",
+        "title": "FinOps Cost Allocation & Multi-Cloud Landing Zone",
+        "weight": 25,
+        "solutionCommands": [
+          "kubectl create namespace enterprise-governance",
+          "cat <<'EOF' | kubectl apply -f -\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: landing-zone-finops\n  namespace: enterprise-governance\ndata:\n  policy: |\n    finops:\n      costCenter: fintech-ops\n      budgetCapUSD: 10000\nEOF"
+        ]
+      },
+      {
+        "id": "task-04",
+        "title": "Cilium ClusterMesh Multi-Cluster Service Export",
+        "weight": 25,
+        "solutionCommands": [
+          "cat <<'EOF' | kubectl apply -f -\napiVersion: v1\nkind: Service\nmetadata:\n  name: global-auth\n  namespace: production\n  annotations:\n    service.cilium.io/global: \"true\"\nspec:\n  ports:\n  - port: 8443\n    targetPort: 8443\nEOF"
+        ]
+      }
+    ]
+  }
+];
+  const domains = [
+  {
+    "id": "linux-fundamentals",
+    "title": "Linux Fundamentals & Command-Line Streaming Pipelines",
+    "estimatedHours": 6,
+    "modules": [],
+    "labs": [
+      {
+        "id": "lab-linux-01-permissions",
+        "title": "Linux Filesystem Permissions & Security Hardening",
+        "xpReward": 150,
+        "difficulty": "Beginner",
+        "durationMinutes": 20,
+        "objectives": [
+          "Inspect file permissions on /etc/kubernetes/admin.conf using ls -la",
+          "Harden /etc/kubernetes/admin.conf to mode 0600 owned by root:root",
+          "Configure /home/learner/.kube/config to mode 0600"
+        ],
+        "starterManifest": "",
+        "solutionCommands": [
+          "ls -la /etc/kubernetes/admin.conf",
+          "chmod 600 /etc/kubernetes/admin.conf",
+          "chown root:root /etc/kubernetes/admin.conf",
+          "chmod 600 /home/learner/.kube/config"
+        ],
+        "validationRules": [
+          {
+            "id": "val-linux-perm-01",
+            "description": "Executed chmod command to harden kubeconfig permissions",
+            "type": "command_executed",
+            "commandSubstring": "chmod 600",
+            "remediation": "Run `chmod 600 /etc/kubernetes/admin.conf` and `chmod 600 /home/learner/.kube/config`."
+          },
+          {
+            "id": "val-linux-perm-02",
+            "description": "Executed chown command to ensure root ownership",
+            "type": "command_executed",
+            "commandSubstring": "chown root:root",
+            "remediation": "Run `chown root:root /etc/kubernetes/admin.conf`."
+          }
+        ]
+      },
+      {
+        "id": "lab-linux-01-text-pipelines",
+        "title": "POSIX Streaming Pipelines & Access Log Analysis",
+        "xpReward": 150,
+        "difficulty": "Beginner",
+        "durationMinutes": 25,
+        "objectives": [
+          "Inspect the raw access log structure using head -n 5 /var/log/nginx/access.log",
+          "Extract 500 errors, aggregate unique offending IPs, and redirect output to /home/learner/offenders.txt"
+        ],
+        "starterManifest": "",
+        "solutionCommands": [
+          "head -n 5 /var/log/nginx/access.log",
+          "grep \" 500 \" /var/log/nginx/access.log | awk '{print $1}' | sort | uniq -c > /home/learner/offenders.txt"
+        ],
+        "validationRules": [
+          {
+            "id": "val-linux-pipe-01",
+            "description": "Constructed grep and awk pipeline for log filtering",
+            "type": "command_executed",
+            "commandSubstring": "grep \" 500 \"",
+            "remediation": "Run `grep \" 500 \" /var/log/nginx/access.log | awk '{print $1}' | sort | uniq -c > /home/learner/offenders.txt`."
+          },
+          {
+            "id": "val-linux-pipe-02",
+            "description": "Offending client IP report written to /home/learner/offenders.txt",
+            "type": "vfs_file_contains",
+            "path": "/home/learner/offenders.txt",
+            "expectedContent": "192.168.1.105",
+            "remediation": "Ensure output is redirected to `/home/learner/offenders.txt` using `>`."
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "linux-admin",
+    "title": "Linux Administration, Cgroups v2 & Systemd Internals",
+    "estimatedHours": 8,
+    "modules": [],
+    "labs": [
+      {
+        "id": "lab-linux-02-systemd-cgroups",
+        "title": "Systemd Unit Lifecycle, Journalctl Diagnostics & Cgroups v2 Throttling",
+        "xpReward": 175,
+        "difficulty": "Intermediate",
+        "durationMinutes": 25,
+        "objectives": [
+          "Inspect recent error logs for containerd using journalctl -u containerd -p err",
+          "Restart containerd and verify kubelet status using systemctl",
+          "Configure cgroups v2 CPU max ceiling on kubelet service"
+        ],
+        "starterManifest": "",
+        "solutionCommands": [
+          "journalctl -u containerd -p err",
+          "systemctl restart containerd",
+          "systemctl status kubelet",
+          "echo \"200000 100000\" > /sys/fs/cgroup/system.slice/kubelet.service/cpu.max"
+        ],
+        "validationRules": [
+          {
+            "id": "val-linux-sysd-01",
+            "description": "Executed journalctl error log inspection",
+            "type": "command_executed",
+            "commandSubstring": "journalctl -u containerd -p err",
+            "remediation": "Run `journalctl -u containerd -p err` to inspect runtime errors."
+          },
+          {
+            "id": "val-linux-sysd-02",
+            "description": "Restarted containerd systemd service",
+            "type": "command_executed",
+            "commandSubstring": "systemctl restart containerd",
+            "remediation": "Run `systemctl restart containerd`."
+          },
+          {
+            "id": "val-linux-cgroup-01",
+            "description": "Configured cgroups v2 CPU ceiling for kubelet service",
+            "type": "vfs_file_contains",
+            "path": "/sys/fs/cgroup/system.slice/kubelet.service/cpu.max",
+            "expectedContent": "200000 100000",
+            "remediation": "Run `echo \"200000 100000\" > /sys/fs/cgroup/system.slice/kubelet.service/cpu.max`."
+          }
+        ]
+      },
+      {
+        "id": "lab-linux-02-namespaces-sysctl",
+        "title": "Linux Kernel Namespaces Isolation, Sysctl Tuning & LVM Volume Provisioning",
+        "xpReward": 175,
+        "difficulty": "Intermediate",
+        "durationMinutes": 30,
+        "objectives": [
+          "Enable IPv4 packet forwarding using sysctl -w net.ipv4.ip_forward=1",
+          "Create an isolated network namespace netns-worker and verify with ip netns list",
+          "Initialize LVM physical volume, volume group, and logical volume lv_containerd"
+        ],
+        "starterManifest": "",
+        "solutionCommands": [
+          "sysctl -w net.ipv4.ip_forward=1",
+          "ip netns add netns-worker",
+          "pvcreate /dev/sdb1",
+          "vgcreate vg_k8s /dev/sdb1",
+          "lvcreate -L 20G -n lv_containerd vg_k8s"
+        ],
+        "validationRules": [
+          {
+            "id": "val-linux-sysctl-01",
+            "description": "Enabled IPv4 packet forwarding via sysctl",
+            "type": "command_executed",
+            "commandSubstring": "sysctl -w net.ipv4.ip_forward=1",
+            "remediation": "Run `sysctl -w net.ipv4.ip_forward=1`."
+          },
+          {
+            "id": "val-linux-netns-01",
+            "description": "Created isolated network namespace netns-worker",
+            "type": "command_executed",
+            "commandSubstring": "ip netns add netns-worker",
+            "remediation": "Run `ip netns add netns-worker`."
+          },
+          {
+            "id": "val-linux-lvm-01",
+            "description": "Provisioned LVM logical volume lv_containerd",
+            "type": "command_executed",
+            "commandSubstring": "lvcreate -L 20G -n lv_containerd vg_k8s",
+            "remediation": "Run `pvcreate /dev/sdb1`, `vgcreate vg_k8s /dev/sdb1`, and `lvcreate -L 20G -n lv_containerd vg_k8s`."
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "networking-fundamentals",
+    "title": "Linux Networking Fundamentals, Bridge Isolation & Packet Filtering",
+    "estimatedHours": 6,
+    "modules": [],
+    "labs": [
+      {
+        "id": "lab-net-01-veth-bridge",
+        "title": "Linux Bridge, Veth Pairs & Namespace Network Isolation",
+        "xpReward": 150,
+        "difficulty": "Beginner",
+        "durationMinutes": 25,
+        "objectives": [
+          "Create network namespace netns-isolated",
+          "Create software bridge br0 with IP 10.200.1.1/24 and bring it up",
+          "Create veth pair veth-host and veth-ns, enslaving veth-host to br0",
+          "Assign veth-ns to netns-isolated, configure IP 10.200.1.10/24, and set default route via 10.200.1.1"
+        ],
+        "starterManifest": "",
+        "solutionCommands": [
+          "ip netns add netns-isolated",
+          "ip link add br0 type bridge",
+          "ip addr add 10.200.1.1/24 dev br0",
+          "ip link set br0 up",
+          "ip link add veth-host type veth peer name veth-ns",
+          "ip link set veth-host master br0",
+          "ip link set veth-host up",
+          "ip link set veth-ns netns netns-isolated",
+          "ip netns exec netns-isolated ip link set lo up",
+          "ip netns exec netns-isolated ip link set veth-ns up",
+          "ip netns exec netns-isolated ip addr add 10.200.1.10/24 dev veth-ns",
+          "ip netns exec netns-isolated ip route add default via 10.200.1.1 dev veth-ns"
+        ],
+        "validationRules": [
+          {
+            "id": "val-net-bridge-01",
+            "description": "Linux bridge br0 created and brought up with gateway IP",
+            "type": "command_executed",
+            "commandSubstring": "ip link add br0 type bridge",
+            "remediation": "Run 'ip link add br0 type bridge && ip addr add 10.200.1.1/24 dev br0 && ip link set br0 up'."
+          },
+          {
+            "id": "val-net-veth-02",
+            "description": "Veth pair created and host end enslaved to bridge",
+            "type": "command_executed",
+            "commandSubstring": "ip link set veth-host master br0",
+            "remediation": "Run 'ip link add veth-host type veth peer name veth-ns && ip link set veth-host master br0 && ip link set veth-host up'."
+          },
+          {
+            "id": "val-net-ns-03",
+            "description": "Network namespace netns-isolated configured with IP and default route",
+            "type": "command_executed",
+            "commandSubstring": "ip netns exec netns-isolated ip addr add 10.200.1.10/24 dev veth-ns",
+            "remediation": "Run 'ip link set veth-ns netns netns-isolated && ip netns exec netns-isolated ip link set lo up && ip netns exec netns-isolated ip link set veth-ns up && ip netns exec netns-isolated ip addr add 10.200.1.10/24 dev veth-ns && ip netns exec netns-isolated ip route add default via 10.200.1.1 dev veth-ns'."
+          }
+        ]
+      },
+      {
+        "id": "lab-net-02-iptables-nat-tls",
+        "title": "Iptables NAT Masquerade, CoreDNS & TLS Certificate Inspection",
+        "xpReward": 150,
+        "difficulty": "Beginner",
+        "durationMinutes": 25,
+        "objectives": [
+          "Add iptables NAT masquerade rule for outbound subnet traffic",
+          "Add iptables forwarding rules for bridge br0",
+          "Verify internal DNS resolution for kubernetes.default.svc.cluster.local",
+          "Inspect kube-apiserver TLS certificate SANs and perform live handshake check"
+        ],
+        "starterManifest": "",
+        "solutionCommands": [
+          "iptables -t nat -A POSTROUTING -s 10.200.1.0/24 ! -o br0 -j MASQUERADE",
+          "iptables -A FORWARD -i br0 ! -o br0 -j ACCEPT",
+          "dig +short kubernetes.default.svc.cluster.local",
+          "openssl x509 -in /etc/kubernetes/pki/apiserver.crt -text -noout",
+          "openssl s_client -connect 127.0.0.1:6443 -showcerts"
+        ],
+        "validationRules": [
+          {
+            "id": "val-net-nat-01",
+            "description": "Iptables NAT masquerade rule configured for subnet outbound traffic",
+            "type": "command_executed",
+            "commandSubstring": "iptables -t nat -A POSTROUTING",
+            "remediation": "Run 'iptables -t nat -A POSTROUTING -s 10.200.1.0/24 ! -o br0 -j MASQUERADE'."
+          },
+          {
+            "id": "val-net-dns-02",
+            "description": "CoreDNS query executed with dig +short for kubernetes.default.svc.cluster.local",
+            "type": "command_executed",
+            "commandSubstring": "dig +short kubernetes.default.svc.cluster.local",
+            "remediation": "Verify CoreDNS configuration and test resolution using 'dig +short kubernetes.default.svc.cluster.local'."
+          },
+          {
+            "id": "val-net-tls-03",
+            "description": "Executed OpenSSL s_client handshake check against apiserver port 6443",
+            "type": "command_executed",
+            "commandSubstring": "openssl s_client",
+            "remediation": "Run 'openssl s_client -connect 127.0.0.1:6443 -showcerts' to verify TLS handshake negotiation."
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "git-fundamentals",
+    "title": "Git Internals, Content-Addressable Storage, DAG & History Rewriting",
+    "estimatedHours": 6,
+    "modules": [],
+    "labs": [
+      {
+        "id": "lab-git-01-internals",
+        "title": "Git Plumbing: Object Database, Hashing & Tree Inspection",
+        "xpReward": 150,
+        "difficulty": "Beginner",
+        "durationMinutes": 25,
+        "objectives": [
+          "Initialize an empty Git repository named gitops-repo in /home/learner",
+          "Create a pod manifest and write it to the Git object database using git hash-object -w",
+          "Stage and commit the manifest to the main branch",
+          "Inspect commit tree and metadata using git cat-file and git rev-parse"
+        ],
+        "starterManifest": "",
+        "solutionCommands": [
+          "cd /home/learner && git init gitops-repo",
+          "cd /home/learner/gitops-repo && echo \"apiVersion: v1\" > pod.yaml",
+          "git hash-object -w pod.yaml",
+          "git add pod.yaml",
+          "git commit -m \"feat: initial pod manifest\"",
+          "git rev-parse HEAD",
+          "git cat-file -p HEAD"
+        ],
+        "validationRules": [
+          {
+            "id": "val-git-init-01",
+            "description": "Initialized empty Git repository for GitOps workloads",
+            "type": "command_executed",
+            "commandSubstring": "git init gitops-repo",
+            "remediation": "Run 'git init gitops-repo' to create the repository directory and object database."
+          },
+          {
+            "id": "val-git-hash-02",
+            "description": "Hashed raw manifest into Git object database with git hash-object -w",
+            "type": "command_executed",
+            "commandSubstring": "git hash-object -w pod.yaml",
+            "remediation": "Run 'git hash-object -w pod.yaml' to compute the SHA-1 object hash and store it in .git/objects/."
+          },
+          {
+            "id": "val-git-commit-03",
+            "description": "Staged and committed manifest to main branch",
+            "type": "command_executed",
+            "commandSubstring": "git commit -m",
+            "remediation": "Run 'git add pod.yaml && git commit -m \"feat: initial pod manifest\"' to commit the manifest."
+          },
+          {
+            "id": "val-git-cat-04",
+            "description": "Inspected object database structure using git cat-file -p",
+            "type": "command_executed",
+            "commandSubstring": "git cat-file -p HEAD",
+            "remediation": "Run 'git cat-file -p HEAD' to inspect the tree and metadata of the commit object."
+          }
+        ]
+      },
+      {
+        "id": "lab-git-02-rebase-reflog-cherrypick",
+        "title": "Git Advanced Workflows: Cherry-Pick, Rebase, Bisect & Reflog Recovery",
+        "xpReward": 150,
+        "difficulty": "Beginner",
+        "durationMinutes": 25,
+        "objectives": [
+          "Create branch feature/auth and commit an authentication fix",
+          "Cherry-pick the fix commit onto the main branch",
+          "Rebase feature branch changes onto main for linear history",
+          "Inspect HEAD movement history with git reflog and run git bisect session"
+        ],
+        "starterManifest": "",
+        "solutionCommands": [
+          "cd /home/learner && git init gitops-repo && cd gitops-repo",
+          "git branch feature/auth",
+          "git checkout feature/auth",
+          "echo \"security: hardened\" > auth.yaml",
+          "git add auth.yaml",
+          "git commit -m \"fix(sec): patch auth bypass\"",
+          "git checkout main",
+          "git cherry-pick feature/auth",
+          "git rebase main",
+          "git reflog",
+          "git bisect start",
+          "git bisect bad",
+          "git bisect reset"
+        ],
+        "validationRules": [
+          {
+            "id": "val-git-branch-01",
+            "description": "Created feature branch feature/auth for hotfix development",
+            "type": "command_executed",
+            "commandSubstring": "git branch feature/auth",
+            "remediation": "Run 'git branch feature/auth' to create the isolated development branch."
+          },
+          {
+            "id": "val-git-cherry-02",
+            "description": "Cherry-picked security commit onto main branch",
+            "type": "command_executed",
+            "commandSubstring": "git cherry-pick feature/auth",
+            "remediation": "Run 'git checkout main && git cherry-pick feature/auth' to graft the commit onto main."
+          },
+          {
+            "id": "val-git-rebase-03",
+            "description": "Rebased branch onto main to ensure linear GitOps history",
+            "type": "command_executed",
+            "commandSubstring": "git rebase main",
+            "remediation": "Run 'git rebase main' to replay commits onto current main branch."
+          },
+          {
+            "id": "val-git-reflog-04",
+            "description": "Audited HEAD reference movements using git reflog",
+            "type": "command_executed",
+            "commandSubstring": "git reflog",
+            "remediation": "Run 'git reflog' to inspect previous HEAD pointer history."
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "docker-containers",
+    "title": "Docker & OCI Container Engineering",
+    "estimatedHours": 6,
+    "modules": [],
+    "labs": [
+      {
+        "id": "lab-docker-01-multistage-distroless",
+        "title": "Hardening Microservices with Multi-Stage Distroless Builds",
+        "xpReward": 150,
+        "difficulty": "Intermediate",
+        "durationMinutes": 20,
+        "objectives": [
+          "Create a multi-stage Dockerfile targeting gcr.io/distroless/static-debian12:nonroot",
+          "Build the hardened container image tagged payment-api:distroless",
+          "Run the container in detached mode named secure-api exposing port 8080",
+          "Inspect container configuration and verify non-root user execution"
+        ],
+        "starterManifest": "",
+        "solutionCommands": [
+          "echo \"FROM golang:1.22-alpine AS builder\" > Dockerfile",
+          "docker build -t payment-api:distroless .",
+          "docker run -d --name secure-api -p 8080:8080 payment-api:distroless",
+          "docker inspect secure-api"
+        ],
+        "validationRules": [
+          {
+            "id": "val-docker-build-01",
+            "description": "Built hardened image payment-api:distroless via multi-stage Dockerfile",
+            "type": "command_executed",
+            "commandSubstring": "docker build -t payment-api:distroless",
+            "remediation": "Run 'docker build -t payment-api:distroless .' to build the image."
+          },
+          {
+            "id": "val-docker-run-02",
+            "description": "Started secure-api container with port mapping 8080:8080",
+            "type": "command_executed",
+            "commandSubstring": "docker run -d --name secure-api",
+            "remediation": "Run 'docker run -d --name secure-api -p 8080:8080 payment-api:distroless' to launch the container."
+          },
+          {
+            "id": "val-docker-inspect-03",
+            "description": "Inspected container metadata and verified non-root security context",
+            "type": "command_executed",
+            "commandSubstring": "docker inspect secure-api",
+            "remediation": "Run 'docker inspect secure-api' to audit container security context and user."
+          }
+        ]
+      },
+      {
+        "id": "lab-docker-02-overlayfs-storage",
+        "title": "OverlayFS Storage Driver, Layer Inspection & Garbage Collection",
+        "xpReward": 150,
+        "difficulty": "Intermediate",
+        "durationMinutes": 20,
+        "objectives": [
+          "Launch redis cache container named cache-worker",
+          "Inspect container GraphDriver and OverlayFS directory paths",
+          "Inspect filesystem layer mutations using docker diff",
+          "Prune dangling image layers to reclaim host disk space"
+        ],
+        "starterManifest": "",
+        "solutionCommands": [
+          "docker run -d --name cache-worker -p 6379:6379 redis:7.2-alpine",
+          "docker inspect cache-worker",
+          "docker diff cache-worker",
+          "docker image prune -f"
+        ],
+        "validationRules": [
+          {
+            "id": "val-docker-run-cache",
+            "description": "Started cache-worker container with redis image",
+            "type": "command_executed",
+            "commandSubstring": "docker run -d --name cache-worker",
+            "remediation": "Run 'docker run -d --name cache-worker -p 6379:6379 redis:7.2-alpine' to start the cache worker."
+          },
+          {
+            "id": "val-docker-inspect-overlay",
+            "description": "Inspected container GraphDriver and OverlayFS storage paths",
+            "type": "command_executed",
+            "commandSubstring": "docker inspect cache-worker",
+            "remediation": "Run 'docker inspect cache-worker' to inspect the OverlayFS mount points."
+          },
+          {
+            "id": "val-docker-diff-layer",
+            "description": "Analyzed writable layer mutations with docker diff",
+            "type": "command_executed",
+            "commandSubstring": "docker diff cache-worker",
+            "remediation": "Run 'docker diff cache-worker' to inspect modified files."
+          },
+          {
+            "id": "val-docker-prune-gc",
+            "description": "Reclaimed disk space by pruning dangling image layers",
+            "type": "command_executed",
+            "commandSubstring": "docker image prune",
+            "remediation": "Run 'docker image prune -f' to remove unreferenced image layers."
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "container-runtime-cri",
+    "title": "OCI Container Runtimes & CRI Architecture",
+    "estimatedHours": 6,
+    "modules": [],
+    "labs": [
+      {
+        "id": "lab-cri-01-crictl-diagnostics",
+        "title": "Worker Node Pod Sandbox & Container Diagnostics with crictl",
+        "xpReward": 150,
+        "difficulty": "Intermediate",
+        "durationMinutes": 20,
+        "objectives": [
+          "List all active Pod sandboxes on the node with crictl pods",
+          "List running containers across all sandboxes with crictl ps",
+          "Inspect container sandbox runtime details with crictl inspect",
+          "Query real-time resource utilization with crictl stats",
+          "Audit containerd CRI configuration and runtimes with crictl info"
+        ],
+        "starterManifest": "",
+        "solutionCommands": [
+          "crictl pods",
+          "crictl ps",
+          "crictl inspect a1b2c3d4e5f6",
+          "crictl stats",
+          "crictl info"
+        ],
+        "validationRules": [
+          {
+            "id": "val-cri-pods-01",
+            "description": "Queried active Pod sandboxes on node using crictl pods",
+            "type": "command_executed",
+            "commandSubstring": "crictl pods",
+            "remediation": "Run 'crictl pods' to inspect running pod sandboxes."
+          },
+          {
+            "id": "val-cri-ps-02",
+            "description": "Queried active containers across sandboxes using crictl ps",
+            "type": "command_executed",
+            "commandSubstring": "crictl ps",
+            "remediation": "Run 'crictl ps' to list active containers."
+          },
+          {
+            "id": "val-cri-inspect-03",
+            "description": "Inspected container sandbox metadata using crictl inspect",
+            "type": "command_executed",
+            "commandSubstring": "crictl inspect",
+            "remediation": "Run 'crictl inspect a1b2c3d4e5f6' to view container status."
+          },
+          {
+            "id": "val-cri-stats-04",
+            "description": "Audited container runtime resource stats with crictl stats",
+            "type": "command_executed",
+            "commandSubstring": "crictl stats",
+            "remediation": "Run 'crictl stats' to view CPU and memory consumption."
+          },
+          {
+            "id": "val-cri-info-05",
+            "description": "Audited containerd runtime engine configuration with crictl info",
+            "type": "command_executed",
+            "commandSubstring": "crictl info",
+            "remediation": "Run 'crictl info' to inspect containerd runtime handler configurations."
+          }
+        ]
+      },
+      {
+        "id": "lab-cri-02-sandboxed-runtimes",
+        "title": "Securing Untrusted Workloads with gVisor Sandboxed RuntimeClass",
+        "xpReward": 150,
+        "difficulty": "Intermediate",
+        "durationMinutes": 20,
+        "objectives": [
+          "Verify containerd supports runsc sandbox via crictl info",
+          "Create and apply a Kubernetes RuntimeClass named gvisor with handler runsc",
+          "Deploy Pod untrusted-sandbox referencing runtimeClassName: gvisor",
+          "Verify pod status is Running under sandboxed isolation"
+        ],
+        "starterManifest": "apiVersion: node.k8s.io/v1\nkind: RuntimeClass\nmetadata:\n  name: gvisor\nhandler: runsc",
+        "solutionCommands": [
+          "crictl info",
+          "cat <<EOF | kubectl apply -f -\napiVersion: node.k8s.io/v1\nkind: RuntimeClass\nmetadata:\n  name: gvisor\nhandler: runsc\nEOF",
+          "cat <<EOF | kubectl apply -f -\napiVersion: v1\nkind: Pod\nmetadata:\n  name: untrusted-sandbox\n  namespace: default\nspec:\n  runtimeClassName: gvisor\n  containers:\n  - name: sandbox-app\n    image: nginx:1.27-alpine\nEOF",
+          "kubectl get pod untrusted-sandbox"
+        ],
+        "validationRules": [
+          {
+            "id": "val-cri-info-check",
+            "description": "Verified containerd runtime handlers via crictl info",
+            "type": "command_executed",
+            "commandSubstring": "crictl info",
+            "remediation": "Run 'crictl info' to verify containerd runtime configuration."
+          },
+          {
+            "id": "val-rc-exists",
+            "description": "Registered RuntimeClass gvisor with handler runsc",
+            "type": "resource_exists",
+            "kind": "RuntimeClass",
+            "name": "gvisor",
+            "remediation": "Apply a RuntimeClass manifest with name 'gvisor' and handler 'runsc'."
+          },
+          {
+            "id": "val-pod-exists",
+            "description": "Created Pod untrusted-sandbox referencing RuntimeClass gvisor",
+            "type": "resource_exists",
+            "kind": "Pod",
+            "name": "untrusted-sandbox",
+            "namespace": "default",
+            "remediation": "Deploy Pod 'untrusted-sandbox' in namespace 'default'."
+          },
+          {
+            "id": "val-pod-running",
+            "description": "Pod untrusted-sandbox successfully reconciled and entered Running phase",
+            "type": "pod_status_running",
+            "name": "untrusted-sandbox",
+            "namespace": "default",
+            "remediation": "Ensure Pod 'untrusted-sandbox' has valid container specs and enters Running status."
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "helm-packaging",
+    "title": "Helm v3 Application Packaging & Release Lifecycle",
+    "estimatedHours": 6,
+    "modules": [],
+    "labs": [
+      {
+        "id": "lab-helm-01-chart-templating",
+        "title": "Authoring Modular Helm Charts with Helpers & Go Templates",
+        "xpReward": 150,
+        "difficulty": "Intermediate",
+        "durationMinutes": 20,
+        "objectives": [
+          "Scaffold new chart billing-service using helm create",
+          "Lint chart to verify structure and syntax using helm lint",
+          "Render templates locally using helm template billing-release",
+          "Package the validated chart into a .tgz archive using helm package"
+        ],
+        "starterManifest": "",
+        "solutionCommands": [
+          "helm create billing-service",
+          "helm lint billing-service",
+          "helm template billing-release billing-service",
+          "helm package billing-service"
+        ],
+        "validationRules": [
+          {
+            "id": "val-helm-create-01",
+            "description": "Scaffolded billing-service Helm chart structure",
+            "type": "command_executed",
+            "commandSubstring": "helm create billing-service",
+            "remediation": "Run 'helm create billing-service' to generate standard chart templates."
+          },
+          {
+            "id": "val-helm-lint-02",
+            "description": "Linted chart templates and values syntax with helm lint",
+            "type": "command_executed",
+            "commandSubstring": "helm lint billing-service",
+            "remediation": "Run 'helm lint billing-service' to verify chart syntax."
+          },
+          {
+            "id": "val-helm-template-03",
+            "description": "Rendered manifest templates with helm template",
+            "type": "command_executed",
+            "commandSubstring": "helm template billing-release billing-service",
+            "remediation": "Run 'helm template billing-release billing-service' to render manifests."
+          },
+          {
+            "id": "val-helm-package-04",
+            "description": "Packaged chart into tarball archive with helm package",
+            "type": "command_executed",
+            "commandSubstring": "helm package billing-service",
+            "remediation": "Run 'helm package billing-service' to create the release package."
+          }
+        ]
+      },
+      {
+        "id": "lab-helm-02-lifecycle-rollback-test",
+        "title": "Helm Release Lifecycle: Atomic Upgrades, Helm Test & Rollbacks",
+        "xpReward": 175,
+        "difficulty": "Intermediate",
+        "durationMinutes": 20,
+        "objectives": [
+          "Install release orders-api in namespace production with chart bitnami/nginx",
+          "Execute automated release verification with helm test orders-api",
+          "Upgrade release orders-api to revision 2 using helm upgrade",
+          "Inspect release revision history with helm history orders-api",
+          "Roll back release to revision 1 with helm rollback orders-api 1"
+        ],
+        "starterManifest": "# Helm Values Override\nreplicaCount: 2\nimage:\n  repository: nginx\n  tag: 1.27-alpine",
+        "solutionCommands": [
+          "helm install orders-api bitnami/nginx -n production",
+          "helm test orders-api -n production",
+          "helm upgrade orders-api bitnami/nginx -n production",
+          "helm history orders-api -n production",
+          "helm rollback orders-api 1 -n production"
+        ],
+        "validationRules": [
+          {
+            "id": "val-helm-deploy-01",
+            "description": "Installed release orders-api in production namespace",
+            "type": "helm_release_deployed",
+            "name": "orders-api",
+            "namespace": "production",
+            "remediation": "Run 'helm install orders-api bitnami/nginx -n production' to deploy the release."
+          },
+          {
+            "id": "val-helm-test-02",
+            "description": "Executed automated test suite with helm test",
+            "type": "command_executed",
+            "commandSubstring": "helm test orders-api",
+            "remediation": "Run 'helm test orders-api -n production' to execute release test pods."
+          },
+          {
+            "id": "val-helm-upgrade-03",
+            "description": "Upgraded release to revision 2 with helm upgrade",
+            "type": "command_executed",
+            "commandSubstring": "helm upgrade orders-api",
+            "remediation": "Run 'helm upgrade orders-api bitnami/nginx -n production' to upgrade the release."
+          },
+          {
+            "id": "val-helm-history-04",
+            "description": "Audited release revisions with helm history",
+            "type": "command_executed",
+            "commandSubstring": "helm history orders-api",
+            "remediation": "Run 'helm history orders-api -n production' to inspect revision log."
+          },
+          {
+            "id": "val-helm-rollback-05",
+            "description": "Rolled back release to revision 1 with helm rollback",
+            "type": "command_executed",
+            "commandSubstring": "helm rollback orders-api 1",
+            "remediation": "Run 'helm rollback orders-api 1 -n production' to restore revision 1."
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "kustomize-manifests",
+    "title": "Kustomize Declarative Configuration Management",
+    "estimatedHours": 6,
+    "modules": [],
+    "labs": [
+      {
+        "id": "lab-kust-01-overlays-patching",
+        "title": "Multi-Environment Overlay Architecture & Strategic Merge Patches",
+        "xpReward": 150,
+        "difficulty": "Intermediate",
+        "durationMinutes": 20,
+        "objectives": [
+          "Create base Kubernetes manifests and base kustomization.yaml",
+          "Construct production overlay with namespace, namePrefix, and replica patch",
+          "Render composite manifests using kustomize build overlays/production",
+          "Deploy the production overlay with kubectl apply -k overlays/production"
+        ],
+        "starterManifest": "",
+        "solutionCommands": [
+          "mkdir -p base && echo -e \"apiVersion: apps/v1\\nkind: Deployment\\nmetadata:\\n  name: payments-api\\nspec:\\n  replicas: 1\\n  selector:\\n    matchLabels:\\n      app: payments-api\\n  template:\\n    metadata:\\n      labels:\\n        app: payments-api\\n    spec:\\n      containers:\\n      - name: api\\n        image: nginx:1.27-alpine\" > base/deployment.yaml && echo -e \"resources:\\n- deployment.yaml\" > base/kustomization.yaml",
+          "mkdir -p overlays/production && echo -e \"resources:\\n- ../../base\\nnamespace: production\\nnamePrefix: prod-\\ncommonLabels:\\n  env: production\\npatchesStrategicMerge:\\n- patch-replicas.yaml\" > overlays/production/kustomization.yaml && echo -e \"apiVersion: apps/v1\\nkind: Deployment\\nmetadata:\\n  name: payments-api\\nspec:\\n  replicas: 3\" > overlays/production/patch-replicas.yaml",
+          "kustomize build overlays/production",
+          "kubectl apply -k overlays/production"
+        ],
+        "validationRules": [
+          {
+            "id": "val-kust-build-01",
+            "description": "Rendered production overlay manifests via kustomize build",
+            "type": "command_executed",
+            "commandSubstring": "kustomize build overlays/production",
+            "remediation": "Run 'kustomize build overlays/production' to verify output YAML."
+          },
+          {
+            "id": "val-kust-apply-02",
+            "description": "Applied production overlay to cluster via kubectl apply -k",
+            "type": "command_executed",
+            "commandSubstring": "kubectl apply -k overlays/production",
+            "remediation": "Run 'kubectl apply -k overlays/production' to deploy manifests."
+          },
+          {
+            "id": "val-kust-dep-exists",
+            "description": "Deployed prod-payments-api Deployment in production namespace",
+            "type": "resource_exists",
+            "kind": "Deployment",
+            "name": "prod-payments-api",
+            "namespace": "production",
+            "remediation": "Ensure prod-payments-api Deployment exists in production namespace."
+          },
+          {
+            "id": "val-kust-replicas-03",
+            "description": "Verified production strategic merge patch scaled replicas to 3",
+            "type": "resource_field_equals",
+            "kind": "Deployment",
+            "name": "prod-payments-api",
+            "namespace": "production",
+            "fieldPath": "spec.replicas",
+            "expectedValue": 3,
+            "remediation": "Ensure patch-replicas.yaml sets spec.replicas to 3."
+          }
+        ]
+      },
+      {
+        "id": "lab-kust-02-generators-jsonpatch",
+        "title": "ConfigMap Generators, Secret Generators & Rollout Synchronization",
+        "xpReward": 150,
+        "difficulty": "Intermediate",
+        "durationMinutes": 20,
+        "objectives": [
+          "Create kustomization with configMapGenerator and secretGenerator",
+          "Inspect generated content-hash resource names with kustomize build",
+          "Apply generators to cluster using kubectl apply -k .",
+          "Verify ConfigMap with content-hash suffix is created in cluster"
+        ],
+        "starterManifest": "",
+        "solutionCommands": [
+          "echo -e \"apiVersion: kustomize.config.k8s.io/v1beta1\\nkind: Kustomization\\nconfigMapGenerator:\\n- name: api-config\\n  literals:\\n  - ENV=production\\n  - LOG_LEVEL=info\\nsecretGenerator:\\n- name: api-secrets\\n  literals:\\n  - DB_PASSWORD=SuperSecretPass123!\" > kustomization.yaml",
+          "kustomize build .",
+          "kubectl apply -k .",
+          "kubectl get configmap api-config-7m8f9b2c4k"
+        ],
+        "validationRules": [
+          {
+            "id": "val-kust-build-gen",
+            "description": "Rendered content-hashed ConfigMap and Secret via kustomize build",
+            "type": "command_executed",
+            "commandSubstring": "kustomize build",
+            "remediation": "Run 'kustomize build .' to generate hashed manifests."
+          },
+          {
+            "id": "val-kust-apply-gen",
+            "description": "Applied generated resources to cluster via kubectl apply -k",
+            "type": "command_executed",
+            "commandSubstring": "kubectl apply -k",
+            "remediation": "Run 'kubectl apply -k .' to create the generated resources."
+          },
+          {
+            "id": "val-kust-cm-exists",
+            "description": "Verified content-hashed ConfigMap api-config-7m8f9b2c4k exists in cluster",
+            "type": "resource_exists",
+            "kind": "ConfigMap",
+            "name": "api-config-7m8f9b2c4k",
+            "namespace": "default",
+            "remediation": "Ensure configMapGenerator creates api-config-7m8f9b2c4k."
+          },
+          {
+            "id": "val-kust-sec-exists",
+            "description": "Verified content-hashed Secret api-secrets-4d9a1b2e3f exists in cluster",
+            "type": "resource_exists",
+            "kind": "Secret",
+            "name": "api-secrets-4d9a1b2e3f",
+            "namespace": "default",
+            "remediation": "Ensure secretGenerator creates api-secrets-4d9a1b2e3f."
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "kubernetes-core-v4",
+    "title": "Kubernetes Core Architecture, Control Plane & RBAC",
+    "estimatedHours": 8,
+    "modules": [],
+    "labs": [
+      {
+        "id": "lab-k8s-01-ha-deployments",
+        "title": "Deploying High-Availability Microservices with Zero-Downtime Rollouts",
+        "xpReward": 150,
+        "difficulty": "Intermediate",
+        "durationMinutes": 20,
+        "objectives": [
+          "Create core-production namespace for workload isolation",
+          "Deploy payments-api with 3 replicas using image nginx:1.27-alpine",
+          "Expose payments-api on port 8080 via ClusterIP Service",
+          "Verify rollout status reaches complete state"
+        ],
+        "starterManifest": "",
+        "solutionCommands": [
+          "kubectl create namespace core-production",
+          "kubectl create deployment payments-api --image=nginx:1.27-alpine -n core-production --replicas=3",
+          "kubectl expose deployment payments-api --port=8080 --target-port=80 -n core-production",
+          "kubectl rollout status deployment/payments-api -n core-production"
+        ],
+        "validationRules": [
+          {
+            "id": "val-k8s-ns-prod",
+            "description": "Created core-production namespace for workload isolation",
+            "type": "resource_exists",
+            "kind": "Namespace",
+            "name": "core-production",
+            "remediation": "Run 'kubectl create namespace core-production' to create the namespace."
+          },
+          {
+            "id": "val-k8s-dep-prod",
+            "description": "Deployed payments-api Deployment in core-production namespace",
+            "type": "resource_exists",
+            "kind": "Deployment",
+            "name": "payments-api",
+            "namespace": "core-production",
+            "remediation": "Run 'kubectl create deployment payments-api --image=nginx:1.27-alpine -n core-production --replicas=3'."
+          },
+          {
+            "id": "val-k8s-replicas-3",
+            "description": "Verified payments-api has at least 3 replicas configured",
+            "type": "replica_count_min",
+            "kind": "Deployment",
+            "name": "payments-api",
+            "namespace": "core-production",
+            "expectedValue": 3,
+            "remediation": "Run 'kubectl scale deployment payments-api --replicas=3 -n core-production'."
+          },
+          {
+            "id": "val-k8s-svc-prod",
+            "description": "Exposed payments-api via Service in core-production namespace",
+            "type": "resource_exists",
+            "kind": "Service",
+            "name": "payments-api",
+            "namespace": "core-production",
+            "remediation": "Run 'kubectl expose deployment payments-api --port=8080 --target-port=80 -n core-production'."
+          }
+        ]
+      },
+      {
+        "id": "lab-k8s-02-rbac-least-privilege",
+        "title": "Least-Privilege RBAC: ServiceAccount, Role, RoleBinding & Authorization Audit",
+        "xpReward": 175,
+        "difficulty": "Intermediate",
+        "durationMinutes": 20,
+        "objectives": [
+          "Create namespace staging for isolated environment",
+          "Provision ServiceAccount deploy-bot in namespace staging",
+          "Create Role pod-reader granting get, list, and watch on pods and deployments",
+          "Bind deploy-bot to pod-reader using RoleBinding deploy-bot-binding",
+          "Audit permissions using kubectl auth can-i"
+        ],
+        "starterManifest": "",
+        "solutionCommands": [
+          "kubectl create namespace staging",
+          "kubectl create serviceaccount deploy-bot -n staging",
+          "kubectl create role pod-reader --verb=get,list,watch --resource=pods,deployments -n staging",
+          "kubectl create rolebinding deploy-bot-binding --role=pod-reader --serviceaccount=staging:deploy-bot -n staging",
+          "kubectl auth can-i get pods --as=system:serviceaccount:staging:deploy-bot -n staging"
+        ],
+        "validationRules": [
+          {
+            "id": "val-k8s-sa-bot",
+            "description": "Created ServiceAccount deploy-bot in staging namespace",
+            "type": "resource_exists",
+            "kind": "ServiceAccount",
+            "name": "deploy-bot",
+            "namespace": "staging",
+            "remediation": "Run 'kubectl create serviceaccount deploy-bot -n staging'."
+          },
+          {
+            "id": "val-k8s-role-reader",
+            "description": "Created scoped RBAC Role pod-reader in staging namespace",
+            "type": "resource_exists",
+            "kind": "Role",
+            "name": "pod-reader",
+            "namespace": "staging",
+            "remediation": "Run 'kubectl create role pod-reader --verb=get,list,watch --resource=pods,deployments -n staging'."
+          },
+          {
+            "id": "val-k8s-rb-binding",
+            "description": "Bound deploy-bot to pod-reader via RoleBinding deploy-bot-binding",
+            "type": "resource_exists",
+            "kind": "RoleBinding",
+            "name": "deploy-bot-binding",
+            "namespace": "staging",
+            "remediation": "Run 'kubectl create rolebinding deploy-bot-binding --role=pod-reader --serviceaccount=staging:deploy-bot -n staging'."
+          },
+          {
+            "id": "val-k8s-auth-audit",
+            "description": "Audited authorization permissions with kubectl auth can-i",
+            "type": "command_executed",
+            "commandSubstring": "kubectl auth can-i get pods",
+            "remediation": "Run 'kubectl auth can-i get pods --as=system:serviceaccount:staging:deploy-bot -n staging' to verify RBAC."
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "ckad-developer",
+    "title": "Certified Kubernetes Application Developer (CKAD) Workloads & Patterns",
+    "estimatedHours": 8,
+    "modules": [],
+    "labs": [
+      {
+        "id": "lab-ckad-01-multicontainer-sidecar",
+        "title": "Multi-Container Pod Patterns: InitContainer Preconditions & Log-Processing Sidecars",
+        "xpReward": 150,
+        "difficulty": "Intermediate",
+        "durationMinutes": 20,
+        "objectives": [
+          "Create namespace ecommerce for isolated commerce workloads",
+          "Define Pod order-processor with initContainer init-data and shared emptyDir volume",
+          "Add primary container app and sidecar container log-shipper mounted to the shared volume",
+          "Apply Pod manifest and verify Running phase in namespace ecommerce"
+        ],
+        "starterManifest": "",
+        "solutionCommands": [
+          "kubectl create namespace ecommerce",
+          "echo -e \"apiVersion: v1\\nkind: Pod\\nmetadata:\\n  name: order-processor\\n  namespace: ecommerce\\nspec:\\n  initContainers:\\n  - name: init-data\\n    image: busybox:1.36\\n  containers:\\n  - name: app\\n    image: nginx:1.27-alpine\\n  - name: log-shipper\\n    image: busybox:1.36\" > /home/learner/order-processor.yaml",
+          "kubectl apply -f /home/learner/order-processor.yaml",
+          "kubectl get pod order-processor -n ecommerce"
+        ],
+        "validationRules": [
+          {
+            "id": "val-ckad-ns-ecommerce",
+            "description": "Created ecommerce namespace for commerce workloads",
+            "type": "resource_exists",
+            "kind": "Namespace",
+            "name": "ecommerce",
+            "remediation": "Run 'kubectl create namespace ecommerce'."
+          },
+          {
+            "id": "val-ckad-pod-exists",
+            "description": "Created order-processor Pod in ecommerce namespace",
+            "type": "resource_exists",
+            "kind": "Pod",
+            "name": "order-processor",
+            "namespace": "ecommerce",
+            "remediation": "Apply the pod manifest containing order-processor in namespace ecommerce."
+          },
+          {
+            "id": "val-ckad-init-container",
+            "description": "Configured initContainer init-data for data pre-population",
+            "type": "resource_field_contains",
+            "kind": "Pod",
+            "name": "order-processor",
+            "namespace": "ecommerce",
+            "fieldPath": "spec.initContainers",
+            "expectedValue": "init-data",
+            "remediation": "Add initContainer named init-data in spec.initContainers."
+          },
+          {
+            "id": "val-ckad-sidecar-container",
+            "description": "Configured sidecar container log-shipper for log processing",
+            "type": "resource_field_contains",
+            "kind": "Pod",
+            "name": "order-processor",
+            "namespace": "ecommerce",
+            "fieldPath": "spec.containers",
+            "expectedValue": "log-shipper",
+            "remediation": "Add container named log-shipper to spec.containers."
+          },
+          {
+            "id": "val-ckad-pod-running",
+            "description": "Verified order-processor Pod reaches Running phase",
+            "type": "pod_status_running",
+            "name": "order-processor",
+            "namespace": "ecommerce",
+            "remediation": "Ensure all containers in Pod order-processor start successfully."
+          }
+        ]
+      },
+      {
+        "id": "lab-ckad-02-probes-cronjobs",
+        "title": "Container Health Probes & Scheduled Batch Automations",
+        "xpReward": 175,
+        "difficulty": "Intermediate",
+        "durationMinutes": 20,
+        "objectives": [
+          "Create namespace logistics for inventory workloads",
+          "Deploy inventory-api with HTTP liveness and readiness health probes",
+          "Schedule recurring CronJob inventory-sync executing every 5 minutes",
+          "Execute a one-off batch Job inventory-manual-sync to verify immediate execution"
+        ],
+        "starterManifest": "",
+        "solutionCommands": [
+          "kubectl create namespace logistics",
+          "echo -e \"apiVersion: apps/v1\\nkind: Deployment\\nmetadata:\\n  name: inventory-api\\n  namespace: logistics\\nspec:\\n  replicas: 2\\n  selector:\\n    matchLabels:\\n      app: inventory-api\\n  template:\\n    metadata:\\n      labels:\\n        app: inventory-api\\n    spec:\\n      containers:\\n      - name: inventory-api\\n        image: nginx:1.27-alpine\\n        livenessProbe:\\n          httpGet:\\n            path: /healthz\\n            port: 80\\n          initialDelaySeconds: 5\\n          periodSeconds: 10\\n        readinessProbe:\\n          httpGet:\\n            path: /ready\\n            port: 80\\n          initialDelaySeconds: 2\\n          periodSeconds: 5\" > /home/learner/inventory-api.yaml",
+          "kubectl apply -f /home/learner/inventory-api.yaml",
+          "kubectl create cronjob inventory-sync --image=busybox:1.36 -n logistics",
+          "kubectl create job inventory-manual-sync --image=busybox:1.36 -n logistics"
+        ],
+        "validationRules": [
+          {
+            "id": "val-ckad-ns-logistics",
+            "description": "Created logistics namespace for inventory workloads",
+            "type": "resource_exists",
+            "kind": "Namespace",
+            "name": "logistics",
+            "remediation": "Run 'kubectl create namespace logistics'."
+          },
+          {
+            "id": "val-ckad-dep-inventory",
+            "description": "Deployed inventory-api Deployment in logistics namespace",
+            "type": "resource_exists",
+            "kind": "Deployment",
+            "name": "inventory-api",
+            "namespace": "logistics",
+            "remediation": "Apply the inventory-api Deployment in namespace logistics."
+          },
+          {
+            "id": "val-ckad-liveness-probe",
+            "description": "Configured HTTP livenessProbe on inventory-api container",
+            "type": "resource_field_contains",
+            "kind": "Deployment",
+            "name": "inventory-api",
+            "namespace": "logistics",
+            "fieldPath": "spec.template.spec.containers",
+            "expectedValue": "livenessProbe",
+            "remediation": "Configure livenessProbe in spec.template.spec.containers[0]."
+          },
+          {
+            "id": "val-ckad-readiness-probe",
+            "description": "Configured HTTP readinessProbe on inventory-api container",
+            "type": "resource_field_contains",
+            "kind": "Deployment",
+            "name": "inventory-api",
+            "namespace": "logistics",
+            "fieldPath": "spec.template.spec.containers",
+            "expectedValue": "readinessProbe",
+            "remediation": "Configure readinessProbe in spec.template.spec.containers[0]."
+          },
+          {
+            "id": "val-ckad-cronjob-sync",
+            "description": "Created recurring CronJob inventory-sync in logistics namespace",
+            "type": "resource_exists",
+            "kind": "CronJob",
+            "name": "inventory-sync",
+            "namespace": "logistics",
+            "remediation": "Run 'kubectl create cronjob inventory-sync --image=busybox:1.36 -n logistics'."
+          },
+          {
+            "id": "val-ckad-job-manual",
+            "description": "Created batch Job inventory-manual-sync in logistics namespace",
+            "type": "resource_exists",
+            "kind": "Job",
+            "name": "inventory-manual-sync",
+            "namespace": "logistics",
+            "remediation": "Run 'kubectl create job inventory-manual-sync --image=busybox:1.36 -n logistics'."
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "cka-administrator",
+    "title": "Certified Kubernetes Administrator (CKA) Cluster Operations & Maintenance",
+    "estimatedHours": 8,
+    "modules": [],
+    "labs": [
+      {
+        "id": "lab-cka-01-node-maintenance",
+        "title": "Zero-Downtime Worker Node Maintenance: Cordon, Drain & Taints",
+        "xpReward": 150,
+        "difficulty": "Intermediate",
+        "durationMinutes": 20,
+        "objectives": [
+          "Cordon worker node kubelabs-worker-01 to mark it unschedulable",
+          "Drain existing workloads safely with --ignore-daemonsets",
+          "Apply maintenance taint dedicated=special:NoSchedule",
+          "Uncordon worker node to resume normal scheduling"
+        ],
+        "starterManifest": "",
+        "solutionCommands": [
+          "kubectl cordon kubelabs-worker-01",
+          "kubectl drain kubelabs-worker-01 --ignore-daemonsets",
+          "kubectl taint nodes kubelabs-worker-01 dedicated=special:NoSchedule",
+          "kubectl uncordon kubelabs-worker-01"
+        ],
+        "validationRules": [
+          {
+            "id": "val-cka-cordon-exec",
+            "description": "Executed kubectl cordon on kubelabs-worker-01",
+            "type": "command_executed",
+            "commandSubstring": "kubectl cordon kubelabs-worker-01",
+            "remediation": "Run 'kubectl cordon kubelabs-worker-01'."
+          },
+          {
+            "id": "val-cka-drain-exec",
+            "description": "Executed kubectl drain on kubelabs-worker-01",
+            "type": "command_executed",
+            "commandSubstring": "kubectl drain kubelabs-worker-01",
+            "remediation": "Run 'kubectl drain kubelabs-worker-01 --ignore-daemonsets'."
+          },
+          {
+            "id": "val-cka-node-tainted",
+            "description": "Applied dedicated=special:NoSchedule taint to worker node",
+            "type": "resource_field_contains",
+            "kind": "Node",
+            "name": "kubelabs-worker-01",
+            "fieldPath": "spec.taints",
+            "expectedValue": "dedicated",
+            "remediation": "Run 'kubectl taint nodes kubelabs-worker-01 dedicated=special:NoSchedule'."
+          },
+          {
+            "id": "val-cka-node-uncordoned",
+            "description": "Uncordoned kubelabs-worker-01 restoring schedulable status",
+            "type": "resource_field_equals",
+            "kind": "Node",
+            "name": "kubelabs-worker-01",
+            "fieldPath": "spec.unschedulable",
+            "expectedValue": false,
+            "remediation": "Run 'kubectl uncordon kubelabs-worker-01'."
+          }
+        ]
+      },
+      {
+        "id": "lab-cka-02-etcd-dr-kubeadm",
+        "title": "Cluster Disaster Recovery & Kubeadm Control-Plane Lifecycle",
+        "xpReward": 175,
+        "difficulty": "Intermediate",
+        "durationMinutes": 20,
+        "objectives": [
+          "Save etcd point-in-time snapshot to /var/lib/etcd/backup.db",
+          "Inspect and verify snapshot status using etcdctl",
+          "Generate control-plane upgrade plan using kubeadm upgrade plan",
+          "Apply control plane upgrade to version v1.32.0"
+        ],
+        "starterManifest": "",
+        "solutionCommands": [
+          "etcdctl snapshot save /var/lib/etcd/backup.db",
+          "etcdctl snapshot status /var/lib/etcd/backup.db",
+          "kubeadm upgrade plan",
+          "kubeadm upgrade apply v1.32.0"
+        ],
+        "validationRules": [
+          {
+            "id": "val-cka-etcd-save",
+            "description": "Saved etcd point-in-time snapshot to /var/lib/etcd/backup.db",
+            "type": "command_executed",
+            "commandSubstring": "etcdctl snapshot save",
+            "remediation": "Run 'etcdctl snapshot save /var/lib/etcd/backup.db'."
+          },
+          {
+            "id": "val-cka-etcd-status",
+            "description": "Verified etcd snapshot status and hash integrity",
+            "type": "command_executed",
+            "commandSubstring": "etcdctl snapshot status",
+            "remediation": "Run 'etcdctl snapshot status /var/lib/etcd/backup.db'."
+          },
+          {
+            "id": "val-cka-kubeadm-plan",
+            "description": "Generated kubeadm control plane upgrade plan",
+            "type": "command_executed",
+            "commandSubstring": "kubeadm upgrade plan",
+            "remediation": "Run 'kubeadm upgrade plan'."
+          },
+          {
+            "id": "val-cka-kubeadm-apply",
+            "description": "Applied control plane upgrade to v1.32.0",
+            "type": "command_executed",
+            "commandSubstring": "kubeadm upgrade apply",
+            "remediation": "Run 'kubeadm upgrade apply v1.32.0'."
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "k8s-networking",
+    "title": "Kubernetes Networking: CNI, Services, Ingress & Gateway API",
+    "estimatedHours": 8,
+    "modules": [],
+    "labs": [
+      {
+        "id": "lab-k8snet-01-cni-services-dns",
+        "title": "Service Discovery Architecture: ClusterIP, Headless & CoreDNS Endpoints",
+        "xpReward": 150,
+        "difficulty": "Intermediate",
+        "durationMinutes": 20,
+        "objectives": [
+          "Create namespace net-discovery for network workloads",
+          "Deploy cache-api with 2 replicas using image redis:7-alpine",
+          "Expose cache-api via ClusterIP Service on port 6379",
+          "Configure headless Service cache-headless with clusterIP None",
+          "Verify service endpoints are populated with healthy pod IPs"
+        ],
+        "starterManifest": "",
+        "solutionCommands": [
+          "kubectl create namespace net-discovery",
+          "kubectl create deployment cache-api --image=redis:7-alpine -n net-discovery --replicas=2",
+          "kubectl expose deployment cache-api --port=6379 --target-port=6379 -n net-discovery",
+          "echo -e \"apiVersion: v1\\nkind: Service\\nmetadata:\\n  name: cache-headless\\n  namespace: net-discovery\\nspec:\\n  clusterIP: None\\n  selector:\\n    app: cache-api\\n  ports:\\n  - port: 6379\\n    targetPort: 6379\" > /home/learner/cache-headless.yaml",
+          "kubectl apply -f /home/learner/cache-headless.yaml",
+          "kubectl get endpoints cache-api -n net-discovery"
+        ],
+        "validationRules": [
+          {
+            "id": "val-net-ns-discovery",
+            "description": "Created net-discovery namespace for network workloads",
+            "type": "resource_exists",
+            "kind": "Namespace",
+            "name": "net-discovery",
+            "remediation": "Run 'kubectl create namespace net-discovery'."
+          },
+          {
+            "id": "val-net-dep-cache",
+            "description": "Deployed cache-api Deployment in net-discovery namespace",
+            "type": "resource_exists",
+            "kind": "Deployment",
+            "name": "cache-api",
+            "namespace": "net-discovery",
+            "remediation": "Run 'kubectl create deployment cache-api --image=redis:7-alpine -n net-discovery --replicas=2'."
+          },
+          {
+            "id": "val-net-svc-cache",
+            "description": "Exposed cache-api via ClusterIP Service",
+            "type": "resource_exists",
+            "kind": "Service",
+            "name": "cache-api",
+            "namespace": "net-discovery",
+            "remediation": "Run 'kubectl expose deployment cache-api --port=6379 --target-port=6379 -n net-discovery'."
+          },
+          {
+            "id": "val-net-ep-ready",
+            "description": "Verified Service cache-api has at least 2 ready endpoints",
+            "type": "service_has_endpoints",
+            "name": "cache-api",
+            "namespace": "net-discovery",
+            "expectedValue": 2,
+            "remediation": "Ensure both cache-api pods are Running and matching Service selector."
+          },
+          {
+            "id": "val-net-svc-headless",
+            "description": "Configured headless Service cache-headless with clusterIP None",
+            "type": "resource_field_equals",
+            "kind": "Service",
+            "name": "cache-headless",
+            "namespace": "net-discovery",
+            "fieldPath": "spec.clusterIP",
+            "expectedValue": "None",
+            "remediation": "Apply Service cache-headless with spec.clusterIP: None."
+          }
+        ]
+      },
+      {
+        "id": "lab-k8snet-02-networkpolicy-gateway",
+        "title": "Zero-Trust NetworkPolicies & Modern Gateway API Route Filtering",
+        "xpReward": 175,
+        "difficulty": "Intermediate",
+        "durationMinutes": 20,
+        "objectives": [
+          "Create namespace net-policy for secured workloads",
+          "Deploy checkout-api with 2 replicas in net-policy",
+          "Apply default-deny ingress NetworkPolicy default-deny-ingress",
+          "Apply allow-checkout-ingress NetworkPolicy permitting port 80 traffic",
+          "Deploy Gateway API HTTPRoute checkout-route routing /checkout prefix"
+        ],
+        "starterManifest": "",
+        "solutionCommands": [
+          "kubectl create namespace net-policy",
+          "kubectl create deployment checkout-api --image=nginx:1.27-alpine -n net-policy --replicas=2",
+          "echo -e \"apiVersion: networking.k8s.io/v1\\nkind: NetworkPolicy\\nmetadata:\\n  name: default-deny-ingress\\n  namespace: net-policy\\nspec:\\n  podSelector: {}\\n  policyTypes:\\n  - Ingress\" > /home/learner/default-deny.yaml",
+          "kubectl apply -f /home/learner/default-deny.yaml",
+          "echo -e \"apiVersion: networking.k8s.io/v1\\nkind: NetworkPolicy\\nmetadata:\\n  name: allow-checkout-ingress\\n  namespace: net-policy\\nspec:\\n  podSelector:\\n    matchLabels:\\n      app: checkout-api\\n  policyTypes:\\n  - Ingress\\n  ingress:\\n  - ports:\\n    - protocol: TCP\\n      port: 80\" > /home/learner/allow-checkout.yaml",
+          "kubectl apply -f /home/learner/allow-checkout.yaml",
+          "echo -e \"apiVersion: gateway.networking.k8s.io/v1\\nkind: HTTPRoute\\nmetadata:\\n  name: checkout-route\\n  namespace: net-policy\\nspec:\\n  parentRefs:\\n  - name: edge-gateway\\n  rules:\\n  - matches:\\n    - path:\\n        type: PathPrefix\\n        value: /checkout\\n    backendRefs:\\n    - name: checkout-api\\n      port: 80\" > /home/learner/checkout-route.yaml",
+          "kubectl apply -f /home/learner/checkout-route.yaml"
+        ],
+        "validationRules": [
+          {
+            "id": "val-net-ns-policy",
+            "description": "Created net-policy namespace for policy workloads",
+            "type": "resource_exists",
+            "kind": "Namespace",
+            "name": "net-policy",
+            "remediation": "Run 'kubectl create namespace net-policy'."
+          },
+          {
+            "id": "val-net-dep-checkout",
+            "description": "Deployed checkout-api in net-policy namespace",
+            "type": "resource_exists",
+            "kind": "Deployment",
+            "name": "checkout-api",
+            "namespace": "net-policy",
+            "remediation": "Run 'kubectl create deployment checkout-api --image=nginx:1.27-alpine -n net-policy --replicas=2'."
+          },
+          {
+            "id": "val-net-np-deny",
+            "description": "Configured default-deny ingress NetworkPolicy",
+            "type": "resource_exists",
+            "kind": "NetworkPolicy",
+            "name": "default-deny-ingress",
+            "namespace": "net-policy",
+            "remediation": "Apply NetworkPolicy default-deny-ingress in namespace net-policy."
+          },
+          {
+            "id": "val-net-np-allow",
+            "description": "Whitelisted port 80 ingress on checkout-api pods",
+            "type": "resource_field_contains",
+            "kind": "NetworkPolicy",
+            "name": "allow-checkout-ingress",
+            "namespace": "net-policy",
+            "fieldPath": "spec.ingress",
+            "expectedValue": "80",
+            "remediation": "Configure NetworkPolicy allow-checkout-ingress with ingress port 80."
+          },
+          {
+            "id": "val-net-route-exists",
+            "description": "Created modern Gateway API HTTPRoute checkout-route",
+            "type": "resource_exists",
+            "kind": "HTTPRoute",
+            "name": "checkout-route",
+            "namespace": "net-policy",
+            "remediation": "Apply HTTPRoute checkout-route in namespace net-policy."
+          },
+          {
+            "id": "val-net-route-prefix",
+            "description": "Configured PathPrefix /checkout on checkout-route",
+            "type": "resource_field_contains",
+            "kind": "HTTPRoute",
+            "name": "checkout-route",
+            "namespace": "net-policy",
+            "fieldPath": "spec.rules",
+            "expectedValue": "/checkout",
+            "remediation": "Set rule match path to /checkout in checkout-route."
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "k8s-storage",
+    "title": "Kubernetes Storage: CSI, StorageClasses, PVCs & StatefulSets",
+    "estimatedHours": 8,
+    "modules": [],
+    "labs": [
+      {
+        "id": "lab-storage-01-sc-pvc-pv",
+        "title": "Dynamic Storage Provisioning: StorageClass, PVC & Pod Mounts",
+        "xpReward": 150,
+        "difficulty": "Intermediate",
+        "durationMinutes": 20,
+        "objectives": [
+          "Create cluster-scoped StorageClass fast-nvme with WaitForFirstConsumer binding",
+          "Create namespace storage-workloads",
+          "Provision 10Gi PersistentVolumeClaim data-volume in storage-workloads",
+          "Deploy Pod data-writer mounting data-volume to /mnt/data",
+          "Verify Pod reaches Running status with mounted storage"
+        ],
+        "starterManifest": "",
+        "solutionCommands": [
+          "echo -e \"apiVersion: storage.k8s.io/v1\\nkind: StorageClass\\nmetadata:\\n  name: fast-nvme\\nprovisioner: kubernetes.io/no-provisioner\\nvolumeBindingMode: WaitForFirstConsumer\" > /home/learner/storageclass.yaml",
+          "kubectl apply -f /home/learner/storageclass.yaml",
+          "kubectl create namespace storage-workloads",
+          "echo -e \"apiVersion: v1\\nkind: PersistentVolumeClaim\\nmetadata:\\n  name: data-volume\\n  namespace: storage-workloads\\nspec:\\n  accessModes:\\n  - ReadWriteOnce\\n  storageClassName: fast-nvme\\n  resources:\\n    requests:\\n      storage: 10Gi\" > /home/learner/pvc.yaml",
+          "kubectl apply -f /home/learner/pvc.yaml",
+          "echo -e \"apiVersion: v1\\nkind: Pod\\nmetadata:\\n  name: data-writer\\n  namespace: storage-workloads\\nspec:\\n  containers:\\n  - name: writer\\n    image: busybox:1.36\\n    command: [\\\"sh\\\", \\\"-c\\\", \\\"sleep 3600\\\"]\\n    volumeMounts:\\n    - name: storage\\n      mountPath: /mnt/data\\n  volumes:\\n  - name: storage\\n    persistentVolumeClaim:\\n      claimName: data-volume\" > /home/learner/pod-writer.yaml",
+          "kubectl apply -f /home/learner/pod-writer.yaml"
+        ],
+        "validationRules": [
+          {
+            "id": "val-store-sc-exists",
+            "description": "Created cluster-scoped StorageClass fast-nvme",
+            "type": "resource_exists",
+            "kind": "StorageClass",
+            "name": "fast-nvme",
+            "remediation": "Apply StorageClass fast-nvme."
+          },
+          {
+            "id": "val-store-sc-binding",
+            "description": "Configured volumeBindingMode WaitForFirstConsumer on StorageClass",
+            "type": "resource_field_equals",
+            "kind": "StorageClass",
+            "name": "fast-nvme",
+            "fieldPath": "volumeBindingMode",
+            "expectedValue": "WaitForFirstConsumer",
+            "remediation": "Set volumeBindingMode: WaitForFirstConsumer in StorageClass fast-nvme."
+          },
+          {
+            "id": "val-store-ns-workloads",
+            "description": "Created storage-workloads namespace",
+            "type": "resource_exists",
+            "kind": "Namespace",
+            "name": "storage-workloads",
+            "remediation": "Run 'kubectl create namespace storage-workloads'."
+          },
+          {
+            "id": "val-store-pvc-exists",
+            "description": "Created PersistentVolumeClaim data-volume in storage-workloads",
+            "type": "resource_exists",
+            "kind": "PersistentVolumeClaim",
+            "name": "data-volume",
+            "namespace": "storage-workloads",
+            "remediation": "Apply PersistentVolumeClaim data-volume in namespace storage-workloads."
+          },
+          {
+            "id": "val-store-pod-vol",
+            "description": "Mounted data-volume into Pod data-writer volumes",
+            "type": "resource_field_contains",
+            "kind": "Pod",
+            "name": "data-writer",
+            "namespace": "storage-workloads",
+            "fieldPath": "spec.volumes",
+            "expectedValue": "data-volume",
+            "remediation": "Attach persistentVolumeClaim data-volume in spec.volumes of Pod data-writer."
+          },
+          {
+            "id": "val-store-pod-running",
+            "description": "Verified Pod data-writer reaches Running status",
+            "type": "pod_status_running",
+            "name": "data-writer",
+            "namespace": "storage-workloads",
+            "remediation": "Ensure Pod data-writer starts successfully."
+          }
+        ]
+      },
+      {
+        "id": "lab-storage-02-statefulset-volume-claims",
+        "title": "Stateful Workloads: StatefulSet with Ordinal VolumeClaimTemplates",
+        "xpReward": 175,
+        "difficulty": "Intermediate",
+        "durationMinutes": 20,
+        "objectives": [
+          "Create namespace stateful-apps for stateful workloads",
+          "Create headless Service redis-headless with clusterIP None",
+          "Deploy StatefulSet redis-cluster with 3 replicas",
+          "Configure volumeClaimTemplates requesting 5Gi ReadWriteOnce storage",
+          "Verify all 3 ordinal pods (redis-cluster-0, 1, 2) reach Running status"
+        ],
+        "starterManifest": "",
+        "solutionCommands": [
+          "kubectl create namespace stateful-apps",
+          "echo -e \"apiVersion: v1\\nkind: Service\\nmetadata:\\n  name: redis-headless\\n  namespace: stateful-apps\\nspec:\\n  clusterIP: None\\n  selector:\\n    app: redis-cluster\\n  ports:\\n  - port: 6379\\n    targetPort: 6379\" > /home/learner/redis-headless.yaml",
+          "kubectl apply -f /home/learner/redis-headless.yaml",
+          "echo -e \"apiVersion: apps/v1\\nkind: StatefulSet\\nmetadata:\\n  name: redis-cluster\\n  namespace: stateful-apps\\nspec:\\n  serviceName: redis-headless\\n  replicas: 3\\n  selector:\\n    matchLabels:\\n      app: redis-cluster\\n  template:\\n    metadata:\\n      labels:\\n        app: redis-cluster\\n    spec:\\n      containers:\\n      - name: redis\\n        image: redis:7-alpine\\n        ports:\\n        - containerPort: 6379\\n  volumeClaimTemplates:\\n  - metadata:\\n      name: redis-data\\n    spec:\\n      accessModes: [ \\\"ReadWriteOnce\\\" ]\\n      resources:\\n        requests:\\n          storage: 5Gi\" > /home/learner/redis-statefulset.yaml",
+          "kubectl apply -f /home/learner/redis-statefulset.yaml"
+        ],
+        "validationRules": [
+          {
+            "id": "val-store-ns-stateful",
+            "description": "Created stateful-apps namespace for stateful workloads",
+            "type": "resource_exists",
+            "kind": "Namespace",
+            "name": "stateful-apps",
+            "remediation": "Run 'kubectl create namespace stateful-apps'."
+          },
+          {
+            "id": "val-store-svc-headless",
+            "description": "Created headless Service redis-headless in stateful-apps",
+            "type": "resource_exists",
+            "kind": "Service",
+            "name": "redis-headless",
+            "namespace": "stateful-apps",
+            "remediation": "Apply Service redis-headless in namespace stateful-apps."
+          },
+          {
+            "id": "val-store-svc-clusterip",
+            "description": "Configured clusterIP None on headless Service",
+            "type": "resource_field_equals",
+            "kind": "Service",
+            "name": "redis-headless",
+            "namespace": "stateful-apps",
+            "fieldPath": "spec.clusterIP",
+            "expectedValue": "None",
+            "remediation": "Set spec.clusterIP: None on Service redis-headless."
+          },
+          {
+            "id": "val-store-sts-exists",
+            "description": "Deployed StatefulSet redis-cluster with 3 replicas",
+            "type": "resource_exists",
+            "kind": "StatefulSet",
+            "name": "redis-cluster",
+            "namespace": "stateful-apps",
+            "remediation": "Apply StatefulSet redis-cluster in namespace stateful-apps."
+          },
+          {
+            "id": "val-store-sts-templates",
+            "description": "Configured volumeClaimTemplates with 5Gi capacity in StatefulSet",
+            "type": "resource_field_contains",
+            "kind": "StatefulSet",
+            "name": "redis-cluster",
+            "namespace": "stateful-apps",
+            "fieldPath": "spec.volumeClaimTemplates",
+            "expectedValue": "5Gi",
+            "remediation": "Configure volumeClaimTemplates requesting 5Gi in StatefulSet redis-cluster."
+          },
+          {
+            "id": "val-store-pods-count",
+            "description": "Verified at least 3 stateful ordinal pods running in namespace",
+            "type": "resource_count",
+            "kind": "Pod",
+            "namespace": "stateful-apps",
+            "operator": ">=",
+            "expectedValue": 3,
+            "remediation": "Ensure all 3 StatefulSet ordinal pods reach Running state."
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "k8s-security-cks",
+    "title": "Certified Kubernetes Security Specialist (CKS) Hardening & Defense",
+    "estimatedHours": 8,
+    "modules": [],
+    "labs": [
+      {
+        "id": "lab-cks-01-pod-security-standards",
+        "title": "Hardening Workloads with Restricted Pod Security Standards",
+        "xpReward": 150,
+        "difficulty": "Intermediate",
+        "durationMinutes": 20,
+        "objectives": [
+          "Create namespace sec-restricted with restricted PSA enforcement label",
+          "Deploy hardened Pod secure-vault compliant with restricted PSA",
+          "Verify all capabilities are dropped and root filesystem is read-only",
+          "Validate pod compliance using pod_security_standard validation rule"
+        ],
+        "starterManifest": "",
+        "solutionCommands": [
+          "kubectl create namespace sec-restricted",
+          "kubectl label namespace sec-restricted pod-security.kubernetes.io/enforce=restricted",
+          "echo -e \"apiVersion: v1\\nkind: Pod\\nmetadata:\\n  name: secure-vault\\n  namespace: sec-restricted\\nspec:\\n  securityContext:\\n    runAsNonRoot: true\\n    runAsUser: 10001\\n  containers:\\n  - name: vault\\n    image: cgr.dev/chainguard/static:latest\\n    command: [\\\"sh\\\", \\\"-c\\\", \\\"sleep 3600\\\"]\\n    securityContext:\\n      allowPrivilegeEscalation: false\\n      readOnlyRootFilesystem: true\\n      capabilities:\\n        drop:\\n        - ALL\" > /home/learner/secure-vault.yaml",
+          "kubectl apply -f /home/learner/secure-vault.yaml",
+          "kubectl get pod secure-vault -n sec-restricted"
+        ],
+        "validationRules": [
+          {
+            "id": "val-cks-ns-restricted",
+            "description": "Created sec-restricted namespace",
+            "type": "resource_exists",
+            "kind": "Namespace",
+            "name": "sec-restricted",
+            "remediation": "Run 'kubectl create namespace sec-restricted'."
+          },
+          {
+            "id": "val-cks-ns-label",
+            "description": "Configured pod-security.kubernetes.io/enforce=restricted label on namespace",
+            "type": "resource_field_contains",
+            "kind": "Namespace",
+            "name": "sec-restricted",
+            "fieldPath": "metadata.labels",
+            "expectedValue": "restricted",
+            "remediation": "Run 'kubectl label namespace sec-restricted pod-security.kubernetes.io/enforce=restricted'."
+          },
+          {
+            "id": "val-cks-pod-exists",
+            "description": "Created secure-vault Pod in sec-restricted namespace",
+            "type": "resource_exists",
+            "kind": "Pod",
+            "name": "secure-vault",
+            "namespace": "sec-restricted",
+            "remediation": "Apply secure-vault Pod in namespace sec-restricted."
+          },
+          {
+            "id": "val-cks-psa-restricted",
+            "description": "Pod secure-vault complies with restricted Pod Security Standards",
+            "type": "pod_security_standard",
+            "name": "secure-vault",
+            "namespace": "sec-restricted",
+            "level": "restricted",
+            "expectedStatus": "allowed",
+            "remediation": "Set runAsNonRoot: true, allowPrivilegeEscalation: false, and drop ALL capabilities."
+          },
+          {
+            "id": "val-cks-pod-running",
+            "description": "Verified Pod secure-vault reaches Running status",
+            "type": "pod_status_running",
+            "name": "secure-vault",
+            "namespace": "sec-restricted",
+            "remediation": "Ensure Pod secure-vault starts cleanly."
+          }
+        ]
+      },
+      {
+        "id": "lab-cks-02-falco-runtime-security",
+        "title": "Falco Behavioral Threat Detection & Container Runtime Isolation",
+        "xpReward": 175,
+        "difficulty": "Intermediate",
+        "durationMinutes": 20,
+        "objectives": [
+          "Create namespace sec-runtime for runtime threat monitoring",
+          "Deploy suspicious-workload in sec-runtime",
+          "Execute falco threat inspection command",
+          "Apply isolation NetworkPolicy quarantine-policy isolating suspicious workloads"
+        ],
+        "starterManifest": "",
+        "solutionCommands": [
+          "kubectl create namespace sec-runtime",
+          "kubectl create deployment suspicious-workload --image=nginx:1.27-alpine -n sec-runtime --replicas=1",
+          "falco --version",
+          "echo -e \"apiVersion: networking.k8s.io/v1\\nkind: NetworkPolicy\\nmetadata:\\n  name: quarantine-policy\\n  namespace: sec-runtime\\nspec:\\n  podSelector:\\n    matchLabels:\\n      app: suspicious-workload\\n  policyTypes:\\n  - Ingress\\n  - Egress\" > /home/learner/quarantine.yaml",
+          "kubectl apply -f /home/learner/quarantine.yaml"
+        ],
+        "validationRules": [
+          {
+            "id": "val-cks-ns-runtime",
+            "description": "Created sec-runtime namespace",
+            "type": "resource_exists",
+            "kind": "Namespace",
+            "name": "sec-runtime",
+            "remediation": "Run 'kubectl create namespace sec-runtime'."
+          },
+          {
+            "id": "val-cks-dep-suspicious",
+            "description": "Deployed suspicious-workload in sec-runtime",
+            "type": "resource_exists",
+            "kind": "Deployment",
+            "name": "suspicious-workload",
+            "namespace": "sec-runtime",
+            "remediation": "Run 'kubectl create deployment suspicious-workload --image=nginx:1.27-alpine -n sec-runtime --replicas=1'."
+          },
+          {
+            "id": "val-cks-falco-exec",
+            "description": "Executed Falco behavioral threat inspection",
+            "type": "command_executed",
+            "commandSubstring": "falco",
+            "remediation": "Run 'falco --version'."
+          },
+          {
+            "id": "val-cks-netpol-quarantine",
+            "description": "Applied quarantine NetworkPolicy isolating compromised workload",
+            "type": "resource_exists",
+            "kind": "NetworkPolicy",
+            "name": "quarantine-policy",
+            "namespace": "sec-runtime",
+            "remediation": "Apply NetworkPolicy quarantine-policy in namespace sec-runtime."
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "k8s-troubleshooting",
+    "title": "Kubernetes Troubleshooting: Root Cause Analysis & Outage Remediation",
+    "estimatedHours": 8,
+    "modules": [],
+    "labs": [
+      {
+        "id": "lab-troubleshoot-01-crashloop-oom",
+        "title": "Diagnosing & Fixing CrashLoopBackOff and OOMKilled Failures",
+        "xpReward": 150,
+        "difficulty": "Intermediate",
+        "durationMinutes": 20,
+        "objectives": [
+          "Create namespace troubleshoot-apps for isolated debugging",
+          "Create missing ConfigMap payment-config with DB_HOST literal",
+          "Deploy payment-processor with 256Mi memory limits to prevent OOMKilled",
+          "Verify all deployment pods reach healthy Running status"
+        ],
+        "starterManifest": "",
+        "solutionCommands": [
+          "kubectl create namespace troubleshoot-apps",
+          "kubectl create configmap payment-config --from-literal=DB_HOST=postgres.troubleshoot-apps.svc -n troubleshoot-apps",
+          "echo -e \"apiVersion: apps/v1\\nkind: Deployment\\nmetadata:\\n  name: payment-processor\\n  namespace: troubleshoot-apps\\nspec:\\n  replicas: 2\\n  selector:\\n    matchLabels:\\n      app: payment-processor\\n  template:\\n    metadata:\\n      labels:\\n        app: payment-processor\\n    spec:\\n      containers:\\n      - name: processor\\n        image: nginx:1.27-alpine\\n        resources:\\n          limits:\\n            memory: 256Mi\\n            cpu: 500m\\n          requests:\\n            memory: 128Mi\\n            cpu: 100m\" > /home/learner/payment-processor.yaml",
+          "kubectl apply -f /home/learner/payment-processor.yaml",
+          "kubectl rollout status deployment/payment-processor -n troubleshoot-apps"
+        ],
+        "validationRules": [
+          {
+            "id": "val-trouble-ns-apps",
+            "description": "Created troubleshoot-apps namespace",
+            "type": "resource_exists",
+            "kind": "Namespace",
+            "name": "troubleshoot-apps",
+            "remediation": "Run 'kubectl create namespace troubleshoot-apps'."
+          },
+          {
+            "id": "val-trouble-cm-config",
+            "description": "Created payment-config ConfigMap in troubleshoot-apps",
+            "type": "resource_exists",
+            "kind": "ConfigMap",
+            "name": "payment-config",
+            "namespace": "troubleshoot-apps",
+            "remediation": "Run 'kubectl create configmap payment-config --from-literal=DB_HOST=postgres.troubleshoot-apps.svc -n troubleshoot-apps'."
+          },
+          {
+            "id": "val-trouble-dep-payment",
+            "description": "Deployed payment-processor Deployment in troubleshoot-apps",
+            "type": "resource_exists",
+            "kind": "Deployment",
+            "name": "payment-processor",
+            "namespace": "troubleshoot-apps",
+            "remediation": "Apply Deployment payment-processor in namespace troubleshoot-apps."
+          },
+          {
+            "id": "val-trouble-mem-limit",
+            "description": "Configured memory limits of at least 256Mi to prevent OOMKilled",
+            "type": "resource_field_contains",
+            "kind": "Deployment",
+            "name": "payment-processor",
+            "namespace": "troubleshoot-apps",
+            "fieldPath": "spec.template.spec.containers",
+            "expectedValue": "256Mi",
+            "remediation": "Set container resources.limits.memory to 256Mi."
+          },
+          {
+            "id": "val-trouble-replicas-ready",
+            "description": "Verified at least 2 ready replicas in payment-processor deployment",
+            "type": "replica_count_min",
+            "kind": "Deployment",
+            "name": "payment-processor",
+            "namespace": "troubleshoot-apps",
+            "expectedValue": 2,
+            "remediation": "Scale payment-processor to 2 ready replicas."
+          }
+        ]
+      },
+      {
+        "id": "lab-troubleshoot-02-controlplane-kubelet",
+        "title": "Control Plane Recovery: Static Pod Manifests & Kubelet Diagnostics",
+        "xpReward": 175,
+        "difficulty": "Intermediate",
+        "durationMinutes": 20,
+        "objectives": [
+          "Inspect corrupted static pod manifest /etc/kubernetes/manifests/kube-apiserver.yaml",
+          "Write valid static pod manifest configuration",
+          "Restart Kubelet daemon via systemctl restart kubelet",
+          "Verify cluster node health via kubectl get nodes"
+        ],
+        "starterManifest": "",
+        "solutionCommands": [
+          "cat /etc/kubernetes/manifests/kube-apiserver.yaml",
+          "echo -e \"apiVersion: v1\\nkind: Pod\\nmetadata:\\n  name: kube-apiserver\\n  namespace: kube-system\\nspec:\\n  containers:\\n  - name: kube-apiserver\\n    image: registry.k8s.io/kube-apiserver:v1.31.0\" > /etc/kubernetes/manifests/kube-apiserver.yaml",
+          "systemctl restart kubelet",
+          "kubectl get nodes"
+        ],
+        "validationRules": [
+          {
+            "id": "val-trouble-cat-exec",
+            "description": "Inspected corrupted static pod manifest via cat",
+            "type": "command_executed",
+            "commandSubstring": "cat /etc/kubernetes/manifests/kube-apiserver.yaml",
+            "remediation": "Run 'cat /etc/kubernetes/manifests/kube-apiserver.yaml'."
+          },
+          {
+            "id": "val-trouble-manifest-repaired",
+            "description": "Repaired kube-apiserver static pod manifest in VFS",
+            "type": "command_executed",
+            "commandSubstring": "> /etc/kubernetes/manifests/kube-apiserver.yaml",
+            "remediation": "Write valid kube-apiserver pod configuration to /etc/kubernetes/manifests/kube-apiserver.yaml."
+          },
+          {
+            "id": "val-trouble-restart-kubelet",
+            "description": "Restarted Kubelet systemd service",
+            "type": "command_executed",
+            "commandSubstring": "systemctl restart kubelet",
+            "remediation": "Run 'systemctl restart kubelet'."
+          },
+          {
+            "id": "val-trouble-nodes-verified",
+            "description": "Verified cluster health with kubectl get nodes",
+            "type": "command_executed",
+            "commandSubstring": "kubectl get nodes",
+            "remediation": "Run 'kubectl get nodes'."
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "gitops-delivery",
+    "title": "GitOps Principles, Pull-Based Reconciliation & Continuous Delivery",
+    "estimatedHours": 6,
+    "modules": [],
+    "labs": [
+      {
+        "id": "lab-gitops-01-pull-reconciliation",
+        "title": "Pull-Based Reconciliation & Drift Remediation",
+        "xpReward": 150,
+        "difficulty": "Intermediate",
+        "durationMinutes": 20,
+        "objectives": [
+          "Inspect current drift and verify payment-service is running 5 replicas.",
+          "Write the declarative GitOps deployment manifest with 2 replicas to /gitops/payment-service.yaml.",
+          "Apply the manifest to gitops-apps to reconcile payment-service to 2 replicas."
+        ],
+        "starterManifest": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: payment-service\n  namespace: gitops-apps\n  labels:\n    app: payment-service\n    app.kubernetes.io/managed-by: gitops\nspec:\n  replicas: 2\n  selector:\n    matchLabels:\n      app: payment-service\n  template:\n    metadata:\n      labels:\n        app: payment-service\n    spec:\n      containers:\n        - name: payment-service\n          image: ghcr.io/kubelabs/payment:v1.2.0\n",
+        "solutionCommands": [
+          "mkdir -p /gitops",
+          "cat << 'EOF' > /gitops/payment-service.yaml\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: payment-service\n  namespace: gitops-apps\n  labels:\n    app: payment-service\n    app.kubernetes.io/managed-by: gitops\nspec:\n  replicas: 2\n  selector:\n    matchLabels:\n      app: payment-service\n  template:\n    metadata:\n      labels:\n        app: payment-service\n    spec:\n      containers:\n        - name: payment-service\n          image: ghcr.io/kubelabs/payment:v1.2.0\nEOF",
+          "kubectl apply -f /gitops/payment-service.yaml"
+        ],
+        "validationRules": [
+          {
+            "id": "vfs-gitops-manifest",
+            "description": "Canonical manifest exists in /gitops/payment-service.yaml",
+            "type": "vfs_file_contains",
+            "path": "/gitops/payment-service.yaml",
+            "pattern": "payment-service",
+            "remediation": "Create /gitops/payment-service.yaml with deployment payment-service"
+          },
+          {
+            "id": "deployment-reconciled-replicas",
+            "description": "payment-service deployment scaled back to desired 2 replicas",
+            "type": "resource_field_equals",
+            "kind": "Deployment",
+            "namespace": "gitops-apps",
+            "name": "payment-service",
+            "fieldPath": "spec.replicas",
+            "expectedValue": 2,
+            "remediation": "Apply /gitops/payment-service.yaml with spec.replicas: 2"
+          }
+        ]
+      },
+      {
+        "id": "lab-gitops-02-secrets-management",
+        "title": "Declarative Secret Management with ExternalSecrets",
+        "xpReward": 150,
+        "difficulty": "Intermediate",
+        "durationMinutes": 20,
+        "objectives": [
+          "Create and apply ExternalSecret vault-db-credentials in namespace gitops-apps.",
+          "Create target Kubernetes Secret db-credentials in namespace gitops-apps with credentials."
+        ],
+        "starterManifest": "apiVersion: external-secrets.io/v1beta1\nkind: ExternalSecret\nmetadata:\n  name: vault-db-credentials\n  namespace: gitops-apps\nspec:\n  refreshInterval: 1h\n  secretStoreRef:\n    name: vault-backend\n    kind: SecretStore\n  target:\n    name: db-credentials\n    creationPolicy: Owner\n  data:\n    - secretKey: username\n      remoteRef:\n        key: secret/database\n        property: username\n    - secretKey: password\n      remoteRef:\n        key: secret/database\n        property: password\n",
+        "solutionCommands": [
+          "cat << 'EOF' > /gitops/external-secret.yaml\napiVersion: external-secrets.io/v1beta1\nkind: ExternalSecret\nmetadata:\n  name: vault-db-credentials\n  namespace: gitops-apps\nspec:\n  refreshInterval: 1h\n  secretStoreRef:\n    name: vault-backend\n    kind: SecretStore\n  target:\n    name: db-credentials\n    creationPolicy: Owner\n  data:\n    - secretKey: username\n      remoteRef:\n        key: secret/database\n        property: username\n    - secretKey: password\n      remoteRef:\n        key: secret/database\n        property: password\nEOF",
+          "kubectl apply -f /gitops/external-secret.yaml",
+          "kubectl create secret generic db-credentials -n gitops-apps --from-literal=username=dbadmin --from-literal=password=vault-secure-pass"
+        ],
+        "validationRules": [
+          {
+            "id": "external-secret-resource-exists",
+            "description": "ExternalSecret vault-db-credentials exists in gitops-apps",
+            "type": "resource_exists",
+            "kind": "ExternalSecret",
+            "namespace": "gitops-apps",
+            "name": "vault-db-credentials",
+            "remediation": "Create ExternalSecret vault-db-credentials in namespace gitops-apps"
+          },
+          {
+            "id": "k8s-secret-db-credentials-exists",
+            "description": "Secret db-credentials exists in namespace gitops-apps",
+            "type": "resource_exists",
+            "kind": "Secret",
+            "namespace": "gitops-apps",
+            "name": "db-credentials",
+            "remediation": "Create secret db-credentials in namespace gitops-apps"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "argocd-gitops",
+    "title": "ArgoCD Enterprise GitOps, ApplicationSets & Sync Waves",
+    "estimatedHours": 8,
+    "modules": [],
+    "labs": [
+      {
+        "id": "lab-argo-01-app-declarative-sync",
+        "title": "Deploying and Synchronizing an ArgoCD Application",
+        "xpReward": 150,
+        "difficulty": "Intermediate",
+        "durationMinutes": 20,
+        "objectives": [
+          "Create and apply Application manifest for frontend-portal in namespace argocd.",
+          "Execute argocd app sync frontend-portal to reconcile live cluster resources.",
+          "Verify Application is Synced and Healthy and Deployment frontend-portal is running in namespace production."
+        ],
+        "starterManifest": "apiVersion: argoproj.io/v1alpha1\nkind: Application\nmetadata:\n  name: frontend-portal\n  namespace: argocd\nspec:\n  project: default\n  source:\n    repoURL: https://github.com/kubelabs/frontend.git\n    targetRevision: HEAD\n    path: deploy/prod\n  destination:\n    server: https://kubernetes.default.svc\n    namespace: production\n  syncPolicy:\n    automated:\n      prune: true\n      selfHeal: true\n",
+        "solutionCommands": [
+          "mkdir -p /gitops",
+          "cat << 'EOF' > /gitops/frontend-app.yaml\napiVersion: argoproj.io/v1alpha1\nkind: Application\nmetadata:\n  name: frontend-portal\n  namespace: argocd\nspec:\n  project: default\n  source:\n    repoURL: https://github.com/kubelabs/frontend.git\n    targetRevision: HEAD\n    path: deploy/prod\n  destination:\n    server: https://kubernetes.default.svc\n    namespace: production\n  syncPolicy:\n    automated:\n      prune: true\n      selfHeal: true\nEOF",
+          "kubectl apply -f /gitops/frontend-app.yaml",
+          "argocd app sync frontend-portal"
+        ],
+        "validationRules": [
+          {
+            "id": "argo-app-synced-status",
+            "description": "Application frontend-portal is Synced and Healthy",
+            "type": "argocd_app_synced",
+            "name": "frontend-portal",
+            "namespace": "argocd",
+            "remediation": "Run argocd app sync frontend-portal"
+          },
+          {
+            "id": "frontend-deployment-exists",
+            "description": "Deployment frontend-portal exists in namespace production",
+            "type": "resource_exists",
+            "kind": "Deployment",
+            "namespace": "production",
+            "name": "frontend-portal",
+            "remediation": "Ensure frontend-portal deployment is reconciled in namespace production"
+          }
+        ]
+      },
+      {
+        "id": "lab-argo-02-sync-waves-phased-rollout",
+        "title": "Phased Rollout Orchestration with ArgoCD Sync Waves",
+        "xpReward": 150,
+        "difficulty": "Intermediate",
+        "durationMinutes": 20,
+        "objectives": [
+          "Deploy ConfigMap backend-config with sync-wave 0 in namespace production.",
+          "Deploy Deployment backend-api with sync-wave 1 in namespace production."
+        ],
+        "starterManifest": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: backend-config\n  namespace: production\n  annotations:\n    argocd.argoproj.io/sync-wave: \"0\"\ndata:\n  API_TIMEOUT: \"30s\"\n  LOG_LEVEL: \"info\"\n---\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: backend-api\n  namespace: production\n  annotations:\n    argocd.argoproj.io/sync-wave: \"1\"\nspec:\n  replicas: 2\n  selector:\n    matchLabels:\n      app: backend-api\n  template:\n    metadata:\n      labels:\n        app: backend-api\n    spec:\n      containers:\n        - name: api\n          image: ghcr.io/kubelabs/backend-api:v2.1.0\n",
+        "solutionCommands": [
+          "cat << 'EOF' > /gitops/sync-waves.yaml\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: backend-config\n  namespace: production\n  annotations:\n    argocd.argoproj.io/sync-wave: \"0\"\ndata:\n  API_TIMEOUT: \"30s\"\n  LOG_LEVEL: \"info\"\n---\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: backend-api\n  namespace: production\n  annotations:\n    argocd.argoproj.io/sync-wave: \"1\"\nspec:\n  replicas: 2\n  selector:\n    matchLabels:\n      app: backend-api\n  template:\n    metadata:\n      labels:\n        app: backend-api\n    spec:\n      containers:\n        - name: api\n          image: ghcr.io/kubelabs/backend-api:v2.1.0\nEOF",
+          "kubectl apply -f /gitops/sync-waves.yaml"
+        ],
+        "validationRules": [
+          {
+            "id": "configmap-wave-0-annotation",
+            "description": "ConfigMap backend-config has sync-wave: '0'",
+            "type": "resource_field_equals",
+            "kind": "ConfigMap",
+            "namespace": "production",
+            "name": "backend-config",
+            "fieldPath": "metadata.annotations['argocd.argoproj.io/sync-wave']",
+            "expectedValue": "0",
+            "remediation": "Add annotation argocd.argoproj.io/sync-wave: '0' to ConfigMap backend-config"
+          },
+          {
+            "id": "deployment-wave-1-annotation",
+            "description": "Deployment backend-api has sync-wave: '1'",
+            "type": "resource_field_equals",
+            "kind": "Deployment",
+            "namespace": "production",
+            "name": "backend-api",
+            "fieldPath": "metadata.annotations['argocd.argoproj.io/sync-wave']",
+            "expectedValue": "1",
+            "remediation": "Add annotation argocd.argoproj.io/sync-wave: '1' to Deployment backend-api"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "fluxcd-gitops",
+    "title": "FluxCD Multi-Tenancy, Kustomize Controller & HelmReleases",
+    "estimatedHours": 8,
+    "modules": [],
+    "labs": [
+      {
+        "id": "lab-flux-01-gitrepository-kustomization",
+        "title": "Configuring Flux GitRepository Source & Kustomization Reconciliation",
+        "xpReward": 150,
+        "difficulty": "Intermediate",
+        "durationMinutes": 20,
+        "objectives": [
+          "Deploy GitRepository fleet-infra in namespace flux-system.",
+          "Deploy Kustomization app-stack in namespace flux-system referencing fleet-infra.",
+          "Reconcile Kustomization app-stack using the flux CLI."
+        ],
+        "starterManifest": "apiVersion: source.toolkit.fluxcd.io/v1\nkind: GitRepository\nmetadata:\n  name: fleet-infra\n  namespace: flux-system\nspec:\n  interval: 1m\n  url: https://github.com/kubelabs/fleet-infra.git\n  ref:\n    branch: main\n---\napiVersion: kustomize.toolkit.fluxcd.io/v1\nkind: Kustomization\nmetadata:\n  name: app-stack\n  namespace: flux-system\nspec:\n  interval: 5m\n  targetNamespace: default\n  sourceRef:\n    kind: GitRepository\n    name: fleet-infra\n  path: ./clusters/staging\n  prune: true\n",
+        "solutionCommands": [
+          "mkdir -p /gitops",
+          "cat << 'EOF' > /gitops/flux-kustomization.yaml\napiVersion: source.toolkit.fluxcd.io/v1\nkind: GitRepository\nmetadata:\n  name: fleet-infra\n  namespace: flux-system\nspec:\n  interval: 1m\n  url: https://github.com/kubelabs/fleet-infra.git\n  ref:\n    branch: main\n---\napiVersion: kustomize.toolkit.fluxcd.io/v1\nkind: Kustomization\nmetadata:\n  name: app-stack\n  namespace: flux-system\nspec:\n  interval: 5m\n  targetNamespace: default\n  sourceRef:\n    kind: GitRepository\n    name: fleet-infra\n  path: ./clusters/staging\n  prune: true\nEOF",
+          "kubectl apply -f /gitops/flux-kustomization.yaml",
+          "flux reconcile kustomization app-stack"
+        ],
+        "validationRules": [
+          {
+            "id": "flux-gitrepo-exists",
+            "description": "GitRepository fleet-infra exists in namespace flux-system",
+            "type": "resource_exists",
+            "kind": "GitRepository",
+            "namespace": "flux-system",
+            "name": "fleet-infra",
+            "remediation": "Create GitRepository fleet-infra in namespace flux-system"
+          },
+          {
+            "id": "flux-kustomization-exists",
+            "description": "Kustomization app-stack exists in namespace flux-system",
+            "type": "resource_exists",
+            "kind": "Kustomization",
+            "namespace": "flux-system",
+            "name": "app-stack",
+            "remediation": "Create Kustomization app-stack in namespace flux-system"
+          },
+          {
+            "id": "flux-reconcile-command-executed",
+            "description": "flux reconcile kustomization app-stack executed",
+            "type": "command_executed",
+            "commandSubstring": "flux reconcile kustomization app-stack",
+            "remediation": "Execute flux reconcile kustomization app-stack"
+          }
+        ]
+      },
+      {
+        "id": "lab-flux-02-helmrelease-reconciliation",
+        "title": "Declarative HelmRelease Management with Flux Helm Controller",
+        "xpReward": 150,
+        "difficulty": "Intermediate",
+        "durationMinutes": 20,
+        "objectives": [
+          "Create target namespace cache-tier.",
+          "Apply HelmRelease redis-cache in namespace flux-system targeting cache-tier.",
+          "Verify HelmRelease spec parameters (chart name, version, and architecture values)."
+        ],
+        "starterManifest": "apiVersion: helm.toolkit.fluxcd.io/v2beta1\nkind: HelmRelease\nmetadata:\n  name: redis-cache\n  namespace: flux-system\nspec:\n  interval: 10m\n  targetNamespace: cache-tier\n  chart:\n    spec:\n      chart: redis\n      version: \"18.0.0\"\n      sourceRef:\n        kind: HelmRepository\n        name: bitnami\n        namespace: flux-system\n  values:\n    architecture: standalone\n",
+        "solutionCommands": [
+          "kubectl create namespace cache-tier",
+          "cat << 'EOF' > /gitops/redis-helmrelease.yaml\napiVersion: helm.toolkit.fluxcd.io/v2beta1\nkind: HelmRelease\nmetadata:\n  name: redis-cache\n  namespace: flux-system\nspec:\n  interval: 10m\n  targetNamespace: cache-tier\n  chart:\n    spec:\n      chart: redis\n      version: \"18.0.0\"\n      sourceRef:\n        kind: HelmRepository\n        name: bitnami\n        namespace: flux-system\n  values:\n    architecture: standalone\nEOF",
+          "kubectl apply -f /gitops/redis-helmrelease.yaml"
+        ],
+        "validationRules": [
+          {
+            "id": "namespace-cache-tier-exists",
+            "description": "Namespace cache-tier exists",
+            "type": "resource_exists",
+            "kind": "Namespace",
+            "name": "cache-tier",
+            "remediation": "Run kubectl create namespace cache-tier"
+          },
+          {
+            "id": "helmrelease-redis-cache-exists",
+            "description": "HelmRelease redis-cache exists in namespace flux-system",
+            "type": "resource_exists",
+            "kind": "HelmRelease",
+            "namespace": "flux-system",
+            "name": "redis-cache",
+            "remediation": "Apply HelmRelease redis-cache in namespace flux-system"
+          },
+          {
+            "id": "helmrelease-redis-cache-target-ns",
+            "description": "HelmRelease redis-cache targetNamespace is cache-tier",
+            "type": "resource_field_equals",
+            "kind": "HelmRelease",
+            "namespace": "flux-system",
+            "name": "redis-cache",
+            "fieldPath": "spec.targetNamespace",
+            "expectedValue": "cache-tier",
+            "remediation": "Set spec.targetNamespace: cache-tier in HelmRelease redis-cache"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "cicd-pipelines",
+    "title": "Cloud-Native CI/CD Pipelines, Tekton & DORA Engineering",
+    "estimatedHours": 8,
+    "modules": [],
+    "labs": [
+      {
+        "id": "lab-cicd-01-tekton-pipeline",
+        "title": "Authoring Declarative Tekton Tasks and Pipelines",
+        "xpReward": 150,
+        "difficulty": "Intermediate",
+        "durationMinutes": 20,
+        "objectives": [
+          "Create namespace tekton-pipelines.",
+          "Deploy Tekton Task build-image in namespace tekton-pipelines.",
+          "Deploy Tekton Pipeline app-ci-pipeline in namespace tekton-pipelines."
+        ],
+        "starterManifest": "apiVersion: tekton.dev/v1\nkind: Task\nmetadata:\n  name: build-image\n  namespace: tekton-pipelines\nspec:\n  steps:\n    - name: build-container\n      image: crictl:latest\n      command: ['echo', 'Building container image']\n---\napiVersion: tekton.dev/v1\nkind: Pipeline\nmetadata:\n  name: app-ci-pipeline\n  namespace: tekton-pipelines\nspec:\n  workspaces:\n    - name: shared-workspace\n  tasks:\n    - name: build-step\n      taskRef:\n        name: build-image\n",
+        "solutionCommands": [
+          "mkdir -p /ci",
+          "kubectl create namespace tekton-pipelines",
+          "cat << 'EOF' > /ci/tekton-pipeline.yaml\napiVersion: tekton.dev/v1\nkind: Task\nmetadata:\n  name: build-image\n  namespace: tekton-pipelines\nspec:\n  steps:\n    - name: build-container\n      image: crictl:latest\n      command: ['echo', 'Building container image']\n---\napiVersion: tekton.dev/v1\nkind: Pipeline\nmetadata:\n  name: app-ci-pipeline\n  namespace: tekton-pipelines\nspec:\n  workspaces:\n    - name: shared-workspace\n  tasks:\n    - name: build-step\n      taskRef:\n        name: build-image\nEOF",
+          "kubectl apply -f /ci/tekton-pipeline.yaml"
+        ],
+        "validationRules": [
+          {
+            "id": "namespace-tekton-exists",
+            "description": "Namespace tekton-pipelines exists",
+            "type": "resource_exists",
+            "kind": "Namespace",
+            "name": "tekton-pipelines",
+            "remediation": "Run kubectl create namespace tekton-pipelines"
+          },
+          {
+            "id": "tekton-task-exists",
+            "description": "Task build-image exists in namespace tekton-pipelines",
+            "type": "resource_exists",
+            "kind": "Task",
+            "namespace": "tekton-pipelines",
+            "name": "build-image",
+            "remediation": "Deploy Task build-image in namespace tekton-pipelines"
+          },
+          {
+            "id": "tekton-pipeline-exists",
+            "description": "Pipeline app-ci-pipeline exists in namespace tekton-pipelines",
+            "type": "resource_exists",
+            "kind": "Pipeline",
+            "namespace": "tekton-pipelines",
+            "name": "app-ci-pipeline",
+            "remediation": "Deploy Pipeline app-ci-pipeline in namespace tekton-pipelines"
+          }
+        ]
+      },
+      {
+        "id": "lab-cicd-02-github-actions-caching",
+        "title": "Configuring CI Workflow Build Caching & Artifact Upload",
+        "xpReward": 150,
+        "difficulty": "Intermediate",
+        "durationMinutes": 20,
+        "objectives": [
+          "Create directory .github/workflows in the repository root.",
+          "Author .github/workflows/ci-build.yml with actions/cache and npm test steps.",
+          "Verify file contents and syntax."
+        ],
+        "starterManifest": "name: CI Pipeline\non:\n  push:\n    branches: [ main ]\n  pull_request:\n    branches: [ main ]\njobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - name: Cache Node Modules\n        uses: actions/cache@v4\n        with:\n          path: ~/.npm\n          key: npm-cache-${{ hashFiles('package-lock.json') }}\n      - name: Run Unit Tests\n        run: npm test\n",
+        "solutionCommands": [
+          "mkdir -p .github/workflows",
+          "cat << 'EOF' > .github/workflows/ci-build.yml\nname: CI Pipeline\non:\n  push:\n    branches: [ main ]\n  pull_request:\n    branches: [ main ]\njobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - name: Cache Node Modules\n        uses: actions/cache@v4\n        with:\n          path: ~/.npm\n          key: npm-cache-${{ hashFiles('package-lock.json') }}\n      - name: Run Unit Tests\n        run: npm test\nEOF"
+        ],
+        "validationRules": [
+          {
+            "id": "ci-workflow-file-exists",
+            "description": ".github/workflows/ci-build.yml contains actions/cache@v4",
+            "type": "vfs_file_contains",
+            "path": ".github/workflows/ci-build.yml",
+            "pattern": "actions/cache@v4",
+            "remediation": "Create .github/workflows/ci-build.yml with actions/cache@v4"
+          },
+          {
+            "id": "ci-workflow-contains-npm-test",
+            "description": "Workflow runs npm test step",
+            "type": "vfs_file_contains",
+            "path": ".github/workflows/ci-build.yml",
+            "pattern": "npm test",
+            "remediation": "Add npm test step to .github/workflows/ci-build.yml"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "devsecops-pipeline",
+    "title": "DevSecOps Supply Chain Security, SLSA, SBOM & Policy Admission",
+    "estimatedHours": 8,
+    "modules": [],
+    "labs": [
+      {
+        "id": "lab-secops-01-trivy-sbom-scan",
+        "title": "Vulnerability Scanning and Policy Gate with Trivy",
+        "xpReward": 150,
+        "difficulty": "Intermediate",
+        "durationMinutes": 20,
+        "objectives": [
+          "Create directory /security.",
+          "Execute trivy image scan.",
+          "Save scan results to /security/trivy-report.txt."
+        ],
+        "starterManifest": "# Trivy Image Security Scan\n# Scan target: nginx:1.27-alpine\n# Output target: /security/trivy-report.txt\n",
+        "solutionCommands": [
+          "mkdir -p /security",
+          "trivy image nginx:1.27-alpine > /security/trivy-report.txt"
+        ],
+        "validationRules": [
+          {
+            "id": "trivy-command-executed",
+            "description": "trivy image command executed",
+            "type": "command_executed",
+            "commandSubstring": "trivy image",
+            "remediation": "Execute trivy image nginx:1.27-alpine"
+          },
+          {
+            "id": "trivy-report-saved",
+            "description": "Scan output saved to /security/trivy-report.txt",
+            "type": "vfs_file_contains",
+            "path": "/security/trivy-report.txt",
+            "pattern": "Scan Target",
+            "remediation": "Redirect trivy output to /security/trivy-report.txt"
+          }
+        ]
+      },
+      {
+        "id": "lab-secops-02-kyverno-admission-policy",
+        "title": "Enforcing Kubernetes Admission Control with Kyverno ClusterPolicy",
+        "xpReward": 150,
+        "difficulty": "Intermediate",
+        "durationMinutes": 20,
+        "objectives": [
+          "Create and apply Kyverno ClusterPolicy disallow-root-user.",
+          "Verify ClusterPolicy validationFailureAction is set to Enforce.",
+          "Validate policy using kyverno apply."
+        ],
+        "starterManifest": "apiVersion: kyverno.io/v1\nkind: ClusterPolicy\nmetadata:\n  name: disallow-root-user\nspec:\n  validationFailureAction: Enforce\n  rules:\n    - name: check-runAsNonRoot\n      match:\n        resources:\n          kinds:\n            - Pod\n      validate:\n        message: \"Running as root is forbidden. Set runAsNonRoot: true.\"\n        pattern:\n          spec:\n            securityContext:\n              runAsNonRoot: true\n",
+        "solutionCommands": [
+          "mkdir -p /security",
+          "cat << 'EOF' > /security/disallow-root-user.yaml\napiVersion: kyverno.io/v1\nkind: ClusterPolicy\nmetadata:\n  name: disallow-root-user\nspec:\n  validationFailureAction: Enforce\n  rules:\n    - name: check-runAsNonRoot\n      match:\n        resources:\n          kinds:\n            - Pod\n      validate:\n        message: \"Running as root is forbidden. Set runAsNonRoot: true.\"\n        pattern:\n          spec:\n            securityContext:\n              runAsNonRoot: true\nEOF",
+          "kubectl apply -f /security/disallow-root-user.yaml",
+          "kyverno apply /security/disallow-root-user.yaml"
+        ],
+        "validationRules": [
+          {
+            "id": "kyverno-clusterpolicy-exists",
+            "description": "ClusterPolicy disallow-root-user exists",
+            "type": "resource_exists",
+            "kind": "ClusterPolicy",
+            "name": "disallow-root-user",
+            "remediation": "Apply ClusterPolicy disallow-root-user"
+          },
+          {
+            "id": "kyverno-failure-action-enforce",
+            "description": "validationFailureAction is Enforce",
+            "type": "resource_field_equals",
+            "kind": "ClusterPolicy",
+            "name": "disallow-root-user",
+            "fieldPath": "spec.validationFailureAction",
+            "expectedValue": "Enforce",
+            "remediation": "Set spec.validationFailureAction: Enforce in ClusterPolicy"
+          },
+          {
+            "id": "kyverno-cli-tested",
+            "description": "kyverno apply CLI executed",
+            "type": "command_executed",
+            "commandSubstring": "kyverno apply",
+            "remediation": "Execute kyverno apply /security/disallow-root-user.yaml"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "iac-foundations",
+    "title": "Infrastructure as Code Foundations & Crossplane Control Planes",
+    "estimatedHours": 8,
+    "modules": [],
+    "labs": [
+      {
+        "id": "lab-iac-01-crossplane-xrd",
+        "title": "Defining a Crossplane CompositeResourceDefinition (XRD)",
+        "xpReward": 150,
+        "difficulty": "Intermediate",
+        "durationMinutes": 20,
+        "objectives": [
+          "Create XRD manifest /iac/xrd-postgres.yaml.",
+          "Apply XRD to cluster and verify spec.claimNames.kind is PostgresInstance."
+        ],
+        "starterManifest": "apiVersion: apiextensions.crossplane.io/v1\nkind: CompositeResourceDefinition\nmetadata:\n  name: xpostgresqlinstances.database.kubelabs.io\nspec:\n  group: database.kubelabs.io\n  names:\n    kind: XPostgresInstance\n    plural: xpostgresinstances\n  claimNames:\n    kind: PostgresInstance\n    plural: postgresinstances\n  versions:\n    - name: v1alpha1\n      served: true\n      referenceable: true\n      schema:\n        openAPIV3Schema:\n          type: object\n          properties:\n            spec:\n              type: object\n              properties:\n                parameters:\n                  type: object\n                  properties:\n                    storageGB:\n                      type: integer\n",
+        "solutionCommands": [
+          "mkdir -p /iac",
+          "cat << 'EOF' > /iac/xrd-postgres.yaml\napiVersion: apiextensions.crossplane.io/v1\nkind: CompositeResourceDefinition\nmetadata:\n  name: xpostgresqlinstances.database.kubelabs.io\nspec:\n  group: database.kubelabs.io\n  names:\n    kind: XPostgresInstance\n    plural: xpostgresinstances\n  claimNames:\n    kind: PostgresInstance\n    plural: postgresinstances\n  versions:\n    - name: v1alpha1\n      served: true\n      referenceable: true\n      schema:\n        openAPIV3Schema:\n          type: object\n          properties:\n            spec:\n              type: object\n              properties:\n                parameters:\n                  type: object\n                  properties:\n                    storageGB:\n                      type: integer\nEOF",
+          "kubectl apply -f /iac/xrd-postgres.yaml"
+        ],
+        "validationRules": [
+          {
+            "id": "xrd-resource-exists",
+            "description": "CompositeResourceDefinition xpostgresqlinstances.database.kubelabs.io exists",
+            "type": "resource_exists",
+            "kind": "CompositeResourceDefinition",
+            "name": "xpostgresqlinstances.database.kubelabs.io",
+            "remediation": "Apply XRD manifest with name xpostgresqlinstances.database.kubelabs.io"
+          },
+          {
+            "id": "xrd-claim-kind",
+            "description": "XRD claimNames.kind is PostgresInstance",
+            "type": "resource_field_equals",
+            "kind": "CompositeResourceDefinition",
+            "name": "xpostgresqlinstances.database.kubelabs.io",
+            "fieldPath": "spec.claimNames.kind",
+            "expectedValue": "PostgresInstance",
+            "remediation": "Set spec.claimNames.kind: PostgresInstance in the XRD"
+          }
+        ]
+      },
+      {
+        "id": "lab-iac-02-crossplane-claim",
+        "title": "Provisioning Cloud Resources with Developer Claims",
+        "xpReward": 150,
+        "difficulty": "Intermediate",
+        "durationMinutes": 20,
+        "objectives": [
+          "Create namespace team-fintech.",
+          "Deploy PostgresInstance fintech-payment-db in namespace team-fintech.",
+          "Execute crossplane status CLI verification."
+        ],
+        "starterManifest": "apiVersion: database.kubelabs.io/v1alpha1\nkind: PostgresInstance\nmetadata:\n  name: fintech-payment-db\n  namespace: team-fintech\nspec:\n  parameters:\n    storageGB: 50\n",
+        "solutionCommands": [
+          "mkdir -p /iac",
+          "kubectl create namespace team-fintech",
+          "cat << 'EOF' > /iac/claim-postgres.yaml\napiVersion: database.kubelabs.io/v1alpha1\nkind: PostgresInstance\nmetadata:\n  name: fintech-payment-db\n  namespace: team-fintech\nspec:\n  parameters:\n    storageGB: 50\nEOF",
+          "kubectl apply -f /iac/claim-postgres.yaml",
+          "crossplane status"
+        ],
+        "validationRules": [
+          {
+            "id": "claim-postgres-exists",
+            "description": "PostgresInstance fintech-payment-db exists in namespace team-fintech",
+            "type": "resource_exists",
+            "kind": "PostgresInstance",
+            "namespace": "team-fintech",
+            "name": "fintech-payment-db",
+            "remediation": "Apply PostgresInstance fintech-payment-db in namespace team-fintech"
+          },
+          {
+            "id": "claim-storage-equals",
+            "description": "PostgresInstance storageGB is 50",
+            "type": "resource_field_equals",
+            "kind": "PostgresInstance",
+            "namespace": "team-fintech",
+            "name": "fintech-payment-db",
+            "fieldPath": "spec.parameters.storageGB",
+            "expectedValue": 50,
+            "remediation": "Set spec.parameters.storageGB: 50 in PostgresInstance claim"
+          },
+          {
+            "id": "crossplane-cli-executed",
+            "description": "crossplane CLI executed",
+            "type": "command_executed",
+            "commandSubstring": "crossplane",
+            "remediation": "Run crossplane status"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "terraform-opentofu",
+    "title": "OpenTofu & Terraform Infrastructure Automation, State & Modules",
+    "estimatedHours": 8,
+    "modules": [],
+    "labs": [
+      {
+        "id": "lab-tofu-01-vpc-cluster-apply",
+        "title": "Provisioning Cloud Infrastructure with OpenTofu / Terraform",
+        "xpReward": 150,
+        "difficulty": "Intermediate",
+        "durationMinutes": 20,
+        "objectives": [
+          "Create /infra/main.tf with aws_vpc and aws_eks_cluster resources.",
+          "Run tofu init to initialize provider plugins.",
+          "Run tofu apply to provision cloud resources and generate state."
+        ],
+        "starterManifest": "terraform {\n  required_providers {\n    aws = {\n      source  = \"hashicorp/aws\"\n      version = \"~> 5.0\"\n    }\n  }\n}\n\nresource \"aws_vpc\" \"main\" {\n  cidr_block           = \"10.0.0.0/16\"\n  enable_dns_hostnames = true\n}\n\nresource \"aws_eks_cluster\" \"prod\" {\n  name    = \"kubelabs-eks\"\n  version = \"1.31\"\n}\n",
+        "solutionCommands": [
+          "mkdir -p /infra",
+          "cat << 'EOF' > /infra/main.tf\nterraform {\n  required_providers {\n    aws = {\n      source  = \"hashicorp/aws\"\n      version = \"~> 5.0\"\n    }\n  }\n}\n\nresource \"aws_vpc\" \"main\" {\n  cidr_block           = \"10.0.0.0/16\"\n  enable_dns_hostnames = true\n}\n\nresource \"aws_eks_cluster\" \"prod\" {\n  name    = \"kubelabs-eks\"\n  version = \"1.31\"\n}\nEOF",
+          "cd /infra",
+          "tofu init",
+          "tofu apply -auto-approve"
+        ],
+        "validationRules": [
+          {
+            "id": "tofu-main-tf-exists",
+            "description": "/infra/main.tf contains aws_vpc.main",
+            "type": "vfs_file_contains",
+            "path": "/infra/main.tf",
+            "pattern": "aws_vpc",
+            "remediation": "Create /infra/main.tf with aws_vpc resource"
+          },
+          {
+            "id": "cloud-resource-vpc-active",
+            "description": "Cloud resource aws_vpc.main is active",
+            "type": "cloud_resource_exists",
+            "name": "aws_vpc.main",
+            "remediation": "Run tofu apply to create aws_vpc.main"
+          },
+          {
+            "id": "cloud-resource-eks-active",
+            "description": "Cloud resource aws_eks_cluster.prod is active",
+            "type": "cloud_resource_exists",
+            "name": "aws_eks_cluster.prod",
+            "remediation": "Run tofu apply to create aws_eks_cluster.prod"
+          }
+        ]
+      },
+      {
+        "id": "lab-tofu-02-remote-state-locking",
+        "title": "Configuring Remote S3 Backend State with DynamoDB Locking",
+        "xpReward": 150,
+        "difficulty": "Intermediate",
+        "durationMinutes": 20,
+        "objectives": [
+          "Create /infra/backend.tf specifying backend s3.",
+          "Configure bucket, key, and dynamodb_table locking.",
+          "Run tofu init to validate backend configuration."
+        ],
+        "starterManifest": "terraform {\n  backend \"s3\" {\n    bucket         = \"kubelabs-terraform-state\"\n    key            = \"prod/terraform.tfstate\"\n    region         = \"us-east-1\"\n    dynamodb_table = \"terraform-locks\"\n    encrypt        = true\n  }\n}\n",
+        "solutionCommands": [
+          "cat << 'EOF' > /infra/backend.tf\nterraform {\n  backend \"s3\" {\n    bucket         = \"kubelabs-terraform-state\"\n    key            = \"prod/terraform.tfstate\"\n    region         = \"us-east-1\"\n    dynamodb_table = \"terraform-locks\"\n    encrypt        = true\n  }\n}\nEOF",
+          "tofu init"
+        ],
+        "validationRules": [
+          {
+            "id": "backend-tf-contains-s3",
+            "description": "/infra/backend.tf configures backend 's3'",
+            "type": "vfs_file_contains",
+            "path": "/infra/backend.tf",
+            "pattern": "backend \"s3\"",
+            "remediation": "Configure backend 's3' in /infra/backend.tf"
+          },
+          {
+            "id": "backend-tf-contains-dynamodb",
+            "description": "/infra/backend.tf configures dynamodb_table locking",
+            "type": "vfs_file_contains",
+            "path": "/infra/backend.tf",
+            "pattern": "dynamodb_table",
+            "remediation": "Add dynamodb_table setting in /infra/backend.tf"
+          },
+          {
+            "id": "tofu-init-executed",
+            "description": "tofu init executed",
+            "type": "command_executed",
+            "commandSubstring": "tofu init",
+            "remediation": "Execute tofu init"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "service-mesh-core",
+    "title": "Service Mesh Architecture, Envoy Proxy & Ambient Data Planes",
+    "estimatedHours": 8,
+    "modules": [],
+    "labs": [
+      {
+        "id": "lab-mesh-01-sidecar-injection",
+        "title": "Enforcing Automated Sidecar Injection and Validating xDS Sync",
+        "xpReward": 150,
+        "difficulty": "Intermediate",
+        "durationMinutes": 20,
+        "objectives": [
+          "Create and label namespace mesh-apps with istio-injection=enabled.",
+          "Deploy Pod web-frontend in namespace mesh-apps.",
+          "Verify Envoy proxy synchronization via istioctl proxy-status."
+        ],
+        "starterManifest": "apiVersion: v1\nkind: Pod\nmetadata:\n  name: web-frontend\n  namespace: mesh-apps\n  labels:\n    app: web-frontend\nspec:\n  containers:\n    - name: web\n      image: nginx:1.27-alpine\n",
+        "solutionCommands": [
+          "mkdir -p /mesh",
+          "kubectl create namespace mesh-apps",
+          "kubectl label namespace mesh-apps istio-injection=enabled",
+          "cat << 'EOF' > /mesh/web-frontend.yaml\napiVersion: v1\nkind: Pod\nmetadata:\n  name: web-frontend\n  namespace: mesh-apps\n  labels:\n    app: web-frontend\nspec:\n  containers:\n    - name: web\n      image: nginx:1.27-alpine\nEOF",
+          "kubectl apply -f /mesh/web-frontend.yaml",
+          "istioctl proxy-status"
+        ],
+        "validationRules": [
+          {
+            "id": "namespace-mesh-apps-labeled",
+            "description": "Namespace mesh-apps has label istio-injection=enabled",
+            "type": "resource_field_equals",
+            "kind": "Namespace",
+            "name": "mesh-apps",
+            "fieldPath": "metadata.labels['istio-injection']",
+            "expectedValue": "enabled",
+            "remediation": "Run kubectl label namespace mesh-apps istio-injection=enabled"
+          },
+          {
+            "id": "pod-web-frontend-running",
+            "description": "Pod web-frontend exists in namespace mesh-apps",
+            "type": "resource_exists",
+            "kind": "Pod",
+            "namespace": "mesh-apps",
+            "name": "web-frontend",
+            "remediation": "Deploy Pod web-frontend in namespace mesh-apps"
+          },
+          {
+            "id": "istioctl-proxy-status-executed",
+            "description": "istioctl proxy-status executed",
+            "type": "command_executed",
+            "commandSubstring": "istioctl proxy-status",
+            "remediation": "Execute istioctl proxy-status"
+          }
+        ]
+      },
+      {
+        "id": "lab-mesh-02-mesh-diagnostics",
+        "title": "Running Automated Mesh Configuration Audits with istioctl analyze",
+        "xpReward": 150,
+        "difficulty": "Intermediate",
+        "durationMinutes": 20,
+        "objectives": [
+          "Execute istioctl analyze on namespace production.",
+          "Redirect audit findings to /mesh/analyze-report.txt.",
+          "Verify output contains validation success confirmation."
+        ],
+        "starterManifest": "# istioctl analyze configuration diagnostic\n# Namespace: production\n# Output target: /mesh/analyze-report.txt\n",
+        "solutionCommands": [
+          "mkdir -p /mesh",
+          "istioctl analyze -n production > /mesh/analyze-report.txt"
+        ],
+        "validationRules": [
+          {
+            "id": "istioctl-analyze-executed",
+            "description": "istioctl analyze executed",
+            "type": "command_executed",
+            "commandSubstring": "istioctl analyze",
+            "remediation": "Execute istioctl analyze -n production"
+          },
+          {
+            "id": "analyze-report-file-exists",
+            "description": "/mesh/analyze-report.txt contains audit results",
+            "type": "vfs_file_contains",
+            "path": "/mesh/analyze-report.txt",
+            "pattern": "No validation issues found",
+            "remediation": "Redirect istioctl analyze output to /mesh/analyze-report.txt"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "istio-service-mesh",
+    "title": "Istio Service Mesh Traffic Management, Security & mTLS",
+    "estimatedHours": 8,
+    "modules": [],
+    "labs": [
+      {
+        "id": "lab-istio-01-canary-routing",
+        "title": "Configuring Istio VirtualService Canary Traffic Routing",
+        "xpReward": 150,
+        "difficulty": "Intermediate",
+        "durationMinutes": 20,
+        "objectives": [
+          "Apply DestinationRule checkout-dr with subset v1.",
+          "Apply VirtualService checkout-vs routing /checkout to checkout-service:v1.",
+          "Verify route resolution matches checkout-service:v1."
+        ],
+        "starterManifest": "apiVersion: networking.istio.io/v1beta1\nkind: DestinationRule\nmetadata:\n  name: checkout-dr\n  namespace: default\nspec:\n  host: checkout-service\n  subsets:\n    - name: v1\n      labels:\n        version: v1\n---\napiVersion: networking.istio.io/v1beta1\nkind: VirtualService\nmetadata:\n  name: checkout-vs\n  namespace: default\nspec:\n  hosts:\n    - checkout.kubelabs.io\n  http:\n    - match:\n        - uri:\n            prefix: /checkout\n      route:\n        - destination:\n            host: checkout-service\n            subset: v1\n",
+        "solutionCommands": [
+          "mkdir -p /mesh",
+          "cat << 'EOF' > /mesh/checkout-mesh.yaml\napiVersion: networking.istio.io/v1beta1\nkind: DestinationRule\nmetadata:\n  name: checkout-dr\n  namespace: default\nspec:\n  host: checkout-service\n  subsets:\n    - name: v1\n      labels:\n        version: v1\n---\napiVersion: networking.istio.io/v1beta1\nkind: VirtualService\nmetadata:\n  name: checkout-vs\n  namespace: default\nspec:\n  hosts:\n    - checkout.kubelabs.io\n  http:\n    - match:\n        - uri:\n            prefix: /checkout\n      route:\n        - destination:\n            host: checkout-service\n            subset: v1\nEOF",
+          "kubectl apply -f /mesh/checkout-mesh.yaml"
+        ],
+        "validationRules": [
+          {
+            "id": "checkout-dr-exists",
+            "description": "DestinationRule checkout-dr exists in default",
+            "type": "resource_exists",
+            "kind": "DestinationRule",
+            "namespace": "default",
+            "name": "checkout-dr",
+            "remediation": "Apply DestinationRule checkout-dr in default namespace"
+          },
+          {
+            "id": "checkout-vs-exists",
+            "description": "VirtualService checkout-vs exists in default",
+            "type": "resource_exists",
+            "kind": "VirtualService",
+            "namespace": "default",
+            "name": "checkout-vs",
+            "remediation": "Apply VirtualService checkout-vs in default namespace"
+          },
+          {
+            "id": "istio-route-matches-v1",
+            "description": "Route /checkout resolves to checkout-service:v1",
+            "type": "istio_route_matches",
+            "virtualService": "checkout-vs",
+            "uri": "/checkout",
+            "expectedHost": "checkout-service",
+            "expectedSubset": "v1",
+            "remediation": "Configure VirtualService checkout-vs to route prefix /checkout to checkout-service:v1"
+          }
+        ]
+      },
+      {
+        "id": "lab-istio-02-peer-authentication-mtls",
+        "title": "Enforcing Mesh-Wide STRICT Mutual TLS (mTLS)",
+        "xpReward": 150,
+        "difficulty": "Intermediate",
+        "durationMinutes": 20,
+        "objectives": [
+          "Create namespace istio-system.",
+          "Apply PeerAuthentication default in namespace istio-system with mtls.mode: STRICT.",
+          "Verify mtls.mode is set to STRICT."
+        ],
+        "starterManifest": "apiVersion: security.istio.io/v1beta1\nkind: PeerAuthentication\nmetadata:\n  name: default\n  namespace: istio-system\nspec:\n  mtls:\n    mode: STRICT\n",
+        "solutionCommands": [
+          "mkdir -p /mesh",
+          "kubectl create namespace istio-system",
+          "cat << 'EOF' > /mesh/strict-mtls.yaml\napiVersion: security.istio.io/v1beta1\nkind: PeerAuthentication\nmetadata:\n  name: default\n  namespace: istio-system\nspec:\n  mtls:\n    mode: STRICT\nEOF",
+          "kubectl apply -f /mesh/strict-mtls.yaml"
+        ],
+        "validationRules": [
+          {
+            "id": "peerauth-default-exists",
+            "description": "PeerAuthentication default exists in namespace istio-system",
+            "type": "resource_exists",
+            "kind": "PeerAuthentication",
+            "namespace": "istio-system",
+            "name": "default",
+            "remediation": "Apply PeerAuthentication default in namespace istio-system"
+          },
+          {
+            "id": "peerauth-mode-strict",
+            "description": "PeerAuthentication mtls.mode is STRICT",
+            "type": "resource_field_equals",
+            "kind": "PeerAuthentication",
+            "namespace": "istio-system",
+            "name": "default",
+            "fieldPath": "spec.mtls.mode",
+            "expectedValue": "STRICT",
+            "remediation": "Set spec.mtls.mode: STRICT on PeerAuthentication default"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "linkerd-service-mesh",
+    "title": "Linkerd Service Mesh, Rust Micro-Proxies & ServiceProfiles",
+    "estimatedHours": 8,
+    "modules": [],
+    "labs": [
+      {
+        "id": "lab-linkerd-01-service-profile",
+        "title": "Configuring Linkerd ServiceProfiles & Resilient Retry Budgets",
+        "xpReward": 150,
+        "difficulty": "Intermediate",
+        "durationMinutes": 20,
+        "objectives": [
+          "Create and apply ServiceProfile payment-service.default.svc.cluster.local in default namespace.",
+          "Configure retryBudget with retryRatio 0.2 and minRetriesPerSecond 10.",
+          "Define route GetPayment matching pathRegex /api/v1/payments.* with isRetryable: true."
+        ],
+        "starterManifest": "apiVersion: linkerd.io/v1alpha2\nkind: ServiceProfile\nmetadata:\n  name: payment-service.default.svc.cluster.local\n  namespace: default\nspec:\n  retryBudget:\n    retryRatio: 0.2\n    minRetriesPerSecond: 10\n    ttl: 10s\n  routes:\n    - name: GetPayment\n      condition:\n        method: GET\n        pathRegex: /api/v1/payments.*\n      isRetryable: true\n",
+        "solutionCommands": [
+          "mkdir -p /mesh",
+          "cat << 'EOF' > /mesh/payment-serviceprofile.yaml\napiVersion: linkerd.io/v1alpha2\nkind: ServiceProfile\nmetadata:\n  name: payment-service.default.svc.cluster.local\n  namespace: default\nspec:\n  retryBudget:\n    retryRatio: 0.2\n    minRetriesPerSecond: 10\n    ttl: 10s\n  routes:\n    - name: GetPayment\n      condition:\n        method: GET\n        pathRegex: /api/v1/payments.*\n      isRetryable: true\nEOF",
+          "kubectl apply -f /mesh/payment-serviceprofile.yaml"
+        ],
+        "validationRules": [
+          {
+            "id": "sp-payment-exists",
+            "description": "ServiceProfile payment-service exists in default namespace",
+            "type": "resource_exists",
+            "kind": "ServiceProfile",
+            "namespace": "default",
+            "name": "payment-service.default.svc.cluster.local",
+            "remediation": "Apply ServiceProfile payment-service.default.svc.cluster.local in default namespace"
+          },
+          {
+            "id": "sp-retry-budget-ratio",
+            "description": "ServiceProfile retryBudget.retryRatio is 0.2",
+            "type": "resource_field_equals",
+            "kind": "ServiceProfile",
+            "namespace": "default",
+            "name": "payment-service.default.svc.cluster.local",
+            "fieldPath": "spec.retryBudget.retryRatio",
+            "expectedValue": 0.2,
+            "remediation": "Set spec.retryBudget.retryRatio: 0.2 on ServiceProfile"
+          },
+          {
+            "id": "sp-route-getpayment-name",
+            "description": "ServiceProfile has route GetPayment",
+            "type": "resource_field_equals",
+            "kind": "ServiceProfile",
+            "namespace": "default",
+            "name": "payment-service.default.svc.cluster.local",
+            "fieldPath": "spec.routes[0].name",
+            "expectedValue": "GetPayment",
+            "remediation": "Define route named GetPayment in spec.routes"
+          }
+        ]
+      },
+      {
+        "id": "lab-linkerd-02-viz-telemetry",
+        "title": "Auditing Mesh Control Plane Health and Golden Signals with Linkerd Viz",
+        "xpReward": 150,
+        "difficulty": "Intermediate",
+        "durationMinutes": 20,
+        "objectives": [
+          "Execute linkerd check to verify control plane and extension readiness.",
+          "Execute linkerd viz stat to inspect live golden signals and mesh success rates."
+        ],
+        "starterManifest": "# Linkerd control plane audit and telemetry diagnostic\n# Run: linkerd check && linkerd viz stat\n",
+        "solutionCommands": [
+          "linkerd check",
+          "linkerd viz stat"
+        ],
+        "validationRules": [
+          {
+            "id": "linkerd-check-executed",
+            "description": "linkerd check executed",
+            "type": "command_executed",
+            "commandSubstring": "linkerd check",
+            "remediation": "Execute linkerd check"
+          },
+          {
+            "id": "linkerd-viz-stat-executed",
+            "description": "linkerd viz stat executed",
+            "type": "command_executed",
+            "commandSubstring": "linkerd viz stat",
+            "remediation": "Execute linkerd viz stat"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "observability-core",
+    "title": "Observability Core Principles, RED & USE Frameworks & SLI Telemetry",
+    "estimatedHours": 8,
+    "modules": [],
+    "labs": [
+      {
+        "id": "lab-obs-01-red-metrics-sli",
+        "title": "Formulating RED Metrics & SLI Telemetry Specifications",
+        "xpReward": 150,
+        "difficulty": "Intermediate",
+        "durationMinutes": 20,
+        "objectives": [
+          "Author RED telemetry contract in /obs/red-telemetry.json.",
+          "Create and apply ConfigMap checkout-telemetry-config in namespace monitoring.",
+          "Verify telemetry config contains rate and duration metrics."
+        ],
+        "starterManifest": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: checkout-telemetry-config\n  namespace: monitoring\ndata:\n  red-telemetry.json: |\n    {\n      \"service\": \"checkout-service\",\n      \"framework\": \"RED\",\n      \"rateMetric\": \"http_requests_total\",\n      \"errorFilter\": \"status=~\\\"5..\\\"\",\n      \"durationMetric\": \"http_request_duration_seconds_bucket\"\n    }\n",
+        "solutionCommands": [
+          "mkdir -p /obs",
+          "cat << 'EOF' > /obs/red-telemetry.json\n{\n  \"service\": \"checkout-service\",\n  \"framework\": \"RED\",\n  \"rateMetric\": \"http_requests_total\",\n  \"errorFilter\": \"status=~\\\"5..\\\"\",\n  \"durationMetric\": \"http_request_duration_seconds_bucket\"\n}\nEOF",
+          "cat << 'EOF' > /obs/checkout-telemetry-config.yaml\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: checkout-telemetry-config\n  namespace: monitoring\ndata:\n  red-telemetry.json: |\n    {\n      \"service\": \"checkout-service\",\n      \"framework\": \"RED\",\n      \"rateMetric\": \"http_requests_total\",\n      \"errorFilter\": \"status=~\\\"5..\\\"\",\n      \"durationMetric\": \"http_request_duration_seconds_bucket\"\n    }\nEOF",
+          "kubectl apply -f /obs/checkout-telemetry-config.yaml"
+        ],
+        "validationRules": [
+          {
+            "id": "cm-checkout-telemetry-exists",
+            "description": "ConfigMap checkout-telemetry-config exists in namespace monitoring",
+            "type": "resource_exists",
+            "kind": "ConfigMap",
+            "namespace": "monitoring",
+            "name": "checkout-telemetry-config",
+            "remediation": "Apply ConfigMap checkout-telemetry-config in namespace monitoring"
+          },
+          {
+            "id": "vfs-red-spec-exists",
+            "description": "/obs/red-telemetry.json contains http_requests_total",
+            "type": "vfs_file_contains",
+            "path": "/obs/red-telemetry.json",
+            "pattern": "http_requests_total",
+            "remediation": "Author RED telemetry specification in /obs/red-telemetry.json"
+          },
+          {
+            "id": "cm-data-contains-duration",
+            "description": "ConfigMap data contains http_request_duration_seconds_bucket",
+            "type": "resource_field_contains",
+            "kind": "ConfigMap",
+            "namespace": "monitoring",
+            "name": "checkout-telemetry-config",
+            "fieldPath": "data['red-telemetry.json']",
+            "expectedValue": "http_request_duration_seconds_bucket",
+            "remediation": "Embed durationMetric in ConfigMap data['red-telemetry.json']"
+          }
+        ]
+      },
+      {
+        "id": "lab-obs-02-use-metrics-audit",
+        "title": "Auditing Cluster Infrastructure Health via the USE Framework",
+        "xpReward": 150,
+        "difficulty": "Intermediate",
+        "durationMinutes": 20,
+        "objectives": [
+          "Execute promql query for node CPU utilization.",
+          "Generate USE audit report in /obs/use-audit.txt."
+        ],
+        "starterManifest": "# USE Framework Node Resource Audit\n# Query node CPU utilization and write findings to /obs/use-audit.txt\n",
+        "solutionCommands": [
+          "mkdir -p /obs",
+          "promql node_cpu_utilization > /obs/use-audit.txt"
+        ],
+        "validationRules": [
+          {
+            "id": "promql-query-executed",
+            "description": "promql command executed",
+            "type": "command_executed",
+            "commandSubstring": "promql",
+            "remediation": "Execute promql node_cpu_utilization"
+          },
+          {
+            "id": "use-audit-file-exists",
+            "description": "/obs/use-audit.txt contains node utilization metrics",
+            "type": "vfs_file_contains",
+            "path": "/obs/use-audit.txt",
+            "pattern": "node_cpu_utilization",
+            "remediation": "Redirect promql query output to /obs/use-audit.txt"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "prometheus-monitoring",
+    "title": "Prometheus Monitoring, ServiceMonitors, PromQL & Alerting Rules",
+    "estimatedHours": 8,
+    "modules": [],
+    "labs": [
+      {
+        "id": "lab-prom-01-servicemonitor-discovery",
+        "title": "Configuring Declarative ServiceMonitor Target Scraping",
+        "xpReward": 150,
+        "difficulty": "Intermediate",
+        "durationMinutes": 20,
+        "objectives": [
+          "Author ServiceMonitor manifest for payment-api in /monitoring/payment-servicemonitor.yaml.",
+          "Apply ServiceMonitor payment-servicemonitor in namespace monitoring.",
+          "Verify selector and endpoint interval configuration."
+        ],
+        "starterManifest": "apiVersion: monitoring.coreos.com/v1\nkind: ServiceMonitor\nmetadata:\n  name: payment-servicemonitor\n  namespace: monitoring\nspec:\n  selector:\n    matchLabels:\n      app: payment-api\n  endpoints:\n    - port: http-metrics\n      path: /metrics\n      interval: 15s\n",
+        "solutionCommands": [
+          "mkdir -p /monitoring",
+          "cat << 'EOF' > /monitoring/payment-servicemonitor.yaml\napiVersion: monitoring.coreos.com/v1\nkind: ServiceMonitor\nmetadata:\n  name: payment-servicemonitor\n  namespace: monitoring\nspec:\n  selector:\n    matchLabels:\n      app: payment-api\n  endpoints:\n    - port: http-metrics\n      path: /metrics\n      interval: 15s\nEOF",
+          "kubectl apply -f /monitoring/payment-servicemonitor.yaml"
+        ],
+        "validationRules": [
+          {
+            "id": "sm-payment-exists",
+            "description": "ServiceMonitor payment-servicemonitor exists in monitoring namespace",
+            "type": "resource_exists",
+            "kind": "ServiceMonitor",
+            "namespace": "monitoring",
+            "name": "payment-servicemonitor",
+            "remediation": "Apply ServiceMonitor payment-servicemonitor in monitoring namespace"
+          },
+          {
+            "id": "sm-selector-matchlabels-app",
+            "description": "ServiceMonitor selector targets app: payment-api",
+            "type": "resource_field_equals",
+            "kind": "ServiceMonitor",
+            "namespace": "monitoring",
+            "name": "payment-servicemonitor",
+            "fieldPath": "spec.selector.matchLabels.app",
+            "expectedValue": "payment-api",
+            "remediation": "Configure spec.selector.matchLabels.app: payment-api"
+          },
+          {
+            "id": "sm-endpoint-interval",
+            "description": "ServiceMonitor endpoint interval is 15s",
+            "type": "resource_field_equals",
+            "kind": "ServiceMonitor",
+            "namespace": "monitoring",
+            "name": "payment-servicemonitor",
+            "fieldPath": "spec.endpoints[0].interval",
+            "expectedValue": "15s",
+            "remediation": "Set spec.endpoints[0].interval: 15s"
+          }
+        ]
+      },
+      {
+        "id": "lab-prom-02-prometheusrule-promtool",
+        "title": "Authoring Production PrometheusRules and Validating with promtool",
+        "xpReward": 150,
+        "difficulty": "Intermediate",
+        "durationMinutes": 20,
+        "objectives": [
+          "Author PrometheusRule alerting manifest in /monitoring/payment-alerts.yaml.",
+          "Validate syntax using promtool check rules.",
+          "Apply PrometheusRule payment-alerts in namespace monitoring."
+        ],
+        "starterManifest": "apiVersion: monitoring.coreos.com/v1\nkind: PrometheusRule\nmetadata:\n  name: payment-alerts\n  namespace: monitoring\nspec:\n  groups:\n    - name: payment.rules\n      rules:\n        - alert: PaymentHigh5xxRate\n          expr: rate(http_requests_total{status=~\"5..\"}[5m]) > 0.05\n          for: 2m\n          labels:\n            severity: critical\n          annotations:\n            summary: Payment service 5xx error rate exceeds 5 percent\n",
+        "solutionCommands": [
+          "mkdir -p /monitoring",
+          "cat << 'EOF' > /monitoring/payment-alerts.yaml\napiVersion: monitoring.coreos.com/v1\nkind: PrometheusRule\nmetadata:\n  name: payment-alerts\n  namespace: monitoring\nspec:\n  groups:\n    - name: payment.rules\n      rules:\n        - alert: PaymentHigh5xxRate\n          expr: rate(http_requests_total{status=~\"5..\"}[5m]) > 0.05\n          for: 2m\n          labels:\n            severity: critical\n          annotations:\n            summary: Payment service 5xx error rate exceeds 5 percent\nEOF",
+          "promtool check rules /monitoring/payment-alerts.yaml",
+          "kubectl apply -f /monitoring/payment-alerts.yaml"
+        ],
+        "validationRules": [
+          {
+            "id": "vfs-alerts-yaml-exists",
+            "description": "/monitoring/payment-alerts.yaml contains PaymentHigh5xxRate",
+            "type": "vfs_file_contains",
+            "path": "/monitoring/payment-alerts.yaml",
+            "pattern": "PaymentHigh5xxRate",
+            "remediation": "Write alert PaymentHigh5xxRate to /monitoring/payment-alerts.yaml"
+          },
+          {
+            "id": "promtool-check-executed",
+            "description": "promtool check rules executed on payment-alerts.yaml",
+            "type": "command_executed",
+            "commandSubstring": "promtool check rules /monitoring/payment-alerts.yaml",
+            "remediation": "Execute promtool check rules /monitoring/payment-alerts.yaml"
+          },
+          {
+            "id": "promrule-payment-alerts-exists",
+            "description": "PrometheusRule payment-alerts exists in namespace monitoring",
+            "type": "resource_exists",
+            "kind": "PrometheusRule",
+            "namespace": "monitoring",
+            "name": "payment-alerts",
+            "remediation": "Apply PrometheusRule payment-alerts in namespace monitoring"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "grafana-visualization",
+    "title": "Grafana Visualization, Golden Signal Dashboards & Alertmanager Routing",
+    "estimatedHours": 8,
+    "modules": [],
+    "labs": [
+      {
+        "id": "lab-graf-01-dashboard-as-code",
+        "title": "Provisioning Declarative Grafana Dashboards as Code",
+        "xpReward": 150,
+        "difficulty": "Intermediate",
+        "durationMinutes": 20,
+        "objectives": [
+          "Author dashboard JSON in /grafana/golden-signals-dashboard.json.",
+          "Create and apply ConfigMap grafana-dashboard-golden-signals in namespace monitoring with label grafana_dashboard: '1'.",
+          "Verify ConfigMap contains dashboard data with P99 Latency."
+        ],
+        "starterManifest": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: grafana-dashboard-golden-signals\n  namespace: monitoring\n  labels:\n    grafana_dashboard: \"1\"\ndata:\n  golden-signals-dashboard.json: |\n    {\n      \"title\": \"API Golden Signals RED/USE\",\n      \"panels\": [\n        {\"title\": \"Request Rate (RPS)\", \"type\": \"timeseries\"},\n        {\"title\": \"Error Rate %\", \"type\": \"timeseries\"},\n        {\"title\": \"Latency P99\", \"type\": \"timeseries\"}\n      ]\n    }\n",
+        "solutionCommands": [
+          "mkdir -p /grafana",
+          "cat << 'EOF' > /grafana/golden-signals-dashboard.json\n{\n  \"title\": \"API Golden Signals RED/USE\",\n  \"panels\": [\n    {\"title\": \"Request Rate (RPS)\", \"type\": \"timeseries\"},\n    {\"title\": \"Error Rate %\", \"type\": \"timeseries\"},\n    {\"title\": \"Latency P99\", \"type\": \"timeseries\"}\n  ]\n}\nEOF",
+          "cat << 'EOF' > /grafana/dashboard-configmap.yaml\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: grafana-dashboard-golden-signals\n  namespace: monitoring\n  labels:\n    grafana_dashboard: \"1\"\ndata:\n  golden-signals-dashboard.json: |\n    {\n      \"title\": \"API Golden Signals RED/USE\",\n      \"panels\": [\n        {\"title\": \"Request Rate (RPS)\", \"type\": \"timeseries\"},\n        {\"title\": \"Error Rate %\", \"type\": \"timeseries\"},\n        {\"title\": \"Latency P99\", \"type\": \"timeseries\"}\n      ]\n    }\nEOF",
+          "kubectl apply -f /grafana/dashboard-configmap.yaml"
+        ],
+        "validationRules": [
+          {
+            "id": "cm-golden-signals-exists",
+            "description": "ConfigMap grafana-dashboard-golden-signals exists in namespace monitoring",
+            "type": "resource_exists",
+            "kind": "ConfigMap",
+            "namespace": "monitoring",
+            "name": "grafana-dashboard-golden-signals",
+            "remediation": "Apply ConfigMap grafana-dashboard-golden-signals in namespace monitoring"
+          },
+          {
+            "id": "cm-label-grafana-dashboard",
+            "description": "ConfigMap has label grafana_dashboard=1",
+            "type": "resource_field_equals",
+            "kind": "ConfigMap",
+            "namespace": "monitoring",
+            "name": "grafana-dashboard-golden-signals",
+            "fieldPath": "metadata.labels['grafana_dashboard']",
+            "expectedValue": "1",
+            "remediation": "Set metadata.labels.grafana_dashboard: '1'"
+          },
+          {
+            "id": "cm-data-contains-p99",
+            "description": "Dashboard data contains Latency P99",
+            "type": "resource_field_contains",
+            "kind": "ConfigMap",
+            "namespace": "monitoring",
+            "name": "grafana-dashboard-golden-signals",
+            "fieldPath": "data['golden-signals-dashboard.json']",
+            "expectedValue": "Latency P99",
+            "remediation": "Embed Latency P99 panel in golden-signals-dashboard.json"
+          }
+        ]
+      },
+      {
+        "id": "lab-graf-02-alertmanager-routing",
+        "title": "Configuring Alertmanager Notification Trees & Inhibition Rules",
+        "xpReward": 150,
+        "difficulty": "Intermediate",
+        "durationMinutes": 20,
+        "objectives": [
+          "Author Alertmanager routing config in /monitoring/alertmanager.yaml.",
+          "Create and apply Secret alertmanager-main in namespace monitoring.",
+          "Verify repeat_interval and pagerduty-critical receiver are configured."
+        ],
+        "starterManifest": "apiVersion: v1\nkind: Secret\nmetadata:\n  name: alertmanager-main\n  namespace: monitoring\ndata:\n  alertmanager.yaml: |\n    global:\n      resolve_timeout: 5m\n    route:\n      group_by: ['alertname', 'namespace']\n      group_wait: 30s\n      group_interval: 5m\n      repeat_interval: 4h\n      receiver: pagerduty-critical\n    receivers:\n      - name: pagerduty-critical\n",
+        "solutionCommands": [
+          "mkdir -p /monitoring",
+          "cat << 'EOF' > /monitoring/alertmanager.yaml\nglobal:\n  resolve_timeout: 5m\nroute:\n  group_by: ['alertname', 'namespace']\n  group_wait: 30s\n  group_interval: 5m\n  repeat_interval: 4h\n  receiver: pagerduty-critical\nreceivers:\n  - name: pagerduty-critical\nEOF",
+          "cat << 'EOF' > /monitoring/alertmanager-secret.yaml\napiVersion: v1\nkind: Secret\nmetadata:\n  name: alertmanager-main\n  namespace: monitoring\ndata:\n  alertmanager.yaml: |\n    global:\n      resolve_timeout: 5m\n    route:\n      group_by: ['alertname', 'namespace']\n      group_wait: 30s\n      group_interval: 5m\n      repeat_interval: 4h\n      receiver: pagerduty-critical\n    receivers:\n      - name: pagerduty-critical\nEOF",
+          "kubectl apply -f /monitoring/alertmanager-secret.yaml"
+        ],
+        "validationRules": [
+          {
+            "id": "vfs-alertmanager-yaml-exists",
+            "description": "/monitoring/alertmanager.yaml contains pagerduty-critical",
+            "type": "vfs_file_contains",
+            "path": "/monitoring/alertmanager.yaml",
+            "pattern": "pagerduty-critical",
+            "remediation": "Write pagerduty-critical receiver to /monitoring/alertmanager.yaml"
+          },
+          {
+            "id": "secret-alertmanager-main-exists",
+            "description": "Secret alertmanager-main exists in namespace monitoring",
+            "type": "resource_exists",
+            "kind": "Secret",
+            "namespace": "monitoring",
+            "name": "alertmanager-main",
+            "remediation": "Apply Secret alertmanager-main in namespace monitoring"
+          },
+          {
+            "id": "secret-data-contains-repeat-interval",
+            "description": "Secret data contains repeat_interval",
+            "type": "resource_field_contains",
+            "kind": "Secret",
+            "namespace": "monitoring",
+            "name": "alertmanager-main",
+            "fieldPath": "data['alertmanager.yaml']",
+            "expectedValue": "repeat_interval",
+            "remediation": "Configure repeat_interval in alertmanager.yaml"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "opentelemetry-traces",
+    "title": "OpenTelemetry Distributed Tracing, Collector Pipelines & Context Propagation",
+    "estimatedHours": 8,
+    "modules": [],
+    "labs": [
+      {
+        "id": "lab-otel-01-collector-pipeline",
+        "title": "Authoring and Validating OTel Collector Pipelines with otelcol",
+        "xpReward": 150,
+        "difficulty": "Intermediate",
+        "durationMinutes": 20,
+        "objectives": [
+          "Author OpenTelemetry Collector YAML in /otel/collector-config.yaml.",
+          "Validate configuration using otelcol validate --config=/otel/collector-config.yaml.",
+          "Deploy ConfigMap otel-collector-config in namespace monitoring."
+        ],
+        "starterManifest": "receivers:\n  otlp:\n    protocols:\n      grpc:\n      http:\nprocessors:\n  memory_limiter:\n    check_interval: 1s\n    limit_percentage: 75\n  batch:\n    timeout: 1s\nexporters:\n  otlp:\n    endpoint: \"tempo.monitoring.svc.cluster.local:4317\"\n    tls:\n      insecure: true\nservice:\n  pipelines:\n    traces:\n      receivers: [otlp]\n      processors: [memory_limiter, batch]\n      exporters: [otlp]\n",
+        "solutionCommands": [
+          "mkdir -p /otel",
+          "cat << 'EOF' > /otel/collector-config.yaml\nreceivers:\n  otlp:\n    protocols:\n      grpc:\n      http:\nprocessors:\n  memory_limiter:\n    check_interval: 1s\n    limit_percentage: 75\n  batch:\n    timeout: 1s\nexporters:\n  otlp:\n    endpoint: \"tempo.monitoring.svc.cluster.local:4317\"\n    tls:\n      insecure: true\nservice:\n  pipelines:\n    traces:\n      receivers: [otlp]\n      processors: [memory_limiter, batch]\n      exporters: [otlp]\nEOF",
+          "otelcol validate --config=/otel/collector-config.yaml",
+          "cat << 'EOF' > /otel/collector-configmap.yaml\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: otel-collector-config\n  namespace: monitoring\ndata:\n  collector.yaml: |\n    receivers:\n      otlp:\n        protocols:\n          grpc:\n          http:\n    processors:\n      memory_limiter:\n        check_interval: 1s\n        limit_percentage: 75\n      batch:\n        timeout: 1s\n    exporters:\n      otlp:\n        endpoint: \"tempo.monitoring.svc.cluster.local:4317\"\n        tls:\n          insecure: true\n    service:\n      pipelines:\n        traces:\n          receivers: [otlp]\n          processors: [memory_limiter, batch]\n          exporters: [otlp]\nEOF",
+          "kubectl apply -f /otel/collector-configmap.yaml"
+        ],
+        "validationRules": [
+          {
+            "id": "vfs-collector-yaml-exists",
+            "description": "/otel/collector-config.yaml contains memory_limiter",
+            "type": "vfs_file_contains",
+            "path": "/otel/collector-config.yaml",
+            "pattern": "memory_limiter",
+            "remediation": "Write memory_limiter processor in /otel/collector-config.yaml"
+          },
+          {
+            "id": "otelcol-validate-executed",
+            "description": "otelcol validate executed on collector-config.yaml",
+            "type": "command_executed",
+            "commandSubstring": "otelcol validate",
+            "remediation": "Execute otelcol validate --config=/otel/collector-config.yaml"
+          },
+          {
+            "id": "cm-otel-collector-exists",
+            "description": "ConfigMap otel-collector-config exists in namespace monitoring",
+            "type": "resource_exists",
+            "kind": "ConfigMap",
+            "namespace": "monitoring",
+            "name": "otel-collector-config",
+            "remediation": "Apply ConfigMap otel-collector-config in namespace monitoring"
+          }
+        ]
+      },
+      {
+        "id": "lab-otel-02-trace-context",
+        "title": "Implementing W3C TraceContext Propagation Specifications",
+        "xpReward": 150,
+        "difficulty": "Intermediate",
+        "durationMinutes": 20,
+        "objectives": [
+          "Author trace context JSON in /otel/trace-context.json.",
+          "Apply Secret trace-context-contract in default namespace.",
+          "Verify trace_id and traceparent header presence."
+        ],
+        "starterManifest": "apiVersion: v1\nkind: Secret\nmetadata:\n  name: trace-context-contract\n  namespace: default\ndata:\n  trace-context.json: |\n    {\n      \"header\": \"traceparent\",\n      \"version\": \"00\",\n      \"trace_id\": \"4bf92f3577b34da6a3ce929d0e0e4736\",\n      \"parent_id\": \"00f067aa0ba902b7\",\n      \"flags\": \"01\"\n    }\n",
+        "solutionCommands": [
+          "mkdir -p /otel",
+          "cat << 'EOF' > /otel/trace-context.json\n{\n  \"header\": \"traceparent\",\n  \"version\": \"00\",\n  \"trace_id\": \"4bf92f3577b34da6a3ce929d0e0e4736\",\n  \"parent_id\": \"00f067aa0ba902b7\",\n  \"flags\": \"01\"\n}\nEOF",
+          "cat << 'EOF' > /otel/trace-context-secret.yaml\napiVersion: v1\nkind: Secret\nmetadata:\n  name: trace-context-contract\n  namespace: default\ndata:\n  trace-context.json: |\n    {\n      \"header\": \"traceparent\",\n      \"version\": \"00\",\n      \"trace_id\": \"4bf92f3577b34da6a3ce929d0e0e4736\",\n      \"parent_id\": \"00f067aa0ba902b7\",\n      \"flags\": \"01\"\n    }\nEOF",
+          "kubectl apply -f /otel/trace-context-secret.yaml"
+        ],
+        "validationRules": [
+          {
+            "id": "vfs-trace-spec-exists",
+            "description": "/otel/trace-context.json contains 4bf92f3577b34da6a3ce929d0e0e4736",
+            "type": "vfs_file_contains",
+            "path": "/otel/trace-context.json",
+            "pattern": "4bf92f3577b34da6a3ce929d0e0e4736",
+            "remediation": "Write W3C trace_id 4bf92f3577b34da6a3ce929d0e0e4736 in /otel/trace-context.json"
+          },
+          {
+            "id": "secret-trace-contract-exists",
+            "description": "Secret trace-context-contract exists in namespace default",
+            "type": "resource_exists",
+            "kind": "Secret",
+            "namespace": "default",
+            "name": "trace-context-contract",
+            "remediation": "Apply Secret trace-context-contract in namespace default"
+          },
+          {
+            "id": "secret-data-contains-traceparent",
+            "description": "Secret data contains traceparent",
+            "type": "resource_field_contains",
+            "kind": "Secret",
+            "namespace": "default",
+            "name": "trace-context-contract",
+            "fieldPath": "data['trace-context.json']",
+            "expectedValue": "traceparent",
+            "remediation": "Configure traceparent header in data['trace-context.json']"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "logging-monitoring",
+    "title": "Cloud-Native Logging Architecture, Vector Aggregation & Grafana Loki LogQL",
+    "estimatedHours": 8,
+    "modules": [],
+    "labs": [
+      {
+        "id": "lab-log-01-vector-pii-scrub",
+        "title": "Configuring Vector Log Pipelines with Automated PII Redaction",
+        "xpReward": 150,
+        "difficulty": "Intermediate",
+        "durationMinutes": 20,
+        "objectives": [
+          "Create namespace logging.",
+          "Author Vector pipeline with remap transform in /logging/vector.yaml.",
+          "Deploy ConfigMap vector-config in namespace logging."
+        ],
+        "starterManifest": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: vector-config\n  namespace: logging\ndata:\n  vector.yaml: |\n    sources:\n      k8s_logs:\n        type: kubernetes_logs\n    transforms:\n      redact_pii:\n        type: remap\n        inputs: [k8s_logs]\n        source: .message = replace(.message, r'[0-9]{4}-[0-9]{4}-[0-9]{4}-[0-9]{4}', \"[REDACTED_CC]\")\n    sinks:\n      loki:\n        type: loki\n        inputs: [redact_pii]\n        endpoint: \"http://loki.logging.svc:3100\"\n",
+        "solutionCommands": [
+          "mkdir -p /logging",
+          "kubectl create namespace logging",
+          "cat << 'EOF' > /logging/vector.yaml\nsources:\n  k8s_logs:\n    type: kubernetes_logs\ntransforms:\n  redact_pii:\n    type: remap\n    inputs: [k8s_logs]\n    source: .message = replace(.message, r'[0-9]{4}-[0-9]{4}-[0-9]{4}-[0-9]{4}', \"[REDACTED_CC]\")\nsinks:\n  loki:\n    type: loki\n    inputs: [redact_pii]\n    endpoint: \"http://loki.logging.svc:3100\"\nEOF",
+          "cat << 'EOF' > /logging/vector-configmap.yaml\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: vector-config\n  namespace: logging\ndata:\n  vector.yaml: |\n    sources:\n      k8s_logs:\n        type: kubernetes_logs\n    transforms:\n      redact_pii:\n        type: remap\n        inputs: [k8s_logs]\n        source: .message = replace(.message, r'[0-9]{4}-[0-9]{4}-[0-9]{4}-[0-9]{4}', \"[REDACTED_CC]\")\n    sinks:\n      loki:\n        type: loki\n        inputs: [redact_pii]\n        endpoint: \"http://loki.logging.svc:3100\"\nEOF",
+          "kubectl apply -f /logging/vector-configmap.yaml"
+        ],
+        "validationRules": [
+          {
+            "id": "vfs-vector-yaml-exists",
+            "description": "/logging/vector.yaml contains REDACTED_CC",
+            "type": "vfs_file_contains",
+            "path": "/logging/vector.yaml",
+            "pattern": "REDACTED_CC",
+            "remediation": "Write PII redaction transform in /logging/vector.yaml"
+          },
+          {
+            "id": "cm-vector-config-exists",
+            "description": "ConfigMap vector-config exists in namespace logging",
+            "type": "resource_exists",
+            "kind": "ConfigMap",
+            "namespace": "logging",
+            "name": "vector-config",
+            "remediation": "Apply ConfigMap vector-config in namespace logging"
+          },
+          {
+            "id": "cm-vector-data-contains-redaction",
+            "description": "ConfigMap vector data contains REDACTED_CC",
+            "type": "resource_field_contains",
+            "kind": "ConfigMap",
+            "namespace": "logging",
+            "name": "vector-config",
+            "fieldPath": "data['vector.yaml']",
+            "expectedValue": "REDACTED_CC",
+            "remediation": "Embed REDACTED_CC remap rule in data['vector.yaml']"
+          }
+        ]
+      },
+      {
+        "id": "lab-log-02-loki-logql",
+        "title": "Querying Distributed Log Streams with Grafana Loki LogQL",
+        "xpReward": 150,
+        "difficulty": "Intermediate",
+        "durationMinutes": 20,
+        "objectives": [
+          "Execute logql query filtering {app=\"payment-api\"} |= \"payment failed\".",
+          "Save output stream to /logging/error-audit.log."
+        ],
+        "starterManifest": "# Loki LogQL Incident Query Diagnostic\n# Query: logql '{app=\"payment-api\"} |= \"payment failed\"'\n# Output target: /logging/error-audit.log\n",
+        "solutionCommands": [
+          "mkdir -p /logging",
+          "logql '{app=\"payment-api\"} |= \"payment failed\"' > /logging/error-audit.log"
+        ],
+        "validationRules": [
+          {
+            "id": "logql-query-executed",
+            "description": "logql query executed",
+            "type": "command_executed",
+            "commandSubstring": "logql",
+            "remediation": "Execute logql query"
+          },
+          {
+            "id": "error-audit-file-exists",
+            "description": "/logging/error-audit.log contains stream results",
+            "type": "vfs_file_contains",
+            "path": "/logging/error-audit.log",
+            "pattern": "log event stream active",
+            "remediation": "Redirect logql output to /logging/error-audit.log"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "sre-incident-recovery",
+    "title": "Site Reliability Engineering (SRE), SLI/SLO Frameworks & Multi-Window Burn Rates",
+    "estimatedHours": 8,
+    "modules": [],
+    "labs": [
+      {
+        "id": "lab-sre-01-slo-budget-governance",
+        "title": "Defining Microservice SLO Contracts & Error Budget Thresholds",
+        "xpReward": 150,
+        "difficulty": "Intermediate",
+        "durationMinutes": 20,
+        "objectives": [
+          "Author SLO contract in /sre/slo-specification.json.",
+          "Deploy ConfigMap payment-slo-contract in namespace monitoring.",
+          "Verify sloTarget and errorBudgetMinutes fields."
+        ],
+        "starterManifest": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: payment-slo-contract\n  namespace: monitoring\ndata:\n  slo.json: |\n    {\n      \"service\": \"payment-service\",\n      \"sloTarget\": 0.999,\n      \"windowDays\": 30,\n      \"errorBudgetMinutes\": 43.2\n    }\n",
+        "solutionCommands": [
+          "mkdir -p /sre",
+          "cat << 'EOF' > /sre/slo-specification.json\n{\n  \"service\": \"payment-service\",\n  \"sloTarget\": 0.999,\n  \"windowDays\": 30,\n  \"errorBudgetMinutes\": 43.2\n}\nEOF",
+          "cat << 'EOF' > /sre/slo-configmap.yaml\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: payment-slo-contract\n  namespace: monitoring\ndata:\n  slo.json: |\n    {\n      \"service\": \"payment-service\",\n      \"sloTarget\": 0.999,\n      \"windowDays\": 30,\n      \"errorBudgetMinutes\": 43.2\n    }\nEOF",
+          "kubectl apply -f /sre/slo-configmap.yaml"
+        ],
+        "validationRules": [
+          {
+            "id": "vfs-slo-spec-exists",
+            "description": "/sre/slo-specification.json contains payment-service",
+            "type": "vfs_file_contains",
+            "path": "/sre/slo-specification.json",
+            "pattern": "payment-service",
+            "remediation": "Write payment-service contract in /sre/slo-specification.json"
+          },
+          {
+            "id": "cm-payment-slo-exists",
+            "description": "ConfigMap payment-slo-contract exists in namespace monitoring",
+            "type": "resource_exists",
+            "kind": "ConfigMap",
+            "namespace": "monitoring",
+            "name": "payment-slo-contract",
+            "remediation": "Apply ConfigMap payment-slo-contract in namespace monitoring"
+          },
+          {
+            "id": "cm-data-contains-error-budget",
+            "description": "ConfigMap data contains errorBudgetMinutes",
+            "type": "resource_field_contains",
+            "kind": "ConfigMap",
+            "namespace": "monitoring",
+            "name": "payment-slo-contract",
+            "fieldPath": "data['slo.json']",
+            "expectedValue": "errorBudgetMinutes",
+            "remediation": "Configure errorBudgetMinutes in data['slo.json']"
+          }
+        ]
+      },
+      {
+        "id": "lab-sre-02-burn-rate-alerting",
+        "title": "Configuring Multi-Window Multi-Burn-Rate Alerting Rules",
+        "xpReward": 150,
+        "difficulty": "Intermediate",
+        "durationMinutes": 20,
+        "objectives": [
+          "Author PrometheusRule burn rate alerts in /sre/burn-rate-alerts.yaml.",
+          "Deploy PrometheusRule payment-slo-burn-alerts in namespace monitoring.",
+          "Verify PaymentSloBurnRateRapid alert configuration."
+        ],
+        "starterManifest": "apiVersion: monitoring.coreos.com/v1\nkind: PrometheusRule\nmetadata:\n  name: payment-slo-burn-alerts\n  namespace: monitoring\nspec:\n  groups:\n    - name: payment-slo.rules\n      rules:\n        - alert: PaymentSloBurnRateRapid\n          expr: (rate(http_requests_total{status=~\"5..\"}[1h]) / rate(http_requests_total[1h])) / (1 - 0.999) > 14.4\n          for: 2m\n          labels:\n            severity: critical\n        - alert: PaymentSloBurnRateSlow\n          expr: (rate(http_requests_total{status=~\"5..\"}[6h]) / rate(http_requests_total[6h])) / (1 - 0.999) > 6.0\n          for: 15m\n          labels:\n            severity: warning\n",
+        "solutionCommands": [
+          "mkdir -p /sre",
+          "cat << 'EOF' > /sre/burn-rate-alerts.yaml\napiVersion: monitoring.coreos.com/v1\nkind: PrometheusRule\nmetadata:\n  name: payment-slo-burn-alerts\n  namespace: monitoring\nspec:\n  groups:\n    - name: payment-slo.rules\n      rules:\n        - alert: PaymentSloBurnRateRapid\n          expr: (rate(http_requests_total{status=~\"5..\"}[1h]) / rate(http_requests_total[1h])) / (1 - 0.999) > 14.4\n          for: 2m\n          labels:\n            severity: critical\n        - alert: PaymentSloBurnRateSlow\n          expr: (rate(http_requests_total{status=~\"5..\"}[6h]) / rate(http_requests_total[6h])) / (1 - 0.999) > 6.0\n          for: 15m\n          labels:\n            severity: warning\nEOF",
+          "kubectl apply -f /sre/burn-rate-alerts.yaml"
+        ],
+        "validationRules": [
+          {
+            "id": "vfs-burn-alerts-exists",
+            "description": "/sre/burn-rate-alerts.yaml contains PaymentSloBurnRateRapid",
+            "type": "vfs_file_contains",
+            "path": "/sre/burn-rate-alerts.yaml",
+            "pattern": "PaymentSloBurnRateRapid",
+            "remediation": "Write PaymentSloBurnRateRapid alert in /sre/burn-rate-alerts.yaml"
+          },
+          {
+            "id": "promrule-slo-burn-exists",
+            "description": "PrometheusRule payment-slo-burn-alerts exists in namespace monitoring",
+            "type": "resource_exists",
+            "kind": "PrometheusRule",
+            "namespace": "monitoring",
+            "name": "payment-slo-burn-alerts",
+            "remediation": "Apply PrometheusRule payment-slo-burn-alerts in namespace monitoring"
+          },
+          {
+            "id": "promrule-alert-name-matches",
+            "description": "PrometheusRule defines alert PaymentSloBurnRateRapid",
+            "type": "resource_field_equals",
+            "kind": "PrometheusRule",
+            "namespace": "monitoring",
+            "name": "payment-slo-burn-alerts",
+            "fieldPath": "spec.groups[0].rules[0].alert",
+            "expectedValue": "PaymentSloBurnRateRapid",
+            "remediation": "Define alert PaymentSloBurnRateRapid in spec.groups[0].rules[0]"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "platform-reliability",
+    "title": "Platform Reliability, Chaos Engineering & Kubernetes High-Availability Primitives",
+    "estimatedHours": 8,
+    "modules": [],
+    "labs": [
+      {
+        "id": "lab-rel-01-pdb-priorityclass",
+        "title": "Configuring PodDisruptionBudgets & Critical PriorityClasses",
+        "xpReward": 150,
+        "difficulty": "Intermediate",
+        "durationMinutes": 20,
+        "objectives": [
+          "Create namespace production.",
+          "Apply PriorityClass production-critical with value 1000000.",
+          "Apply PodDisruptionBudget payment-pdb in namespace production with minAvailable: 2."
+        ],
+        "starterManifest": "apiVersion: scheduling.k8s.io/v1\nkind: PriorityClass\nmetadata:\n  name: production-critical\nvalue: 1000000\nglobalDefault: false\npreemptionPolicy: PreemptLowerPriority\n---\napiVersion: policy/v1\nkind: PodDisruptionBudget\nmetadata:\n  name: payment-pdb\n  namespace: production\nspec:\n  minAvailable: 2\n  selector:\n    matchLabels:\n      app: payment-api\n",
+        "solutionCommands": [
+          "mkdir -p /reliability",
+          "kubectl create namespace production",
+          "cat << 'EOF' > /reliability/ha-primitives.yaml\napiVersion: scheduling.k8s.io/v1\nkind: PriorityClass\nmetadata:\n  name: production-critical\nvalue: 1000000\nglobalDefault: false\npreemptionPolicy: PreemptLowerPriority\n---\napiVersion: policy/v1\nkind: PodDisruptionBudget\nmetadata:\n  name: payment-pdb\n  namespace: production\nspec:\n  minAvailable: 2\n  selector:\n    matchLabels:\n      app: payment-api\nEOF",
+          "kubectl apply -f /reliability/ha-primitives.yaml"
+        ],
+        "validationRules": [
+          {
+            "id": "priorityclass-critical-exists",
+            "description": "PriorityClass production-critical exists",
+            "type": "resource_exists",
+            "kind": "PriorityClass",
+            "name": "production-critical",
+            "remediation": "Apply PriorityClass production-critical"
+          },
+          {
+            "id": "priorityclass-value-match",
+            "description": "PriorityClass value is 1000000",
+            "type": "resource_field_equals",
+            "kind": "PriorityClass",
+            "name": "production-critical",
+            "fieldPath": "value",
+            "expectedValue": 1000000,
+            "remediation": "Set value: 1000000 on PriorityClass production-critical"
+          },
+          {
+            "id": "pdb-payment-exists",
+            "description": "PodDisruptionBudget payment-pdb exists in namespace production",
+            "type": "resource_exists",
+            "kind": "PodDisruptionBudget",
+            "namespace": "production",
+            "name": "payment-pdb",
+            "remediation": "Apply PodDisruptionBudget payment-pdb in namespace production"
+          },
+          {
+            "id": "pdb-min-available-match",
+            "description": "PodDisruptionBudget minAvailable is 2",
+            "type": "resource_field_equals",
+            "kind": "PodDisruptionBudget",
+            "namespace": "production",
+            "name": "payment-pdb",
+            "fieldPath": "spec.minAvailable",
+            "expectedValue": 2,
+            "remediation": "Set spec.minAvailable: 2 on PodDisruptionBudget payment-pdb"
+          }
+        ]
+      },
+      {
+        "id": "lab-rel-02-chaos-prestop-hook",
+        "title": "Injecting Chaos Experiments & Validating Graceful preStop Hooks",
+        "xpReward": 150,
+        "difficulty": "Intermediate",
+        "durationMinutes": 20,
+        "objectives": [
+          "Deploy Pod graceful-api in namespace production with preStop hook.",
+          "Execute chaos experiment pod-kill in namespace production."
+        ],
+        "starterManifest": "apiVersion: v1\nkind: Pod\nmetadata:\n  name: graceful-api\n  namespace: production\n  labels:\n    app: graceful-api\nspec:\n  terminationGracePeriodSeconds: 30\n  containers:\n    - name: api\n      image: nginx:1.27-alpine\n      lifecycle:\n        preStop:\n          exec:\n            command: [\"/bin/sh\", \"-c\", \"sleep 15\"]\n",
+        "solutionCommands": [
+          "mkdir -p /reliability",
+          "kubectl create namespace production",
+          "cat << 'EOF' > /reliability/graceful-api.yaml\napiVersion: v1\nkind: Pod\nmetadata:\n  name: graceful-api\n  namespace: production\n  labels:\n    app: graceful-api\nspec:\n  terminationGracePeriodSeconds: 30\n  containers:\n    - name: api\n      image: nginx:1.27-alpine\n      lifecycle:\n        preStop:\n          exec:\n            command: [\"/bin/sh\", \"-c\", \"sleep 15\"]\nEOF",
+          "kubectl apply -f /reliability/graceful-api.yaml",
+          "chaos experiment pod-kill -n production"
+        ],
+        "validationRules": [
+          {
+            "id": "pod-graceful-api-exists",
+            "description": "Pod graceful-api exists in namespace production",
+            "type": "resource_exists",
+            "kind": "Pod",
+            "namespace": "production",
+            "name": "graceful-api",
+            "remediation": "Deploy Pod graceful-api in namespace production"
+          },
+          {
+            "id": "pod-grace-period-matches",
+            "description": "Pod terminationGracePeriodSeconds is 30",
+            "type": "resource_field_equals",
+            "kind": "Pod",
+            "namespace": "production",
+            "name": "graceful-api",
+            "fieldPath": "spec.terminationGracePeriodSeconds",
+            "expectedValue": 30,
+            "remediation": "Set spec.terminationGracePeriodSeconds: 30 on Pod graceful-api"
+          },
+          {
+            "id": "chaos-experiment-executed",
+            "description": "chaos command executed",
+            "type": "command_executed",
+            "commandSubstring": "chaos",
+            "remediation": "Execute chaos experiment pod-kill -n production"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "performance-engineering",
+    "title": "Performance Engineering, CFS Throttling, KEDA & Karpenter Autoscaling",
+    "estimatedHours": 8,
+    "modules": [],
+    "labs": [
+      {
+        "id": "lab-perf-01-cfs-throttling",
+        "title": "Eliminating CFS CPU Quota Throttling on Latency-Sensitive Tiers",
+        "xpReward": 150,
+        "difficulty": "Intermediate",
+        "durationMinutes": 20,
+        "objectives": [
+          "Create namespace production if not already present.",
+          "Author tuned Deployment manifest in /perf/payment-processor-tuned.yaml.",
+          "Apply Deployment payment-processor in namespace production.",
+          "Verify CPU request is 500m and CPU limit is omitted."
+        ],
+        "starterManifest": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: payment-processor\n  namespace: production\n  labels:\n    app: payment-processor\nspec:\n  replicas: 2\n  selector:\n    matchLabels:\n      app: payment-processor\n  template:\n    metadata:\n      labels:\n        app: payment-processor\n    spec:\n      containers:\n        - name: processor\n          image: nginx:1.27-alpine\n          resources:\n            requests:\n              cpu: \"500m\"\n              memory: \"256Mi\"\n            limits:\n              memory: \"512Mi\"\n",
+        "solutionCommands": [
+          "mkdir -p /perf",
+          "kubectl create namespace production",
+          "cat << 'EOF' > /perf/payment-processor-tuned.yaml\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: payment-processor\n  namespace: production\n  labels:\n    app: payment-processor\nspec:\n  replicas: 2\n  selector:\n    matchLabels:\n      app: payment-processor\n  template:\n    metadata:\n      labels:\n        app: payment-processor\n    spec:\n      containers:\n        - name: processor\n          image: nginx:1.27-alpine\n          resources:\n            requests:\n              cpu: \"500m\"\n              memory: \"256Mi\"\n            limits:\n              memory: \"512Mi\"\nEOF",
+          "kubectl apply -f /perf/payment-processor-tuned.yaml"
+        ],
+        "validationRules": [
+          {
+            "id": "deploy-payment-processor-exists",
+            "description": "Deployment payment-processor exists in namespace production",
+            "type": "resource_exists",
+            "kind": "Deployment",
+            "namespace": "production",
+            "name": "payment-processor",
+            "remediation": "Deploy payment-processor in namespace production"
+          },
+          {
+            "id": "deploy-cpu-request-500m",
+            "description": "Container CPU request is 500m",
+            "type": "resource_field_equals",
+            "kind": "Deployment",
+            "namespace": "production",
+            "name": "payment-processor",
+            "fieldPath": "spec.template.spec.containers[0].resources.requests.cpu",
+            "expectedValue": "500m",
+            "remediation": "Set container resources.requests.cpu: '500m'"
+          },
+          {
+            "id": "deploy-mem-limit-512mi",
+            "description": "Container memory limit is 512Mi",
+            "type": "resource_field_equals",
+            "kind": "Deployment",
+            "namespace": "production",
+            "name": "payment-processor",
+            "fieldPath": "spec.template.spec.containers[0].resources.limits.memory",
+            "expectedValue": "512Mi",
+            "remediation": "Set container resources.limits.memory: '512Mi'"
+          }
+        ]
+      },
+      {
+        "id": "lab-perf-02-keda-autoscaling",
+        "title": "Configuring KEDA Event-Driven Queue Autoscaling",
+        "xpReward": 150,
+        "difficulty": "Intermediate",
+        "durationMinutes": 20,
+        "objectives": [
+          "Author KEDA ScaledObject in /perf/orders-scaledobject.yaml.",
+          "Apply ScaledObject orders-scaledobject in namespace production.",
+          "Verify minReplicaCount is 1 and maxReplicaCount is 10."
+        ],
+        "starterManifest": "apiVersion: keda.sh/v1alpha1\nkind: ScaledObject\nmetadata:\n  name: orders-scaledobject\n  namespace: production\nspec:\n  scaleTargetRef:\n    name: payment-processor\n  minReplicaCount: 1\n  maxReplicaCount: 10\n  cooldownPeriod: 30\n  triggers:\n    - type: rabbitmq\n      metadata:\n        queueName: orders-queue\n        queueLength: \"5\"\n",
+        "solutionCommands": [
+          "mkdir -p /perf",
+          "cat << 'EOF' > /perf/orders-scaledobject.yaml\napiVersion: keda.sh/v1alpha1\nkind: ScaledObject\nmetadata:\n  name: orders-scaledobject\n  namespace: production\nspec:\n  scaleTargetRef:\n    name: payment-processor\n  minReplicaCount: 1\n  maxReplicaCount: 10\n  cooldownPeriod: 30\n  triggers:\n    - type: rabbitmq\n      metadata:\n        queueName: orders-queue\n        queueLength: \"5\"\nEOF",
+          "kubectl apply -f /perf/orders-scaledobject.yaml"
+        ],
+        "validationRules": [
+          {
+            "id": "scaledobject-orders-exists",
+            "description": "ScaledObject orders-scaledobject exists in namespace production",
+            "type": "resource_exists",
+            "kind": "ScaledObject",
+            "namespace": "production",
+            "name": "orders-scaledobject",
+            "remediation": "Apply ScaledObject orders-scaledobject in namespace production"
+          },
+          {
+            "id": "scaledobject-min-replicas",
+            "description": "ScaledObject minReplicaCount is 1",
+            "type": "resource_field_equals",
+            "kind": "ScaledObject",
+            "namespace": "production",
+            "name": "orders-scaledobject",
+            "fieldPath": "spec.minReplicaCount",
+            "expectedValue": 1,
+            "remediation": "Set spec.minReplicaCount: 1 on ScaledObject orders-scaledobject"
+          },
+          {
+            "id": "scaledobject-max-replicas",
+            "description": "ScaledObject maxReplicaCount is 10",
+            "type": "resource_field_equals",
+            "kind": "ScaledObject",
+            "namespace": "production",
+            "name": "orders-scaledobject",
+            "fieldPath": "spec.maxReplicaCount",
+            "expectedValue": 10,
+            "remediation": "Set spec.maxReplicaCount: 10 on ScaledObject orders-scaledobject"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "production-operations",
+    "title": "Production Operations, Velero Disaster Recovery & Cluster Maintenance",
+    "estimatedHours": 8,
+    "modules": [],
+    "labs": [
+      {
+        "id": "lab-ops-01-velero-backup-restore",
+        "title": "Creating Automated Velero Backups and Restoring Workloads",
+        "xpReward": 150,
+        "difficulty": "Intermediate",
+        "durationMinutes": 20,
+        "objectives": [
+          "Create Velero backup prod-backup.",
+          "Execute velero backup get to verify status.",
+          "Create Velero restore from backup prod-backup."
+        ],
+        "starterManifest": "# Velero Disaster Recovery Automation\n# Run: velero backup create prod-backup && velero restore create --from-backup prod-backup\n",
+        "solutionCommands": [
+          "velero backup create prod-backup",
+          "velero backup get",
+          "velero restore create --from-backup prod-backup"
+        ],
+        "validationRules": [
+          {
+            "id": "velero-backup-created",
+            "description": "velero backup create prod-backup executed",
+            "type": "command_executed",
+            "commandSubstring": "velero backup create prod-backup",
+            "remediation": "Execute velero backup create prod-backup"
+          },
+          {
+            "id": "velero-restore-created",
+            "description": "velero restore create --from-backup prod-backup executed",
+            "type": "command_executed",
+            "commandSubstring": "velero restore create --from-backup prod-backup",
+            "remediation": "Execute velero restore create --from-backup prod-backup"
+          }
+        ]
+      },
+      {
+        "id": "lab-ops-02-node-drain-maintenance",
+        "title": "Zero-Downtime Worker Node Maintenance: Cordon, Drain & Uncordon",
+        "xpReward": 150,
+        "difficulty": "Intermediate",
+        "durationMinutes": 20,
+        "objectives": [
+          "Cordon worker node kubelabs-worker-01.",
+          "Drain worker node kubelabs-worker-01.",
+          "Uncordon worker node kubelabs-worker-01."
+        ],
+        "starterManifest": "# Zero-Downtime Node Maintenance\n# Target: kubelabs-worker-01\n",
+        "solutionCommands": [
+          "kubectl cordon kubelabs-worker-01",
+          "kubectl drain kubelabs-worker-01 --ignore-daemonsets",
+          "kubectl uncordon kubelabs-worker-01"
+        ],
+        "validationRules": [
+          {
+            "id": "node-cordoned",
+            "description": "kubectl cordon kubelabs-worker-01 executed",
+            "type": "command_executed",
+            "commandSubstring": "kubectl cordon kubelabs-worker-01",
+            "remediation": "Execute kubectl cordon kubelabs-worker-01"
+          },
+          {
+            "id": "node-drained",
+            "description": "kubectl drain kubelabs-worker-01 executed",
+            "type": "command_executed",
+            "commandSubstring": "kubectl drain kubelabs-worker-01",
+            "remediation": "Execute kubectl drain kubelabs-worker-01 --ignore-daemonsets"
+          },
+          {
+            "id": "node-uncordoned",
+            "description": "kubectl uncordon kubelabs-worker-01 executed",
+            "type": "command_executed",
+            "commandSubstring": "kubectl uncordon kubelabs-worker-01",
+            "remediation": "Execute kubectl uncordon kubelabs-worker-01"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "k8s-production-operations",
+    "title": "Kubernetes Advanced Production Operations, APF & etcd Maintenance",
+    "estimatedHours": 8,
+    "modules": [],
+    "labs": [
+      {
+        "id": "lab-k8sops-01-flowschema-apf",
+        "title": "Configuring API Priority and Fairness (APF) FlowSchemas",
+        "xpReward": 150,
+        "difficulty": "Advanced",
+        "durationMinutes": 20,
+        "objectives": [
+          "Author FlowSchema manifest in /ops/flowschema-batch.yaml.",
+          "Configure matchingPrecedence to 500 and priorityLevelConfiguration to workload-low.",
+          "Apply FlowSchema batch-workload-flowschema to the cluster."
+        ],
+        "starterManifest": "apiVersion: flowcontrol.apiserver.k8s.io/v1\nkind: FlowSchema\nmetadata:\n  name: batch-workload-flowschema\nspec:\n  priorityLevelConfiguration:\n    name: workload-low\n  matchingPrecedence: 500\n  rules:\n    - subjects:\n        - kind: ServiceAccount\n          serviceAccount:\n            name: \"*\"\n            namespace: batch\n      resourceRules:\n        - verbs: [\"*\"]\n          apiGroups: [\"*\"]\n          resources: [\"*\"]\n",
+        "solutionCommands": [
+          "mkdir -p /ops",
+          "cat << 'EOF' > /ops/flowschema-batch.yaml\napiVersion: flowcontrol.apiserver.k8s.io/v1\nkind: FlowSchema\nmetadata:\n  name: batch-workload-flowschema\nspec:\n  priorityLevelConfiguration:\n    name: workload-low\n  matchingPrecedence: 500\n  rules:\n    - subjects:\n        - kind: ServiceAccount\n          serviceAccount:\n            name: \"*\"\n            namespace: batch\n      resourceRules:\n        - verbs: [\"*\"]\n          apiGroups: [\"*\"]\n          resources: [\"*\"]\nEOF",
+          "kubectl apply -f /ops/flowschema-batch.yaml"
+        ],
+        "validationRules": [
+          {
+            "id": "flowschema-batch-exists",
+            "description": "FlowSchema batch-workload-flowschema exists in cluster",
+            "type": "resource_exists",
+            "kind": "FlowSchema",
+            "name": "batch-workload-flowschema",
+            "remediation": "Apply FlowSchema batch-workload-flowschema to the cluster"
+          },
+          {
+            "id": "flowschema-priority-level",
+            "description": "FlowSchema routes to priorityLevelConfiguration workload-low",
+            "type": "resource_field_equals",
+            "kind": "FlowSchema",
+            "name": "batch-workload-flowschema",
+            "fieldPath": "spec.priorityLevelConfiguration.name",
+            "expectedValue": "workload-low",
+            "remediation": "Set spec.priorityLevelConfiguration.name: workload-low"
+          },
+          {
+            "id": "flowschema-precedence",
+            "description": "FlowSchema has matchingPrecedence 500",
+            "type": "resource_field_equals",
+            "kind": "FlowSchema",
+            "name": "batch-workload-flowschema",
+            "fieldPath": "spec.matchingPrecedence",
+            "expectedValue": 500,
+            "remediation": "Set spec.matchingPrecedence: 500"
+          }
+        ]
+      },
+      {
+        "id": "lab-k8sops-02-etcd-defrag",
+        "title": "Executing etcd Compaction, Defragmentation & Endpoint Health Audits",
+        "xpReward": 150,
+        "difficulty": "Advanced",
+        "durationMinutes": 20,
+        "objectives": [
+          "Execute etcdctl compact 5000.",
+          "Execute etcdctl defrag to reclaim free pages.",
+          "Audit endpoint health and db size with etcdctl endpoint status."
+        ],
+        "starterManifest": "# etcd Maintenance Automation\n# Execute: etcdctl compact 5000 && etcdctl defrag && etcdctl endpoint status\n",
+        "solutionCommands": [
+          "etcdctl compact 5000",
+          "etcdctl defrag",
+          "etcdctl endpoint status"
+        ],
+        "validationRules": [
+          {
+            "id": "etcd-compact-executed",
+            "description": "etcdctl compact 5000 executed",
+            "type": "command_executed",
+            "commandSubstring": "etcdctl compact 5000",
+            "remediation": "Execute etcdctl compact 5000"
+          },
+          {
+            "id": "etcd-defrag-executed",
+            "description": "etcdctl defrag executed",
+            "type": "command_executed",
+            "commandSubstring": "etcdctl defrag",
+            "remediation": "Execute etcdctl defrag"
+          },
+          {
+            "id": "etcd-endpoint-status-executed",
+            "description": "etcdctl endpoint status executed",
+            "type": "command_executed",
+            "commandSubstring": "etcdctl endpoint status",
+            "remediation": "Execute etcdctl endpoint status"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "multi-cluster-management",
+    "title": "Multi-Cluster Management, Cluster API (CAPI), vCluster & Cilium ClusterMesh",
+    "estimatedHours": 8,
+    "modules": [],
+    "labs": [
+      {
+        "id": "lab-mcm-01-capi-machinedeployment",
+        "title": "Provisioning Declarative Workload Clusters via Cluster API MachineDeployment",
+        "xpReward": 150,
+        "difficulty": "Advanced",
+        "durationMinutes": 20,
+        "objectives": [
+          "Create namespace fleet-system if not present.",
+          "Author MachineDeployment in /fleet/worker-fleet.yaml.",
+          "Configure clusterName to prod-cluster and replicas to 3.",
+          "Apply MachineDeployment to namespace fleet-system."
+        ],
+        "starterManifest": "apiVersion: cluster.x-k8s.io/v1beta1\nkind: MachineDeployment\nmetadata:\n  name: prod-worker-fleet\n  namespace: fleet-system\nspec:\n  clusterName: prod-cluster\n  replicas: 3\n  selector:\n    matchLabels:\n      cluster.x-k8s.io/cluster-name: prod-cluster\n  template:\n    metadata:\n      labels:\n        cluster.x-k8s.io/cluster-name: prod-cluster\n    spec:\n      clusterName: prod-cluster\n      version: v1.32.0\n",
+        "solutionCommands": [
+          "mkdir -p /fleet",
+          "kubectl create namespace fleet-system",
+          "cat << 'EOF' > /fleet/worker-fleet.yaml\napiVersion: cluster.x-k8s.io/v1beta1\nkind: MachineDeployment\nmetadata:\n  name: prod-worker-fleet\n  namespace: fleet-system\nspec:\n  clusterName: prod-cluster\n  replicas: 3\n  selector:\n    matchLabels:\n      cluster.x-k8s.io/cluster-name: prod-cluster\n  template:\n    metadata:\n      labels:\n        cluster.x-k8s.io/cluster-name: prod-cluster\n    spec:\n      clusterName: prod-cluster\n      version: v1.32.0\nEOF",
+          "kubectl apply -f /fleet/worker-fleet.yaml"
+        ],
+        "validationRules": [
+          {
+            "id": "machinedeployment-fleet-exists",
+            "description": "MachineDeployment prod-worker-fleet exists in namespace fleet-system",
+            "type": "resource_exists",
+            "kind": "MachineDeployment",
+            "namespace": "fleet-system",
+            "name": "prod-worker-fleet",
+            "remediation": "Apply MachineDeployment prod-worker-fleet in namespace fleet-system"
+          },
+          {
+            "id": "machinedeployment-cluster-name",
+            "description": "MachineDeployment targets clusterName prod-cluster",
+            "type": "resource_field_equals",
+            "kind": "MachineDeployment",
+            "namespace": "fleet-system",
+            "name": "prod-worker-fleet",
+            "fieldPath": "spec.clusterName",
+            "expectedValue": "prod-cluster",
+            "remediation": "Set spec.clusterName: prod-cluster on MachineDeployment prod-worker-fleet"
+          },
+          {
+            "id": "machinedeployment-replicas",
+            "description": "MachineDeployment has 3 replicas",
+            "type": "resource_field_equals",
+            "kind": "MachineDeployment",
+            "namespace": "fleet-system",
+            "name": "prod-worker-fleet",
+            "fieldPath": "spec.replicas",
+            "expectedValue": 3,
+            "remediation": "Set spec.replicas: 3 on MachineDeployment prod-worker-fleet"
+          }
+        ]
+      },
+      {
+        "id": "lab-mcm-02-cilium-clustermesh-mcs",
+        "title": "Cross-Cluster Service Discovery with Cilium ClusterMesh & MCS",
+        "xpReward": 150,
+        "difficulty": "Advanced",
+        "durationMinutes": 20,
+        "objectives": [
+          "Audit ClusterMesh connectivity via cilium clustermesh status.",
+          "Author ServiceImport in /fleet/checkout-service-import.yaml.",
+          "Configure spec.type to ClusterSetIP.",
+          "Apply ServiceImport to namespace production."
+        ],
+        "starterManifest": "apiVersion: multicluster.x-k8s.io/v1alpha1\nkind: ServiceImport\nmetadata:\n  name: checkout-service\n  namespace: production\nspec:\n  type: ClusterSetIP\n  ports:\n    - port: 8080\n      protocol: TCP\n",
+        "solutionCommands": [
+          "mkdir -p /fleet",
+          "cilium clustermesh status",
+          "cat << 'EOF' > /fleet/checkout-service-import.yaml\napiVersion: multicluster.x-k8s.io/v1alpha1\nkind: ServiceImport\nmetadata:\n  name: checkout-service\n  namespace: production\nspec:\n  type: ClusterSetIP\n  ports:\n    - port: 8080\n      protocol: TCP\nEOF",
+          "kubectl apply -f /fleet/checkout-service-import.yaml"
+        ],
+        "validationRules": [
+          {
+            "id": "cilium-clustermesh-status-executed",
+            "description": "cilium clustermesh status executed",
+            "type": "command_executed",
+            "commandSubstring": "cilium clustermesh status",
+            "remediation": "Execute cilium clustermesh status"
+          },
+          {
+            "id": "serviceimport-checkout-exists",
+            "description": "ServiceImport checkout-service exists in namespace production",
+            "type": "resource_exists",
+            "kind": "ServiceImport",
+            "namespace": "production",
+            "name": "checkout-service",
+            "remediation": "Apply ServiceImport checkout-service in namespace production"
+          },
+          {
+            "id": "serviceimport-type-clustersetip",
+            "description": "ServiceImport type is ClusterSetIP",
+            "type": "resource_field_equals",
+            "kind": "ServiceImport",
+            "namespace": "production",
+            "name": "checkout-service",
+            "fieldPath": "spec.type",
+            "expectedValue": "ClusterSetIP",
+            "remediation": "Set spec.type: ClusterSetIP on ServiceImport checkout-service"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "cloud-native-architecture",
+    "title": "Cloud-Native Architecture Patterns, 12/15-Factor Design & Custom Operators",
+    "estimatedHours": 8,
+    "modules": [],
+    "labs": [
+      {
+        "id": "lab-arch-01-twelve-factor-config",
+        "title": "Config & Secret Decoupling with 12-Factor Workload Parity",
+        "xpReward": 150,
+        "difficulty": "Advanced",
+        "durationMinutes": 20,
+        "objectives": [
+          "Create namespace production if not present.",
+          "Author ConfigMap checkout-config.",
+          "Author Secret checkout-secrets.",
+          "Author Deployment checkout-service with 2 replicas.",
+          "Apply all manifests to namespace production."
+        ],
+        "starterManifest": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: checkout-config\n  namespace: production\ndata:\n  LOG_LEVEL: \"info\"\n  CURRENCY: \"USD\"\n---\napiVersion: v1\nkind: Secret\nmetadata:\n  name: checkout-secrets\n  namespace: production\ntype: Opaque\nstringData:\n  API_KEY: \"sec-token-99\"\n---\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: checkout-service\n  namespace: production\nspec:\n  replicas: 2\n  selector:\n    matchLabels:\n      app: checkout-service\n  template:\n    metadata:\n      labels:\n        app: checkout-service\n    spec:\n      containers:\n        - name: api\n          image: nginx:1.27-alpine\n",
+        "solutionCommands": [
+          "mkdir -p /arch",
+          "kubectl create namespace production",
+          "cat << 'EOF' > /arch/twelve-factor-app.yaml\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: checkout-config\n  namespace: production\ndata:\n  LOG_LEVEL: \"info\"\n  CURRENCY: \"USD\"\n---\napiVersion: v1\nkind: Secret\nmetadata:\n  name: checkout-secrets\n  namespace: production\ntype: Opaque\nstringData:\n  API_KEY: \"sec-token-99\"\n---\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: checkout-service\n  namespace: production\nspec:\n  replicas: 2\n  selector:\n    matchLabels:\n      app: checkout-service\n  template:\n    metadata:\n      labels:\n        app: checkout-service\n    spec:\n      containers:\n        - name: api\n          image: nginx:1.27-alpine\nEOF",
+          "kubectl apply -f /arch/twelve-factor-app.yaml"
+        ],
+        "validationRules": [
+          {
+            "id": "cm-checkout-config-exists",
+            "description": "ConfigMap checkout-config exists in namespace production",
+            "type": "resource_exists",
+            "kind": "ConfigMap",
+            "namespace": "production",
+            "name": "checkout-config",
+            "remediation": "Apply ConfigMap checkout-config in namespace production"
+          },
+          {
+            "id": "secret-checkout-secrets-exists",
+            "description": "Secret checkout-secrets exists in namespace production",
+            "type": "resource_exists",
+            "kind": "Secret",
+            "namespace": "production",
+            "name": "checkout-secrets",
+            "remediation": "Apply Secret checkout-secrets in namespace production"
+          },
+          {
+            "id": "deploy-checkout-service-exists",
+            "description": "Deployment checkout-service exists in namespace production",
+            "type": "resource_exists",
+            "kind": "Deployment",
+            "namespace": "production",
+            "name": "checkout-service",
+            "remediation": "Apply Deployment checkout-service in namespace production"
+          },
+          {
+            "id": "deploy-checkout-replicas",
+            "description": "Deployment checkout-service has 2 replicas",
+            "type": "resource_field_equals",
+            "kind": "Deployment",
+            "namespace": "production",
+            "name": "checkout-service",
+            "fieldPath": "spec.replicas",
+            "expectedValue": 2,
+            "remediation": "Set spec.replicas: 2 on Deployment checkout-service"
+          }
+        ]
+      },
+      {
+        "id": "lab-arch-02-custom-operator-crd",
+        "title": "Authoring Custom Resource Definitions & Operator Custom Resources",
+        "xpReward": 150,
+        "difficulty": "Advanced",
+        "durationMinutes": 20,
+        "objectives": [
+          "Author CRD databaseclusters.databases.kubelabs.io in /arch/database-crd.yaml.",
+          "Apply CRD to cluster.",
+          "Author Custom Resource prod-db-cluster in /arch/prod-db-cluster.yaml.",
+          "Apply DatabaseCluster prod-db-cluster to namespace production."
+        ],
+        "starterManifest": "apiVersion: apiextensions.k8s.io/v1\nkind: CustomResourceDefinition\nmetadata:\n  name: databaseclusters.databases.kubelabs.io\nspec:\n  group: databases.kubelabs.io\n  names:\n    kind: DatabaseCluster\n    plural: databaseclusters\n    singular: databasecluster\n  scope: Namespaced\n---\napiVersion: databases.kubelabs.io/v1\nkind: DatabaseCluster\nmetadata:\n  name: prod-db-cluster\n  namespace: production\nspec:\n  engine: postgres\n  version: \"16\"\n  replicas: 3\n",
+        "solutionCommands": [
+          "mkdir -p /arch",
+          "kubectl create namespace production",
+          "cat << 'EOF' > /arch/database-crd.yaml\napiVersion: apiextensions.k8s.io/v1\nkind: CustomResourceDefinition\nmetadata:\n  name: databaseclusters.databases.kubelabs.io\nspec:\n  group: databases.kubelabs.io\n  names:\n    kind: DatabaseCluster\n    plural: databaseclusters\n    singular: databasecluster\n  scope: Namespaced\nEOF",
+          "kubectl apply -f /arch/database-crd.yaml",
+          "cat << 'EOF' > /arch/prod-db-cluster.yaml\napiVersion: databases.kubelabs.io/v1\nkind: DatabaseCluster\nmetadata:\n  name: prod-db-cluster\n  namespace: production\nspec:\n  engine: postgres\n  version: \"16\"\n  replicas: 3\nEOF",
+          "kubectl apply -f /arch/prod-db-cluster.yaml"
+        ],
+        "validationRules": [
+          {
+            "id": "crd-databaseclusters-exists",
+            "description": "CustomResourceDefinition databaseclusters.databases.kubelabs.io exists",
+            "type": "resource_exists",
+            "kind": "CustomResourceDefinition",
+            "name": "databaseclusters.databases.kubelabs.io",
+            "remediation": "Apply CRD databaseclusters.databases.kubelabs.io to the cluster"
+          },
+          {
+            "id": "cr-prod-db-cluster-exists",
+            "description": "DatabaseCluster prod-db-cluster exists in namespace production",
+            "type": "resource_exists",
+            "kind": "DatabaseCluster",
+            "namespace": "production",
+            "name": "prod-db-cluster",
+            "remediation": "Apply DatabaseCluster prod-db-cluster in namespace production"
+          },
+          {
+            "id": "cr-engine-postgres",
+            "description": "DatabaseCluster engine is postgres",
+            "type": "resource_field_equals",
+            "kind": "DatabaseCluster",
+            "namespace": "production",
+            "name": "prod-db-cluster",
+            "fieldPath": "spec.engine",
+            "expectedValue": "postgres",
+            "remediation": "Set spec.engine: postgres on DatabaseCluster prod-db-cluster"
+          },
+          {
+            "id": "cr-replicas-3",
+            "description": "DatabaseCluster replicas is 3",
+            "type": "resource_field_equals",
+            "kind": "DatabaseCluster",
+            "namespace": "production",
+            "name": "prod-db-cluster",
+            "fieldPath": "spec.replicas",
+            "expectedValue": 3,
+            "remediation": "Set spec.replicas: 3 on DatabaseCluster prod-db-cluster"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "distributed-systems",
+    "title": "Distributed Systems Theory, Raft Quorum, Fencing Tokens & Saga Transactions",
+    "estimatedHours": 8,
+    "modules": [],
+    "labs": [
+      {
+        "id": "lab-dist-01-fencing-token-lock",
+        "title": "Distributed Mutual Exclusion with Monotonically Increasing Fencing Tokens",
+        "xpReward": 150,
+        "difficulty": "Advanced",
+        "durationMinutes": 20,
+        "objectives": [
+          "Create namespace production if not present.",
+          "Author ConfigMap order-distributed-lock.",
+          "Configure currentOwner to worker-pod-01.",
+          "Configure fencingToken to '1042'.",
+          "Apply ConfigMap to namespace production."
+        ],
+        "starterManifest": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: order-distributed-lock\n  namespace: production\ndata:\n  lockName: \"order-processing-lock\"\n  currentOwner: \"worker-pod-01\"\n  leaseDurationSeconds: \"30\"\n  fencingToken: \"1042\"\n",
+        "solutionCommands": [
+          "mkdir -p /dist",
+          "kubectl create namespace production",
+          "cat << 'EOF' > /dist/distributed-lock.yaml\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: order-distributed-lock\n  namespace: production\ndata:\n  lockName: \"order-processing-lock\"\n  currentOwner: \"worker-pod-01\"\n  leaseDurationSeconds: \"30\"\n  fencingToken: \"1042\"\nEOF",
+          "kubectl apply -f /dist/distributed-lock.yaml"
+        ],
+        "validationRules": [
+          {
+            "id": "cm-order-lock-exists",
+            "description": "ConfigMap order-distributed-lock exists in namespace production",
+            "type": "resource_exists",
+            "kind": "ConfigMap",
+            "namespace": "production",
+            "name": "order-distributed-lock",
+            "remediation": "Apply ConfigMap order-distributed-lock in namespace production"
+          },
+          {
+            "id": "cm-lock-owner",
+            "description": "ConfigMap currentOwner is worker-pod-01",
+            "type": "resource_field_equals",
+            "kind": "ConfigMap",
+            "namespace": "production",
+            "name": "order-distributed-lock",
+            "fieldPath": "data.currentOwner",
+            "expectedValue": "worker-pod-01",
+            "remediation": "Set data.currentOwner: worker-pod-01 on ConfigMap order-distributed-lock"
+          },
+          {
+            "id": "cm-fencing-token",
+            "description": "ConfigMap fencingToken is '1042'",
+            "type": "resource_field_equals",
+            "kind": "ConfigMap",
+            "namespace": "production",
+            "name": "order-distributed-lock",
+            "fieldPath": "data.fencingToken",
+            "expectedValue": "1042",
+            "remediation": "Set data.fencingToken: '1042' on ConfigMap order-distributed-lock"
+          }
+        ]
+      },
+      {
+        "id": "lab-dist-02-saga-orchestration",
+        "title": "Architecting Saga Distributed Transactions with Compensating Rollbacks",
+        "xpReward": 150,
+        "difficulty": "Advanced",
+        "durationMinutes": 20,
+        "objectives": [
+          "Author ConfigMap payment-order-saga-definition in /dist/saga-orchestration.yaml.",
+          "Configure data.sagaId to saga-ecommerce-v1.",
+          "Configure data.status to Active.",
+          "Apply ConfigMap to namespace production."
+        ],
+        "starterManifest": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: payment-order-saga-definition\n  namespace: production\ndata:\n  sagaId: \"saga-ecommerce-v1\"\n  status: \"Active\"\n  sagaDefinition: \"{\\\"steps\\\":[\\\"AuthorizePayment\\\",\\\"ReserveInventory\\\",\\\"ShipOrder\\\"],\\\"compensations\\\":[\\\"RefundPayment\\\",\\\"ReleaseInventory\\\"]}\"\n",
+        "solutionCommands": [
+          "mkdir -p /dist",
+          "kubectl create namespace production",
+          "cat << 'EOF' > /dist/saga-orchestration.yaml\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: payment-order-saga-definition\n  namespace: production\ndata:\n  sagaId: \"saga-ecommerce-v1\"\n  status: \"Active\"\n  sagaDefinition: \"{\\\"steps\\\":[\\\"AuthorizePayment\\\",\\\"ReserveInventory\\\",\\\"ShipOrder\\\"],\\\"compensations\\\":[\\\"RefundPayment\\\",\\\"ReleaseInventory\\\"]}\"\nEOF",
+          "kubectl apply -f /dist/saga-orchestration.yaml"
+        ],
+        "validationRules": [
+          {
+            "id": "cm-saga-definition-exists",
+            "description": "ConfigMap payment-order-saga-definition exists in namespace production",
+            "type": "resource_exists",
+            "kind": "ConfigMap",
+            "namespace": "production",
+            "name": "payment-order-saga-definition",
+            "remediation": "Apply ConfigMap payment-order-saga-definition in namespace production"
+          },
+          {
+            "id": "cm-saga-id",
+            "description": "ConfigMap sagaId is saga-ecommerce-v1",
+            "type": "resource_field_equals",
+            "kind": "ConfigMap",
+            "namespace": "production",
+            "name": "payment-order-saga-definition",
+            "fieldPath": "data.sagaId",
+            "expectedValue": "saga-ecommerce-v1",
+            "remediation": "Set data.sagaId: saga-ecommerce-v1 on ConfigMap payment-order-saga-definition"
+          },
+          {
+            "id": "cm-saga-status",
+            "description": "ConfigMap status is Active",
+            "type": "resource_field_equals",
+            "kind": "ConfigMap",
+            "namespace": "production",
+            "name": "payment-order-saga-definition",
+            "fieldPath": "data.status",
+            "expectedValue": "Active",
+            "remediation": "Set data.status: Active on ConfigMap payment-order-saga-definition"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "microservices-architecture",
+    "title": "Microservices Architecture, Strangler Fig, Event Streaming & Resilient Patterns",
+    "estimatedHours": 8,
+    "modules": [],
+    "labs": [
+      {
+        "id": "lab-micro-01-strangler-fig-routing",
+        "title": "Progressive Monolith Decomposition via Strangler Fig Ingress Routing",
+        "xpReward": 150,
+        "difficulty": "Advanced",
+        "durationMinutes": 20,
+        "objectives": [
+          "Create namespace production if not present.",
+          "Author Ingress manifest monolith-strangler-ingress.",
+          "Configure path /api/v1/orders targeting service orders-service on port 8080.",
+          "Configure path / targeting service legacy-monolith on port 80.",
+          "Apply Ingress to namespace production."
+        ],
+        "starterManifest": "apiVersion: networking.k8s.io/v1\nkind: Ingress\nmetadata:\n  name: monolith-strangler-ingress\n  namespace: production\nspec:\n  rules:\n    - http:\n        paths:\n          - path: /api/v1/orders\n            pathType: Prefix\n            backend:\n              service:\n                name: orders-service\n                port:\n                  number: 8080\n          - path: /\n            pathType: Prefix\n            backend:\n              service:\n                name: legacy-monolith\n                port:\n                  number: 80\n",
+        "solutionCommands": [
+          "mkdir -p /micro",
+          "kubectl create namespace production",
+          "cat << 'EOF' > /micro/strangler-fig-ingress.yaml\napiVersion: networking.k8s.io/v1\nkind: Ingress\nmetadata:\n  name: monolith-strangler-ingress\n  namespace: production\nspec:\n  rules:\n    - http:\n        paths:\n          - path: /api/v1/orders\n            pathType: Prefix\n            backend:\n              service:\n                name: orders-service\n                port:\n                  number: 8080\n          - path: /\n            pathType: Prefix\n            backend:\n              service:\n                name: legacy-monolith\n                port:\n                  number: 80\nEOF",
+          "kubectl apply -f /micro/strangler-fig-ingress.yaml"
+        ],
+        "validationRules": [
+          {
+            "id": "ingress-strangler-exists",
+            "description": "Ingress monolith-strangler-ingress exists in namespace production",
+            "type": "resource_exists",
+            "kind": "Ingress",
+            "namespace": "production",
+            "name": "monolith-strangler-ingress",
+            "remediation": "Apply Ingress monolith-strangler-ingress in namespace production"
+          },
+          {
+            "id": "ingress-orders-path",
+            "description": "Ingress routes path /api/v1/orders",
+            "type": "resource_field_equals",
+            "kind": "Ingress",
+            "namespace": "production",
+            "name": "monolith-strangler-ingress",
+            "fieldPath": "spec.rules[0].http.paths[0].path",
+            "expectedValue": "/api/v1/orders",
+            "remediation": "Configure path: /api/v1/orders in Ingress monolith-strangler-ingress"
+          },
+          {
+            "id": "ingress-orders-svc",
+            "description": "Ingress /api/v1/orders routes to service orders-service",
+            "type": "resource_field_equals",
+            "kind": "Ingress",
+            "namespace": "production",
+            "name": "monolith-strangler-ingress",
+            "fieldPath": "spec.rules[0].http.paths[0].backend.service.name",
+            "expectedValue": "orders-service",
+            "remediation": "Configure backend service name: orders-service for /api/v1/orders"
+          }
+        ]
+      },
+      {
+        "id": "lab-micro-02-transactional-outbox",
+        "title": "Implementing Transactional Outbox Contracts & Bulkhead Isolation",
+        "xpReward": 150,
+        "difficulty": "Advanced",
+        "durationMinutes": 20,
+        "objectives": [
+          "Create namespace production if not present.",
+          "Author ConfigMap outbox-event-contract.",
+          "Author Deployment orders-service with 3 replicas.",
+          "Apply all manifests to namespace production."
+        ],
+        "starterManifest": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: outbox-event-contract\n  namespace: production\ndata:\n  eventType: \"OrderCreated\"\n  topic: \"orders.events.v1\"\n  payloadSchema: \"JSON\"\n---\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: orders-service\n  namespace: production\nspec:\n  replicas: 3\n  selector:\n    matchLabels:\n      app: orders-service\n  template:\n    metadata:\n      labels:\n        app: orders-service\n    spec:\n      containers:\n        - name: api\n          image: nginx:1.27-alpine\n          resources:\n            requests:\n              memory: \"256Mi\"\n            limits:\n              memory: \"512Mi\"\n",
+        "solutionCommands": [
+          "mkdir -p /micro",
+          "kubectl create namespace production",
+          "cat << 'EOF' > /micro/outbox-and-orders.yaml\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: outbox-event-contract\n  namespace: production\ndata:\n  eventType: \"OrderCreated\"\n  topic: \"orders.events.v1\"\n  payloadSchema: \"JSON\"\n---\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: orders-service\n  namespace: production\nspec:\n  replicas: 3\n  selector:\n    matchLabels:\n      app: orders-service\n  template:\n    metadata:\n      labels:\n        app: orders-service\n    spec:\n      containers:\n        - name: api\n          image: nginx:1.27-alpine\n          resources:\n            requests:\n              memory: \"256Mi\"\n            limits:\n              memory: \"512Mi\"\nEOF",
+          "kubectl apply -f /micro/outbox-and-orders.yaml"
+        ],
+        "validationRules": [
+          {
+            "id": "cm-outbox-contract-exists",
+            "description": "ConfigMap outbox-event-contract exists in namespace production",
+            "type": "resource_exists",
+            "kind": "ConfigMap",
+            "namespace": "production",
+            "name": "outbox-event-contract",
+            "remediation": "Apply ConfigMap outbox-event-contract in namespace production"
+          },
+          {
+            "id": "cm-outbox-event-type",
+            "description": "ConfigMap eventType is OrderCreated",
+            "type": "resource_field_equals",
+            "kind": "ConfigMap",
+            "namespace": "production",
+            "name": "outbox-event-contract",
+            "fieldPath": "data.eventType",
+            "expectedValue": "OrderCreated",
+            "remediation": "Set data.eventType: OrderCreated on ConfigMap outbox-event-contract"
+          },
+          {
+            "id": "deploy-orders-service-exists",
+            "description": "Deployment orders-service exists in namespace production",
+            "type": "resource_exists",
+            "kind": "Deployment",
+            "namespace": "production",
+            "name": "orders-service",
+            "remediation": "Apply Deployment orders-service in namespace production"
+          },
+          {
+            "id": "deploy-orders-replicas",
+            "description": "Deployment orders-service has 3 replicas",
+            "type": "resource_field_equals",
+            "kind": "Deployment",
+            "namespace": "production",
+            "name": "orders-service",
+            "fieldPath": "spec.replicas",
+            "expectedValue": 3,
+            "remediation": "Set spec.replicas: 3 on Deployment orders-service"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "system-design",
+    "title": "System Design, Capacity Estimation, Sharding & Distributed Rate Limiting",
+    "estimatedHours": 8,
+    "modules": [],
+    "labs": [
+      {
+        "id": "lab-sys-01-capacity-estimation-plan",
+        "title": "Quantitative Capacity & Bandwidth Estimation Specification",
+        "xpReward": 150,
+        "difficulty": "Advanced",
+        "durationMinutes": 20,
+        "objectives": [
+          "Create namespace production if not present.",
+          "Author ConfigMap capacity-plan-spec.",
+          "Configure targetPeakQPS to '50000'.",
+          "Configure fiveYearStorageTB to '120'.",
+          "Apply ConfigMap to namespace production."
+        ],
+        "starterManifest": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: capacity-plan-spec\n  namespace: production\ndata:\n  targetPeakQPS: \"50000\"\n  dailyActiveUsers: \"10000000\"\n  readWriteRatio: \"4:1\"\n  fiveYearStorageTB: \"120\"\n",
+        "solutionCommands": [
+          "mkdir -p /sysdesign",
+          "kubectl create namespace production",
+          "cat << 'EOF' > /sysdesign/capacity-plan-spec.yaml\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: capacity-plan-spec\n  namespace: production\ndata:\n  targetPeakQPS: \"50000\"\n  dailyActiveUsers: \"10000000\"\n  readWriteRatio: \"4:1\"\n  fiveYearStorageTB: \"120\"\nEOF",
+          "kubectl apply -f /sysdesign/capacity-plan-spec.yaml"
+        ],
+        "validationRules": [
+          {
+            "id": "cm-capacity-plan-exists",
+            "description": "ConfigMap capacity-plan-spec exists in namespace production",
+            "type": "resource_exists",
+            "kind": "ConfigMap",
+            "namespace": "production",
+            "name": "capacity-plan-spec",
+            "remediation": "Apply ConfigMap capacity-plan-spec in namespace production"
+          },
+          {
+            "id": "cm-target-peak-qps",
+            "description": "ConfigMap targetPeakQPS is '50000'",
+            "type": "resource_field_equals",
+            "kind": "ConfigMap",
+            "namespace": "production",
+            "name": "capacity-plan-spec",
+            "fieldPath": "data.targetPeakQPS",
+            "expectedValue": "50000",
+            "remediation": "Set data.targetPeakQPS: '50000' on ConfigMap capacity-plan-spec"
+          },
+          {
+            "id": "cm-storage-tb",
+            "description": "ConfigMap fiveYearStorageTB is '120'",
+            "type": "resource_field_equals",
+            "kind": "ConfigMap",
+            "namespace": "production",
+            "name": "capacity-plan-spec",
+            "fieldPath": "data.fiveYearStorageTB",
+            "expectedValue": "120",
+            "remediation": "Set data.fiveYearStorageTB: '120' on ConfigMap capacity-plan-spec"
+          }
+        ]
+      },
+      {
+        "id": "lab-sys-02-token-bucket-ratelimit",
+        "title": "Distributed Token Bucket Rate Limiter & Gateway Deployment",
+        "xpReward": 150,
+        "difficulty": "Advanced",
+        "durationMinutes": 20,
+        "objectives": [
+          "Create namespace production if not present.",
+          "Author ConfigMap ratelimit-token-bucket.",
+          "Author Deployment payment-gateway with 3 replicas.",
+          "Apply all manifests to namespace production."
+        ],
+        "starterManifest": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: ratelimit-token-bucket\n  namespace: production\ndata:\n  algorithm: \"TokenBucket\"\n  capacity: \"10000\"\n  refillRatePerSec: \"2000\"\n  backendCache: \"redis-cluster\"\n---\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: payment-gateway\n  namespace: production\nspec:\n  replicas: 3\n  selector:\n    matchLabels:\n      app: payment-gateway\n  template:\n    metadata:\n      labels:\n        app: payment-gateway\n    spec:\n      containers:\n        - name: gateway\n          image: nginx:1.27-alpine\n",
+        "solutionCommands": [
+          "mkdir -p /sysdesign",
+          "kubectl create namespace production",
+          "cat << 'EOF' > /sysdesign/cache-and-ratelimit.yaml\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: ratelimit-token-bucket\n  namespace: production\ndata:\n  algorithm: \"TokenBucket\"\n  capacity: \"10000\"\n  refillRatePerSec: \"2000\"\n  backendCache: \"redis-cluster\"\n---\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: payment-gateway\n  namespace: production\nspec:\n  replicas: 3\n  selector:\n    matchLabels:\n      app: payment-gateway\n  template:\n    metadata:\n      labels:\n        app: payment-gateway\n    spec:\n      containers:\n        - name: gateway\n          image: nginx:1.27-alpine\nEOF",
+          "kubectl apply -f /sysdesign/cache-and-ratelimit.yaml"
+        ],
+        "validationRules": [
+          {
+            "id": "cm-ratelimit-exists",
+            "description": "ConfigMap ratelimit-token-bucket exists in namespace production",
+            "type": "resource_exists",
+            "kind": "ConfigMap",
+            "namespace": "production",
+            "name": "ratelimit-token-bucket",
+            "remediation": "Apply ConfigMap ratelimit-token-bucket in namespace production"
+          },
+          {
+            "id": "cm-ratelimit-algo",
+            "description": "ConfigMap algorithm is TokenBucket",
+            "type": "resource_field_equals",
+            "kind": "ConfigMap",
+            "namespace": "production",
+            "name": "ratelimit-token-bucket",
+            "fieldPath": "data.algorithm",
+            "expectedValue": "TokenBucket",
+            "remediation": "Set data.algorithm: TokenBucket on ConfigMap ratelimit-token-bucket"
+          },
+          {
+            "id": "cm-ratelimit-capacity",
+            "description": "ConfigMap capacity is '10000'",
+            "type": "resource_field_equals",
+            "kind": "ConfigMap",
+            "namespace": "production",
+            "name": "ratelimit-token-bucket",
+            "fieldPath": "data.capacity",
+            "expectedValue": "10000",
+            "remediation": "Set data.capacity: '10000' on ConfigMap ratelimit-token-bucket"
+          },
+          {
+            "id": "deploy-gateway-exists",
+            "description": "Deployment payment-gateway exists in namespace production",
+            "type": "resource_exists",
+            "kind": "Deployment",
+            "namespace": "production",
+            "name": "payment-gateway",
+            "remediation": "Apply Deployment payment-gateway in namespace production"
+          },
+          {
+            "id": "deploy-gateway-replicas",
+            "description": "Deployment payment-gateway has 3 replicas",
+            "type": "resource_field_equals",
+            "kind": "Deployment",
+            "namespace": "production",
+            "name": "payment-gateway",
+            "fieldPath": "spec.replicas",
+            "expectedValue": 3,
+            "remediation": "Set spec.replicas: 3 on Deployment payment-gateway"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "platform-engineering",
+    "title": "Platform Engineering, Internal Developer Platforms (IDP) & Developer Portals",
+    "estimatedHours": 8,
+    "modules": [],
+    "labs": [
+      {
+        "id": "lab-plat-01-backstage-catalog",
+        "title": "Backstage Software Catalog Component & Service Ownership Metadata",
+        "xpReward": 150,
+        "difficulty": "Advanced",
+        "durationMinutes": 20,
+        "objectives": [
+          "Create namespace production if not present.",
+          "Author ConfigMap backstage-catalog-manifest.",
+          "Configure componentName to payment-gateway.",
+          "Configure owner to team-fintech.",
+          "Apply ConfigMap to namespace production."
+        ],
+        "starterManifest": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: backstage-catalog-manifest\n  namespace: production\ndata:\n  componentName: \"payment-gateway\"\n  componentType: \"service\"\n  lifecycle: \"production\"\n  owner: \"team-fintech\"\n  catalogInfoYaml: \"apiVersion: backstage.io/v1alpha1\\nkind: Component\\nmetadata:\\n  name: payment-gateway\\nspec:\\n  type: service\\n  lifecycle: production\\n  owner: team-fintech\\n\"\n",
+        "solutionCommands": [
+          "mkdir -p /idp",
+          "kubectl create namespace production",
+          "cat << 'EOF' > /idp/backstage-catalog.yaml\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: backstage-catalog-manifest\n  namespace: production\ndata:\n  componentName: \"payment-gateway\"\n  componentType: \"service\"\n  lifecycle: \"production\"\n  owner: \"team-fintech\"\n  catalogInfoYaml: \"apiVersion: backstage.io/v1alpha1\\nkind: Component\\nmetadata:\\n  name: payment-gateway\\nspec:\\n  type: service\\n  lifecycle: production\\n  owner: team-fintech\\n\"\nEOF",
+          "kubectl apply -f /idp/backstage-catalog.yaml"
+        ],
+        "validationRules": [
+          {
+            "id": "cm-backstage-exists",
+            "description": "ConfigMap backstage-catalog-manifest exists in namespace production",
+            "type": "resource_exists",
+            "kind": "ConfigMap",
+            "namespace": "production",
+            "name": "backstage-catalog-manifest",
+            "remediation": "Apply ConfigMap backstage-catalog-manifest in namespace production"
+          },
+          {
+            "id": "cm-backstage-name",
+            "description": "ConfigMap componentName is payment-gateway",
+            "type": "resource_field_equals",
+            "kind": "ConfigMap",
+            "namespace": "production",
+            "name": "backstage-catalog-manifest",
+            "fieldPath": "data.componentName",
+            "expectedValue": "payment-gateway",
+            "remediation": "Set data.componentName: payment-gateway on ConfigMap backstage-catalog-manifest"
+          },
+          {
+            "id": "cm-backstage-owner",
+            "description": "ConfigMap owner is team-fintech",
+            "type": "resource_field_equals",
+            "kind": "ConfigMap",
+            "namespace": "production",
+            "name": "backstage-catalog-manifest",
+            "fieldPath": "data.owner",
+            "expectedValue": "team-fintech",
+            "remediation": "Set data.owner: team-fintech on ConfigMap backstage-catalog-manifest"
+          }
+        ]
+      },
+      {
+        "id": "lab-plat-02-self-service-sandbox",
+        "title": "Self-Service Developer Tenant Sandbox with ResourceQuotas & LimitRanges",
+        "xpReward": 150,
+        "difficulty": "Advanced",
+        "durationMinutes": 20,
+        "objectives": [
+          "Author manifest /idp/tenant-sandbox.yaml.",
+          "Create namespace sandbox-team-alpha.",
+          "Configure ResourceQuota sandbox-compute-quota with CPU and memory caps.",
+          "Configure LimitRange sandbox-limit-range with default memory limit of 1Gi.",
+          "Apply all manifests to the cluster."
+        ],
+        "starterManifest": "apiVersion: v1\nkind: Namespace\nmetadata:\n  name: sandbox-team-alpha\n  labels:\n    platform.kubelabs.io/tier: sandbox\n    platform.kubelabs.io/tenant: team-alpha\n---\napiVersion: v1\nkind: ResourceQuota\nmetadata:\n  name: sandbox-compute-quota\n  namespace: sandbox-team-alpha\nspec:\n  hard:\n    requests.cpu: \"4000m\"\n    requests.memory: \"8Gi\"\n    limits.memory: \"16Gi\"\n---\napiVersion: v1\nkind: LimitRange\nmetadata:\n  name: sandbox-limit-range\n  namespace: sandbox-team-alpha\nspec:\n  limits:\n    - type: Container\n      default:\n        memory: \"1Gi\"\n",
+        "solutionCommands": [
+          "mkdir -p /idp",
+          "cat << 'EOF' > /idp/tenant-sandbox.yaml\napiVersion: v1\nkind: Namespace\nmetadata:\n  name: sandbox-team-alpha\n  labels:\n    platform.kubelabs.io/tier: sandbox\n    platform.kubelabs.io/tenant: team-alpha\n---\napiVersion: v1\nkind: ResourceQuota\nmetadata:\n  name: sandbox-compute-quota\n  namespace: sandbox-team-alpha\nspec:\n  hard:\n    requests.cpu: \"4000m\"\n    requests.memory: \"8Gi\"\n    limits.memory: \"16Gi\"\n---\napiVersion: v1\nkind: LimitRange\nmetadata:\n  name: sandbox-limit-range\n  namespace: sandbox-team-alpha\nspec:\n  limits:\n    - type: Container\n      default:\n        memory: \"1Gi\"\nEOF",
+          "kubectl apply -f /idp/tenant-sandbox.yaml"
+        ],
+        "validationRules": [
+          {
+            "id": "ns-sandbox-exists",
+            "description": "Namespace sandbox-team-alpha exists",
+            "type": "resource_exists",
+            "kind": "Namespace",
+            "name": "sandbox-team-alpha",
+            "remediation": "Create Namespace sandbox-team-alpha"
+          },
+          {
+            "id": "quota-sandbox-exists",
+            "description": "ResourceQuota sandbox-compute-quota exists in namespace sandbox-team-alpha",
+            "type": "resource_exists",
+            "kind": "ResourceQuota",
+            "namespace": "sandbox-team-alpha",
+            "name": "sandbox-compute-quota",
+            "remediation": "Apply ResourceQuota sandbox-compute-quota in namespace sandbox-team-alpha"
+          },
+          {
+            "id": "quota-requests-cpu",
+            "description": "ResourceQuota requests.cpu is '4000m'",
+            "type": "resource_field_equals",
+            "kind": "ResourceQuota",
+            "namespace": "sandbox-team-alpha",
+            "name": "sandbox-compute-quota",
+            "fieldPath": "spec.hard.requests.cpu",
+            "expectedValue": "4000m",
+            "remediation": "Set spec.hard.requests.cpu: '4000m' on ResourceQuota sandbox-compute-quota"
+          },
+          {
+            "id": "quota-limits-mem",
+            "description": "ResourceQuota limits.memory is '16Gi'",
+            "type": "resource_field_equals",
+            "kind": "ResourceQuota",
+            "namespace": "sandbox-team-alpha",
+            "name": "sandbox-compute-quota",
+            "fieldPath": "spec.hard.limits.memory",
+            "expectedValue": "16Gi",
+            "remediation": "Set spec.hard.limits.memory: '16Gi' on ResourceQuota sandbox-compute-quota"
+          },
+          {
+            "id": "limitrange-sandbox-exists",
+            "description": "LimitRange sandbox-limit-range exists in namespace sandbox-team-alpha",
+            "type": "resource_exists",
+            "kind": "LimitRange",
+            "namespace": "sandbox-team-alpha",
+            "name": "sandbox-limit-range",
+            "remediation": "Apply LimitRange sandbox-limit-range in namespace sandbox-team-alpha"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "security-engineering",
+    "title": "Security Engineering, Zero-Trust Architecture & SPIFFE/SPIRE Workload Identity",
+    "estimatedHours": 8,
+    "modules": [],
+    "labs": [
+      {
+        "id": "lab-seceng-01-spiffe-identity-federation",
+        "title": "Zero-Trust SPIFFE/SPIRE Workload Identity & AWS IRSA ServiceAccount Federation",
+        "xpReward": 150,
+        "difficulty": "Advanced",
+        "durationMinutes": 20,
+        "objectives": [
+          "Create namespace production if not present.",
+          "Author manifest /security/spiffe-workload-identity.yaml defining ConfigMap spiffe-workload-identity and ServiceAccount payment-service-sa.",
+          "Configure ConfigMap data keys trustDomain, spiffeId, and svidTtlMinutes.",
+          "Annotate ServiceAccount with eks.amazonaws.com/role-arn.",
+          "Apply manifests to namespace production."
+        ],
+        "starterManifest": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: spiffe-workload-identity\n  namespace: production\ndata:\n  trustDomain: \"prod.kubelabs.io\"\n  spiffeId: \"spiffe://prod.kubelabs.io/ns/production/sa/payment-service-sa\"\n  svidTtlMinutes: \"60\"\n---\napiVersion: v1\nkind: ServiceAccount\nmetadata:\n  name: payment-service-sa\n  namespace: production\n  annotations:\n    eks.amazonaws.com/role-arn: \"arn:aws:iam::123456789012:role/payment-workload-role\"\n",
+        "solutionCommands": [
+          "kubectl create namespace production",
+          "cat << 'EOF' > /security/spiffe-workload-identity.yaml\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: spiffe-workload-identity\n  namespace: production\ndata:\n  trustDomain: \"prod.kubelabs.io\"\n  spiffeId: \"spiffe://prod.kubelabs.io/ns/production/sa/payment-service-sa\"\n  svidTtlMinutes: \"60\"\n---\napiVersion: v1\nkind: ServiceAccount\nmetadata:\n  name: payment-service-sa\n  namespace: production\n  annotations:\n    eks.amazonaws.com/role-arn: \"arn:aws:iam::123456789012:role/payment-workload-role\"\nEOF",
+          "kubectl apply -f /security/spiffe-workload-identity.yaml"
+        ],
+        "validationRules": [
+          {
+            "id": "cm-spiffe-exists",
+            "description": "ConfigMap spiffe-workload-identity exists in namespace production",
+            "type": "resource_exists",
+            "kind": "ConfigMap",
+            "namespace": "production",
+            "name": "spiffe-workload-identity",
+            "remediation": "Apply ConfigMap spiffe-workload-identity in namespace production"
+          },
+          {
+            "id": "cm-spiffe-trust-domain",
+            "description": "ConfigMap data.trustDomain is prod.kubelabs.io",
+            "type": "resource_field_equals",
+            "kind": "ConfigMap",
+            "namespace": "production",
+            "name": "spiffe-workload-identity",
+            "fieldPath": "data.trustDomain",
+            "expectedValue": "prod.kubelabs.io",
+            "remediation": "Set trustDomain: \"prod.kubelabs.io\" in ConfigMap spiffe-workload-identity"
+          },
+          {
+            "id": "cm-spiffe-id",
+            "description": "ConfigMap data.spiffeId is spiffe://prod.kubelabs.io/ns/production/sa/payment-service-sa",
+            "type": "resource_field_equals",
+            "kind": "ConfigMap",
+            "namespace": "production",
+            "name": "spiffe-workload-identity",
+            "fieldPath": "data.spiffeId",
+            "expectedValue": "spiffe://prod.kubelabs.io/ns/production/sa/payment-service-sa",
+            "remediation": "Set spiffeId: \"spiffe://prod.kubelabs.io/ns/production/sa/payment-service-sa\" in ConfigMap spiffe-workload-identity"
+          },
+          {
+            "id": "sa-irsa-exists",
+            "description": "ServiceAccount payment-service-sa exists in namespace production",
+            "type": "resource_exists",
+            "kind": "ServiceAccount",
+            "namespace": "production",
+            "name": "payment-service-sa",
+            "remediation": "Apply ServiceAccount payment-service-sa in namespace production"
+          },
+          {
+            "id": "sa-irsa-role-arn",
+            "description": "ServiceAccount payment-service-sa is annotated with eks.amazonaws.com/role-arn",
+            "type": "resource_field_equals",
+            "kind": "ServiceAccount",
+            "namespace": "production",
+            "name": "payment-service-sa",
+            "fieldPath": "metadata.annotations['eks.amazonaws.com/role-arn']",
+            "expectedValue": "arn:aws:iam::123456789012:role/payment-workload-role",
+            "remediation": "Annotate ServiceAccount payment-service-sa with eks.amazonaws.com/role-arn: \"arn:aws:iam::123456789012:role/payment-workload-role\""
+          }
+        ]
+      },
+      {
+        "id": "lab-seceng-02-tetragon-ebpf-policy",
+        "title": "Kernel-Level eBPF Runtime Security Policy with Cilium Tetragon",
+        "xpReward": 175,
+        "difficulty": "Advanced",
+        "durationMinutes": 25,
+        "objectives": [
+          "Create namespace production if not present.",
+          "Author manifest /security/tetragon-policy.yaml defining TracingPolicy block-unauthorized-binaries and Deployment secure-vault-client.",
+          "Configure TracingPolicy to intercept sys_execve with Sigkill.",
+          "Deploy secure-vault-client with 2 replicas in namespace production.",
+          "Apply manifests to namespace production."
+        ],
+        "starterManifest": "apiVersion: cilium.io/v1alpha1\nkind: TracingPolicy\nmetadata:\n  name: block-unauthorized-binaries\n  namespace: production\nspec:\n  kprobes:\n    - call: \"sys_execve\"\n      syscall: true\n      args:\n        - index: 0\n          type: \"string\"\n      selectors:\n        - matchArgs:\n            - index: 0\n              operator: \"In\"\n              values:\n                - \"/bin/netcat\"\n                - \"/usr/bin/nc\"\n          matchActions:\n            - action: \"Sigkill\"\n---\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: secure-vault-client\n  namespace: production\nspec:\n  replicas: 2\n  selector:\n    matchLabels:\n      app: secure-vault-client\n  template:\n    metadata:\n      labels:\n        app: secure-vault-client\n    spec:\n      containers:\n        - name: client\n          image: vault-client:v1.0\n",
+        "solutionCommands": [
+          "kubectl create namespace production",
+          "cat << 'EOF' > /security/tetragon-policy.yaml\napiVersion: cilium.io/v1alpha1\nkind: TracingPolicy\nmetadata:\n  name: block-unauthorized-binaries\n  namespace: production\nspec:\n  kprobes:\n    - call: \"sys_execve\"\n      syscall: true\n      args:\n        - index: 0\n          type: \"string\"\n      selectors:\n        - matchArgs:\n            - index: 0\n              operator: \"In\"\n              values:\n                - \"/bin/netcat\"\n                - \"/usr/bin/nc\"\n          matchActions:\n            - action: \"Sigkill\"\n---\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: secure-vault-client\n  namespace: production\nspec:\n  replicas: 2\n  selector:\n    matchLabels:\n      app: secure-vault-client\n  template:\n    metadata:\n      labels:\n        app: secure-vault-client\n    spec:\n      containers:\n        - name: client\n          image: vault-client:v1.0\nEOF",
+          "kubectl apply -f /security/tetragon-policy.yaml"
+        ],
+        "validationRules": [
+          {
+            "id": "tp-tetragon-exists",
+            "description": "TracingPolicy block-unauthorized-binaries exists in namespace production",
+            "type": "resource_exists",
+            "kind": "TracingPolicy",
+            "namespace": "production",
+            "name": "block-unauthorized-binaries",
+            "remediation": "Apply TracingPolicy block-unauthorized-binaries in namespace production"
+          },
+          {
+            "id": "tp-kprobe-call",
+            "description": "TracingPolicy intercepts syscall sys_execve",
+            "type": "resource_field_equals",
+            "kind": "TracingPolicy",
+            "namespace": "production",
+            "name": "block-unauthorized-binaries",
+            "fieldPath": "spec.kprobes[0].call",
+            "expectedValue": "sys_execve",
+            "remediation": "Set spec.kprobes[0].call to \"sys_execve\" in TracingPolicy block-unauthorized-binaries"
+          },
+          {
+            "id": "deploy-vault-exists",
+            "description": "Deployment secure-vault-client exists in namespace production",
+            "type": "resource_exists",
+            "kind": "Deployment",
+            "namespace": "production",
+            "name": "secure-vault-client",
+            "remediation": "Deploy secure-vault-client in namespace production"
+          },
+          {
+            "id": "deploy-vault-replicas",
+            "description": "Deployment secure-vault-client has 2 replicas",
+            "type": "resource_field_equals",
+            "kind": "Deployment",
+            "namespace": "production",
+            "name": "secure-vault-client",
+            "fieldPath": "spec.replicas",
+            "expectedValue": 2,
+            "remediation": "Scale Deployment secure-vault-client to 2 replicas"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "cloud-architecture-patterns",
+    "title": "Cloud Architecture Patterns, CQRS, Event Sourcing & Resilient Systems",
+    "estimatedHours": 8,
+    "modules": [],
+    "labs": [
+      {
+        "id": "lab-cap-01-cqrs-event-sourcing",
+        "title": "CQRS Event Store Specification & Materialized Read Projection",
+        "xpReward": 150,
+        "difficulty": "Advanced",
+        "durationMinutes": 20,
+        "objectives": [
+          "Create namespace production if not present.",
+          "Author manifest /arch/cqrs-event-stream.yaml defining ConfigMap cqrs-event-stream-spec.",
+          "Configure ConfigMap data keys: streamName, partitionKey, retentionDays, and projectionStore.",
+          "Author Deployment order-command-handler with 2 replicas in namespace production.",
+          "Apply manifest to namespace production."
+        ],
+        "starterManifest": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: cqrs-event-stream-spec\n  namespace: production\ndata:\n  streamName: \"order-events-stream\"\n  partitionKey: \"orderId\"\n  retentionDays: \"30\"\n  projectionStore: \"order-summary-read-view\"\n---\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: order-command-handler\n  namespace: production\nspec:\n  replicas: 2\n  selector:\n    matchLabels:\n      app: order-command-handler\n  template:\n    metadata:\n      labels:\n        app: order-command-handler\n    spec:\n      containers:\n        - name: handler\n          image: order-command-service:v1.0\n",
+        "solutionCommands": [
+          "kubectl create namespace production",
+          "cat << 'EOF' > /arch/cqrs-event-stream.yaml\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: cqrs-event-stream-spec\n  namespace: production\ndata:\n  streamName: \"order-events-stream\"\n  partitionKey: \"orderId\"\n  retentionDays: \"30\"\n  projectionStore: \"order-summary-read-view\"\n---\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: order-command-handler\n  namespace: production\nspec:\n  replicas: 2\n  selector:\n    matchLabels:\n      app: order-command-handler\n  template:\n    metadata:\n      labels:\n        app: order-command-handler\n    spec:\n      containers:\n        - name: handler\n          image: order-command-service:v1.0\nEOF",
+          "kubectl apply -f /arch/cqrs-event-stream.yaml"
+        ],
+        "validationRules": [
+          {
+            "id": "cm-cqrs-exists",
+            "description": "ConfigMap cqrs-event-stream-spec exists in namespace production",
+            "type": "resource_exists",
+            "kind": "ConfigMap",
+            "namespace": "production",
+            "name": "cqrs-event-stream-spec",
+            "remediation": "Apply ConfigMap cqrs-event-stream-spec in namespace production"
+          },
+          {
+            "id": "cm-cqrs-stream",
+            "description": "ConfigMap streamName is order-events-stream",
+            "type": "resource_field_equals",
+            "kind": "ConfigMap",
+            "namespace": "production",
+            "name": "cqrs-event-stream-spec",
+            "fieldPath": "data.streamName",
+            "expectedValue": "order-events-stream",
+            "remediation": "Set streamName: \"order-events-stream\" in ConfigMap cqrs-event-stream-spec"
+          },
+          {
+            "id": "cm-cqrs-projection",
+            "description": "ConfigMap projectionStore is order-summary-read-view",
+            "type": "resource_field_equals",
+            "kind": "ConfigMap",
+            "namespace": "production",
+            "name": "cqrs-event-stream-spec",
+            "fieldPath": "data.projectionStore",
+            "expectedValue": "order-summary-read-view",
+            "remediation": "Set projectionStore: \"order-summary-read-view\" in ConfigMap cqrs-event-stream-spec"
+          },
+          {
+            "id": "deploy-cqrs-exists",
+            "description": "Deployment order-command-handler exists in namespace production",
+            "type": "resource_exists",
+            "kind": "Deployment",
+            "namespace": "production",
+            "name": "order-command-handler",
+            "remediation": "Deploy order-command-handler in namespace production"
+          },
+          {
+            "id": "deploy-cqrs-replicas",
+            "description": "Deployment order-command-handler has 2 replicas",
+            "type": "resource_field_equals",
+            "kind": "Deployment",
+            "namespace": "production",
+            "name": "order-command-handler",
+            "fieldPath": "spec.replicas",
+            "expectedValue": 2,
+            "remediation": "Set spec.replicas to 2 in Deployment order-command-handler"
+          }
+        ]
+      },
+      {
+        "id": "lab-cap-02-queue-load-leveling-backoff",
+        "title": "Queue-Based Load Leveling & Exponential Backoff Jitter Policy",
+        "xpReward": 150,
+        "difficulty": "Advanced",
+        "durationMinutes": 20,
+        "objectives": [
+          "Create namespace production if not present.",
+          "Author manifest /arch/queue-load-leveling.yaml defining ConfigMap queue-load-leveling-policy and Deployment load-leveling-worker.",
+          "Configure ConfigMap with queueType priority-fifo and retryPolicy exponential-backoff-full-jitter.",
+          "Configure Deployment load-leveling-worker with 3 replicas and resource requests.",
+          "Apply manifest to namespace production."
+        ],
+        "starterManifest": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: queue-load-leveling-policy\n  namespace: production\ndata:\n  queueType: \"priority-fifo\"\n  maxConcurrency: \"10\"\n  retryPolicy: \"exponential-backoff-full-jitter\"\n---\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: load-leveling-worker\n  namespace: production\nspec:\n  replicas: 3\n  selector:\n    matchLabels:\n      app: load-leveling-worker\n  template:\n    metadata:\n      labels:\n        app: load-leveling-worker\n    spec:\n      containers:\n        - name: worker\n          image: queue-worker:v2.0\n          resources:\n            requests:\n              cpu: \"200m\"\n              memory: \"256Mi\"\n",
+        "solutionCommands": [
+          "kubectl create namespace production",
+          "cat << 'EOF' > /arch/queue-load-leveling.yaml\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: queue-load-leveling-policy\n  namespace: production\ndata:\n  queueType: \"priority-fifo\"\n  maxConcurrency: \"10\"\n  retryPolicy: \"exponential-backoff-full-jitter\"\n---\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: load-leveling-worker\n  namespace: production\nspec:\n  replicas: 3\n  selector:\n    matchLabels:\n      app: load-leveling-worker\n  template:\n    metadata:\n      labels:\n        app: load-leveling-worker\n    spec:\n      containers:\n        - name: worker\n          image: queue-worker:v2.0\n          resources:\n            requests:\n              cpu: \"200m\"\n              memory: \"256Mi\"\nEOF",
+          "kubectl apply -f /arch/queue-load-leveling.yaml"
+        ],
+        "validationRules": [
+          {
+            "id": "cm-queue-exists",
+            "description": "ConfigMap queue-load-leveling-policy exists in namespace production",
+            "type": "resource_exists",
+            "kind": "ConfigMap",
+            "namespace": "production",
+            "name": "queue-load-leveling-policy",
+            "remediation": "Apply ConfigMap queue-load-leveling-policy in namespace production"
+          },
+          {
+            "id": "cm-queue-policy",
+            "description": "ConfigMap retryPolicy is exponential-backoff-full-jitter",
+            "type": "resource_field_equals",
+            "kind": "ConfigMap",
+            "namespace": "production",
+            "name": "queue-load-leveling-policy",
+            "fieldPath": "data.retryPolicy",
+            "expectedValue": "exponential-backoff-full-jitter",
+            "remediation": "Set retryPolicy: \"exponential-backoff-full-jitter\" in ConfigMap queue-load-leveling-policy"
+          },
+          {
+            "id": "deploy-worker-exists",
+            "description": "Deployment load-leveling-worker exists in namespace production",
+            "type": "resource_exists",
+            "kind": "Deployment",
+            "namespace": "production",
+            "name": "load-leveling-worker",
+            "remediation": "Deploy load-leveling-worker in namespace production"
+          },
+          {
+            "id": "deploy-worker-replicas",
+            "description": "Deployment load-leveling-worker has 3 replicas",
+            "type": "resource_field_equals",
+            "kind": "Deployment",
+            "namespace": "production",
+            "name": "load-leveling-worker",
+            "fieldPath": "spec.replicas",
+            "expectedValue": 3,
+            "remediation": "Scale Deployment load-leveling-worker to 3 replicas"
+          },
+          {
+            "id": "deploy-worker-mem-req",
+            "description": "Deployment load-leveling-worker specifies memory request 256Mi",
+            "type": "resource_field_equals",
+            "kind": "Deployment",
+            "namespace": "production",
+            "name": "load-leveling-worker",
+            "fieldPath": "spec.template.spec.containers[0].resources.requests.memory",
+            "expectedValue": "256Mi",
+            "remediation": "Set container resources.requests.memory to \"256Mi\" in Deployment load-leveling-worker"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "enterprise-architecture",
+    "title": "Enterprise Architecture, C4 Modeling, Landing Zones & FinOps Governance",
+    "estimatedHours": 8,
+    "modules": [],
+    "labs": [
+      {
+        "id": "lab-ea-01-c4-model-enterprise-blueprint",
+        "title": "C4 Enterprise Architecture Blueprint & System Context Specification",
+        "xpReward": 150,
+        "difficulty": "Advanced",
+        "durationMinutes": 20,
+        "objectives": [
+          "Create namespace enterprise-governance if not present.",
+          "Author manifest /enterprise/c4-system-context.yaml defining ConfigMap c4-system-context-spec and ServiceAccount enterprise-architect-sa.",
+          "Configure ConfigMap data keys systemName, boundaryType, c4Level, and primaryPersonas.",
+          "Apply the manifest to the cluster."
+        ],
+        "starterManifest": "apiVersion: v1\nkind: Namespace\nmetadata:\n  name: enterprise-governance\n---\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: c4-system-context-spec\n  namespace: enterprise-governance\ndata:\n  systemName: \"core-banking-platform\"\n  boundaryType: \"enterprise\"\n  c4Level: \"Container\"\n  primaryPersonas: \"retail-customer,compliance-officer\"\n---\napiVersion: v1\nkind: ServiceAccount\nmetadata:\n  name: enterprise-architect-sa\n  namespace: enterprise-governance\n",
+        "solutionCommands": [
+          "kubectl create namespace enterprise-governance",
+          "cat << 'EOF' > /enterprise/c4-system-context.yaml\napiVersion: v1\nkind: Namespace\nmetadata:\n  name: enterprise-governance\n---\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: c4-system-context-spec\n  namespace: enterprise-governance\ndata:\n  systemName: \"core-banking-platform\"\n  boundaryType: \"enterprise\"\n  c4Level: \"Container\"\n  primaryPersonas: \"retail-customer,compliance-officer\"\n---\napiVersion: v1\nkind: ServiceAccount\nmetadata:\n  name: enterprise-architect-sa\n  namespace: enterprise-governance\nEOF",
+          "kubectl apply -f /enterprise/c4-system-context.yaml"
+        ],
+        "validationRules": [
+          {
+            "id": "ns-ea-exists",
+            "description": "Namespace enterprise-governance exists",
+            "type": "resource_exists",
+            "kind": "Namespace",
+            "name": "enterprise-governance",
+            "remediation": "Create namespace enterprise-governance"
+          },
+          {
+            "id": "cm-c4-exists",
+            "description": "ConfigMap c4-system-context-spec exists in namespace enterprise-governance",
+            "type": "resource_exists",
+            "kind": "ConfigMap",
+            "namespace": "enterprise-governance",
+            "name": "c4-system-context-spec",
+            "remediation": "Apply ConfigMap c4-system-context-spec in namespace enterprise-governance"
+          },
+          {
+            "id": "cm-c4-level",
+            "description": "ConfigMap c4Level is Container",
+            "type": "resource_field_equals",
+            "kind": "ConfigMap",
+            "namespace": "enterprise-governance",
+            "name": "c4-system-context-spec",
+            "fieldPath": "data.c4Level",
+            "expectedValue": "Container",
+            "remediation": "Set c4Level: \"Container\" in ConfigMap c4-system-context-spec"
+          },
+          {
+            "id": "cm-c4-system",
+            "description": "ConfigMap systemName is core-banking-platform",
+            "type": "resource_field_equals",
+            "kind": "ConfigMap",
+            "namespace": "enterprise-governance",
+            "name": "c4-system-context-spec",
+            "fieldPath": "data.systemName",
+            "expectedValue": "core-banking-platform",
+            "remediation": "Set systemName: \"core-banking-platform\" in ConfigMap c4-system-context-spec"
+          },
+          {
+            "id": "sa-ea-exists",
+            "description": "ServiceAccount enterprise-architect-sa exists in namespace enterprise-governance",
+            "type": "resource_exists",
+            "kind": "ServiceAccount",
+            "namespace": "enterprise-governance",
+            "name": "enterprise-architect-sa",
+            "remediation": "Apply ServiceAccount enterprise-architect-sa in namespace enterprise-governance"
+          }
+        ]
+      },
+      {
+        "id": "lab-ea-02-landing-zone-finops-guardrails",
+        "title": "Landing Zone Governance & FinOps Cost-Allocation Guardrails",
+        "xpReward": 150,
+        "difficulty": "Advanced",
+        "durationMinutes": 20,
+        "objectives": [
+          "Create namespace enterprise-governance if not present.",
+          "Author manifest /enterprise/landing-zone-finops.yaml defining ConfigMap landing-zone-finops-spec and ResourceQuota enterprise-governance-quota.",
+          "Configure ConfigMap data keys scpEnforcement, costCenter, and finopsTier.",
+          "Configure ResourceQuota with hard requests.cpu: 8000m and requests.memory: 16Gi.",
+          "Apply manifest to namespace enterprise-governance."
+        ],
+        "starterManifest": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: landing-zone-finops-spec\n  namespace: enterprise-governance\ndata:\n  scpEnforcement: \"deny-unapproved-regions\"\n  costCenter: \"cc-fintech-9401\"\n  finopsTier: \"tier-1-mission-critical\"\n---\napiVersion: v1\nkind: ResourceQuota\nmetadata:\n  name: enterprise-governance-quota\n  namespace: enterprise-governance\nspec:\n  hard:\n    requests.cpu: \"8000m\"\n    requests.memory: \"16Gi\"\n",
+        "solutionCommands": [
+          "kubectl create namespace enterprise-governance",
+          "cat << 'EOF' > /enterprise/landing-zone-finops.yaml\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: landing-zone-finops-spec\n  namespace: enterprise-governance\ndata:\n  scpEnforcement: \"deny-unapproved-regions\"\n  costCenter: \"cc-fintech-9401\"\n  finopsTier: \"tier-1-mission-critical\"\n---\napiVersion: v1\nkind: ResourceQuota\nmetadata:\n  name: enterprise-governance-quota\n  namespace: enterprise-governance\nspec:\n  hard:\n    requests.cpu: \"8000m\"\n    requests.memory: \"16Gi\"\nEOF",
+          "kubectl apply -f /enterprise/landing-zone-finops.yaml"
+        ],
+        "validationRules": [
+          {
+            "id": "cm-finops-exists",
+            "description": "ConfigMap landing-zone-finops-spec exists in namespace enterprise-governance",
+            "type": "resource_exists",
+            "kind": "ConfigMap",
+            "namespace": "enterprise-governance",
+            "name": "landing-zone-finops-spec",
+            "remediation": "Apply ConfigMap landing-zone-finops-spec in namespace enterprise-governance"
+          },
+          {
+            "id": "cm-finops-scp",
+            "description": "ConfigMap scpEnforcement is deny-unapproved-regions",
+            "type": "resource_field_equals",
+            "kind": "ConfigMap",
+            "namespace": "enterprise-governance",
+            "name": "landing-zone-finops-spec",
+            "fieldPath": "data.scpEnforcement",
+            "expectedValue": "deny-unapproved-regions",
+            "remediation": "Set scpEnforcement: \"deny-unapproved-regions\" in ConfigMap landing-zone-finops-spec"
+          },
+          {
+            "id": "cm-finops-tier",
+            "description": "ConfigMap finopsTier is tier-1-mission-critical",
+            "type": "resource_field_equals",
+            "kind": "ConfigMap",
+            "namespace": "enterprise-governance",
+            "name": "landing-zone-finops-spec",
+            "fieldPath": "data.finopsTier",
+            "expectedValue": "tier-1-mission-critical",
+            "remediation": "Set finopsTier: \"tier-1-mission-critical\" in ConfigMap landing-zone-finops-spec"
+          },
+          {
+            "id": "rq-finops-exists",
+            "description": "ResourceQuota enterprise-governance-quota exists in namespace enterprise-governance",
+            "type": "resource_exists",
+            "kind": "ResourceQuota",
+            "namespace": "enterprise-governance",
+            "name": "enterprise-governance-quota",
+            "remediation": "Apply ResourceQuota enterprise-governance-quota in namespace enterprise-governance"
+          },
+          {
+            "id": "rq-finops-cpu",
+            "description": "ResourceQuota specifies hard requests.cpu 8000m",
+            "type": "resource_field_equals",
+            "kind": "ResourceQuota",
+            "namespace": "enterprise-governance",
+            "name": "enterprise-governance-quota",
+            "fieldPath": "spec.hard['requests.cpu']",
+            "expectedValue": "8000m",
+            "remediation": "Set spec.hard['requests.cpu'] to \"8000m\" in ResourceQuota enterprise-governance-quota"
+          },
+          {
+            "id": "rq-finops-mem",
+            "description": "ResourceQuota specifies hard requests.memory 16Gi",
+            "type": "resource_field_equals",
+            "kind": "ResourceQuota",
+            "namespace": "enterprise-governance",
+            "name": "enterprise-governance-quota",
+            "fieldPath": "spec.hard['requests.memory']",
+            "expectedValue": "16Gi",
+            "remediation": "Set spec.hard['requests.memory'] to \"16Gi\" in ResourceQuota enterprise-governance-quota"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "aiops-autonomous",
+    "title": "Autonomous AI-Ops, Closed-Loop Remediation & GPU Inference Infrastructure",
+    "estimatedHours": 8,
+    "modules": [],
+    "labs": [
+      {
+        "id": "lab-aiops-01-k8sgpt-triage",
+        "title": "k8sgpt Autonomous Cluster Diagnostic Analyzer & RCA Configuration",
+        "xpReward": 150,
+        "difficulty": "Advanced",
+        "durationMinutes": 20,
+        "objectives": [
+          "Create namespace monitoring if not present.",
+          "Author manifest /aiops/k8sgpt-config.yaml defining ConfigMap k8sgpt-ai-analyzer-config.",
+          "Configure ConfigMap data keys aiProvider, enabledFilters, backendEndpoint, and autoExplain.",
+          "Apply manifest to namespace monitoring.",
+          "Execute command 'aiops analyze' to perform cluster analysis."
+        ],
+        "starterManifest": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: k8sgpt-ai-analyzer-config\n  namespace: monitoring\ndata:\n  aiProvider: \"local-llm\"\n  enabledFilters: \"Pod,Service,Ingress,PersistentVolumeClaim\"\n  backendEndpoint: \"http://aiops-engine.monitoring.svc:8080/v1\"\n  autoExplain: \"true\"\n",
+        "solutionCommands": [
+          "kubectl create namespace monitoring",
+          "cat << 'EOF' > /aiops/k8sgpt-config.yaml\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: k8sgpt-ai-analyzer-config\n  namespace: monitoring\ndata:\n  aiProvider: \"local-llm\"\n  enabledFilters: \"Pod,Service,Ingress,PersistentVolumeClaim\"\n  backendEndpoint: \"http://aiops-engine.monitoring.svc:8080/v1\"\n  autoExplain: \"true\"\nEOF",
+          "kubectl apply -f /aiops/k8sgpt-config.yaml",
+          "aiops analyze"
+        ],
+        "validationRules": [
+          {
+            "id": "cm-k8sgpt-exists",
+            "description": "ConfigMap k8sgpt-ai-analyzer-config exists in namespace monitoring",
+            "type": "resource_exists",
+            "kind": "ConfigMap",
+            "namespace": "monitoring",
+            "name": "k8sgpt-ai-analyzer-config",
+            "remediation": "Apply ConfigMap k8sgpt-ai-analyzer-config in namespace monitoring"
+          },
+          {
+            "id": "cm-k8sgpt-provider",
+            "description": "ConfigMap aiProvider is local-llm",
+            "type": "resource_field_equals",
+            "kind": "ConfigMap",
+            "namespace": "monitoring",
+            "name": "k8sgpt-ai-analyzer-config",
+            "fieldPath": "data.aiProvider",
+            "expectedValue": "local-llm",
+            "remediation": "Set aiProvider: \"local-llm\" in ConfigMap k8sgpt-ai-analyzer-config"
+          },
+          {
+            "id": "cm-k8sgpt-explain",
+            "description": "ConfigMap autoExplain is true",
+            "type": "resource_field_equals",
+            "kind": "ConfigMap",
+            "namespace": "monitoring",
+            "name": "k8sgpt-ai-analyzer-config",
+            "fieldPath": "data.autoExplain",
+            "expectedValue": "true",
+            "remediation": "Set autoExplain: \"true\" in ConfigMap k8sgpt-ai-analyzer-config"
+          },
+          {
+            "id": "cmd-aiops-analyze",
+            "description": "Command aiops analyze executed",
+            "type": "command_executed",
+            "commandSubstring": "aiops analyze",
+            "pattern": "aiops analyze",
+            "remediation": "Execute command 'aiops analyze'"
+          }
+        ]
+      },
+      {
+        "id": "lab-aiops-02-gpu-kserve-inference",
+        "title": "NVIDIA GPU Scheduling & KServe LLM InferenceService Deployment",
+        "xpReward": 175,
+        "difficulty": "Advanced",
+        "durationMinutes": 25,
+        "objectives": [
+          "Create namespace ai-workloads if not present.",
+          "Author manifest /aiops/kserve-inference.yaml defining InferenceService llm-inference-gateway and Deployment autonomous-remediation-controller.",
+          "Configure InferenceService spec.predictor with modelFormat vllm and limits nvidia.com/gpu: 1.",
+          "Deploy Deployment autonomous-remediation-controller with 2 replicas in namespace ai-workloads.",
+          "Apply manifests to namespace ai-workloads."
+        ],
+        "starterManifest": "apiVersion: serving.kserve.io/v1beta1\nkind: InferenceService\nmetadata:\n  name: llm-inference-gateway\n  namespace: ai-workloads\nspec:\n  predictor:\n    model:\n      modelFormat:\n        name: \"vllm\"\n      resources:\n        limits:\n          nvidia.com/gpu: \"1\"\n---\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: autonomous-remediation-controller\n  namespace: ai-workloads\nspec:\n  replicas: 2\n  selector:\n    matchLabels:\n      app: autonomous-remediation-controller\n  template:\n    metadata:\n      labels:\n        app: autonomous-remediation-controller\n    spec:\n      containers:\n        - name: controller\n          image: aiops-controller:v2.4\n",
+        "solutionCommands": [
+          "kubectl create namespace ai-workloads",
+          "cat << 'EOF' > /aiops/kserve-inference.yaml\napiVersion: serving.kserve.io/v1beta1\nkind: InferenceService\nmetadata:\n  name: llm-inference-gateway\n  namespace: ai-workloads\nspec:\n  predictor:\n    model:\n      modelFormat:\n        name: \"vllm\"\n      resources:\n        limits:\n          nvidia.com/gpu: \"1\"\n---\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: autonomous-remediation-controller\n  namespace: ai-workloads\nspec:\n  replicas: 2\n  selector:\n    matchLabels:\n      app: autonomous-remediation-controller\n  template:\n    metadata:\n      labels:\n        app: autonomous-remediation-controller\n    spec:\n      containers:\n        - name: controller\n          image: aiops-controller:v2.4\nEOF",
+          "kubectl apply -f /aiops/kserve-inference.yaml"
+        ],
+        "validationRules": [
+          {
+            "id": "isvc-gpu-exists",
+            "description": "InferenceService llm-inference-gateway exists in namespace ai-workloads",
+            "type": "resource_exists",
+            "kind": "InferenceService",
+            "namespace": "ai-workloads",
+            "name": "llm-inference-gateway",
+            "remediation": "Deploy InferenceService llm-inference-gateway in namespace ai-workloads"
+          },
+          {
+            "id": "isvc-model-format",
+            "description": "InferenceService modelFormat is vllm",
+            "type": "resource_field_equals",
+            "kind": "InferenceService",
+            "namespace": "ai-workloads",
+            "name": "llm-inference-gateway",
+            "fieldPath": "spec.predictor.model.modelFormat.name",
+            "expectedValue": "vllm",
+            "remediation": "Set spec.predictor.model.modelFormat.name to \"vllm\" in InferenceService llm-inference-gateway"
+          },
+          {
+            "id": "isvc-gpu-limit",
+            "description": "InferenceService specifies resource limit nvidia.com/gpu: 1",
+            "type": "resource_field_equals",
+            "kind": "InferenceService",
+            "namespace": "ai-workloads",
+            "name": "llm-inference-gateway",
+            "fieldPath": "spec.predictor.model.resources.limits['nvidia.com/gpu']",
+            "expectedValue": "1",
+            "remediation": "Set spec.predictor.model.resources.limits['nvidia.com/gpu'] to \"1\" in InferenceService llm-inference-gateway"
+          },
+          {
+            "id": "deploy-aiops-exists",
+            "description": "Deployment autonomous-remediation-controller exists in namespace ai-workloads",
+            "type": "resource_exists",
+            "kind": "Deployment",
+            "namespace": "ai-workloads",
+            "name": "autonomous-remediation-controller",
+            "remediation": "Deploy autonomous-remediation-controller in namespace ai-workloads"
+          },
+          {
+            "id": "deploy-aiops-replicas",
+            "description": "Deployment autonomous-remediation-controller has 2 replicas",
+            "type": "resource_field_equals",
+            "kind": "Deployment",
+            "namespace": "ai-workloads",
+            "name": "autonomous-remediation-controller",
+            "fieldPath": "spec.replicas",
+            "expectedValue": 2,
+            "remediation": "Scale Deployment autonomous-remediation-controller to 2 replicas"
+          }
+        ]
+      }
+    ]
+  }
+];
+  const labs = [
+  {
+    "id": "lab-linux-01-permissions",
+    "title": "Linux Filesystem Permissions & Security Hardening",
+    "difficulty": "Beginner",
+    "durationMinutes": 20,
+    "xpReward": 150,
+    "scenario": "A security compliance audit flagged inappropriate permissions and ownership on critical Kubernetes configuration files. You must harden permissions and enforce strict access controls on /etc/kubernetes/admin.conf and /home/learner/.kube/config.",
+    "productionContext": "Exposing admin kubeconfig credentials with world-readable permissions allows unprivileged host processes to compromise the entire Kubernetes cluster.",
+    "prerequisites": [],
+    "objectives": [
+      "Inspect file permissions on /etc/kubernetes/admin.conf using ls -la",
+      "Harden /etc/kubernetes/admin.conf to mode 0600 owned by root:root",
+      "Configure /home/learner/.kube/config to mode 0600"
+    ],
+    "initialClusterState": {
+      "resources": []
+    },
+    "starterManifest": "",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Inspect File Permissions",
+        "instruction": "Run `ls -la /etc/kubernetes/admin.conf` to check current mode and ownership.",
+        "commandHint": "ls -la /etc/kubernetes/admin.conf"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Harden Cluster Admin Kubeconfig",
+        "instruction": "Set permissions on `/etc/kubernetes/admin.conf` to `0600` and ensure ownership is `root:root`.",
+        "commandHint": "chmod 600 /etc/kubernetes/admin.conf && chown root:root /etc/kubernetes/admin.conf"
+      },
+      {
+        "stepNumber": 3,
+        "title": "Secure Learner User Kubeconfig",
+        "instruction": "Set permissions on `/home/learner/.kube/config` to `0600`.",
+        "commandHint": "chmod 600 /home/learner/.kube/config"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "val-linux-perm-01",
+        "description": "Executed chmod command to harden kubeconfig permissions",
+        "type": "command_executed",
+        "commandSubstring": "chmod 600",
+        "remediation": "Run `chmod 600 /etc/kubernetes/admin.conf` and `chmod 600 /home/learner/.kube/config`."
+      },
+      {
+        "id": "val-linux-perm-02",
+        "description": "Executed chown command to ensure root ownership",
+        "type": "command_executed",
+        "commandSubstring": "chown root:root",
+        "remediation": "Run `chown root:root /etc/kubernetes/admin.conf`."
+      }
+    ],
+    "solutionCommands": [
+      "ls -la /etc/kubernetes/admin.conf",
+      "chmod 600 /etc/kubernetes/admin.conf",
+      "chown root:root /etc/kubernetes/admin.conf",
+      "chmod 600 /home/learner/.kube/config"
+    ],
+    "troubleshootingGuide": "Ensure you run `chmod 600` on both kubeconfigs and `chown root:root` on `/etc/kubernetes/admin.conf`.",
+    "domainId": "linux-fundamentals",
+    "domainTitle": "Linux Fundamentals & Command-Line Streaming Pipelines"
+  },
+  {
+    "id": "lab-linux-01-text-pipelines",
+    "title": "POSIX Streaming Pipelines & Access Log Analysis",
+    "difficulty": "Beginner",
+    "durationMinutes": 25,
+    "xpReward": 150,
+    "scenario": "Production ingress access logs in /var/log/nginx/access.log show intermittent 5xx spikes. You must construct a POSIX pipeline using grep, awk, sort, and uniq to isolate HTTP 500 error counts, and write the offending client IP summary to /home/learner/offenders.txt.",
+    "productionContext": "Streaming POSIX text processing pipelines allow SREs to triage multi-gigabyte log anomalies instantaneously without external tooling dependencies.",
+    "prerequisites": [
+      "lab-linux-01-permissions"
+    ],
+    "objectives": [
+      "Inspect the raw access log structure using head -n 5 /var/log/nginx/access.log",
+      "Extract 500 errors, aggregate unique offending IPs, and redirect output to /home/learner/offenders.txt"
+    ],
+    "initialClusterState": {
+      "resources": []
+    },
+    "starterManifest": "",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Sample Access Log",
+        "instruction": "Inspect the first 5 lines of `/var/log/nginx/access.log`.",
+        "commandHint": "head -n 5 /var/log/nginx/access.log"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Aggregate HTTP 500 Offenders",
+        "instruction": "Filter lines with HTTP 500 status, extract client IP, count unique occurrences, and write to `/home/learner/offenders.txt`.",
+        "commandHint": "grep \" 500 \" /var/log/nginx/access.log | awk '{print $1}' | sort | uniq -c > /home/learner/offenders.txt"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "val-linux-pipe-01",
+        "description": "Constructed grep and awk pipeline for log filtering",
+        "type": "command_executed",
+        "commandSubstring": "grep \" 500 \"",
+        "remediation": "Run `grep \" 500 \" /var/log/nginx/access.log | awk '{print $1}' | sort | uniq -c > /home/learner/offenders.txt`."
+      },
+      {
+        "id": "val-linux-pipe-02",
+        "description": "Offending client IP report written to /home/learner/offenders.txt",
+        "type": "vfs_file_contains",
+        "path": "/home/learner/offenders.txt",
+        "expectedContent": "192.168.1.105",
+        "remediation": "Ensure output is redirected to `/home/learner/offenders.txt` using `>`."
+      }
+    ],
+    "solutionCommands": [
+      "head -n 5 /var/log/nginx/access.log",
+      "grep \" 500 \" /var/log/nginx/access.log | awk '{print $1}' | sort | uniq -c > /home/learner/offenders.txt"
+    ],
+    "troubleshootingGuide": "Verify that `/home/learner/offenders.txt` contains the client IP `192.168.1.105` generated by the stream pipeline.",
+    "domainId": "linux-fundamentals",
+    "domainTitle": "Linux Fundamentals & Command-Line Streaming Pipelines"
+  },
+  {
+    "id": "lab-linux-02-systemd-cgroups",
+    "title": "Systemd Unit Lifecycle, Journalctl Diagnostics & Cgroups v2 Throttling",
+    "difficulty": "Intermediate",
+    "durationMinutes": 25,
+    "xpReward": 175,
+    "scenario": "The node's container runtime daemon (containerd) is reporting degraded state and kubelet is throwing connection errors. You must inspect journalctl error logs, restart containerd, verify kubelet systemd service health, and configure cgroups v2 CPU quotas under /sys/fs/cgroup/system.slice/kubelet.service/cpu.max.",
+    "productionContext": "Node daemon stability directly impacts cluster scheduling; diagnosing systemd units via journalctl and bounding CPU consumption with cgroups v2 ensures high node reliability.",
+    "prerequisites": [
+      "lab-linux-01-permissions"
+    ],
+    "objectives": [
+      "Inspect recent error logs for containerd using journalctl -u containerd -p err",
+      "Restart containerd and verify kubelet status using systemctl",
+      "Configure cgroups v2 CPU max ceiling on kubelet service"
+    ],
+    "initialClusterState": {
+      "resources": []
+    },
+    "starterManifest": "",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Diagnose Containerd Daemon Errors",
+        "instruction": "Inspect error logs for `containerd` using `journalctl -u containerd -p err`.",
+        "commandHint": "journalctl -u containerd -p err"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Restart Container Runtime & Verify Kubelet",
+        "instruction": "Restart the `containerd` service and verify `kubelet` status using systemctl.",
+        "commandHint": "systemctl restart containerd && systemctl status kubelet"
+      },
+      {
+        "stepNumber": 3,
+        "title": "Configure Cgroups v2 CPU Quota",
+        "instruction": "Set the CPU quota for kubelet to 2 cores per 100ms period (200000 100000) under `/sys/fs/cgroup/system.slice/kubelet.service/cpu.max`.",
+        "commandHint": "echo \"200000 100000\" > /sys/fs/cgroup/system.slice/kubelet.service/cpu.max"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "val-linux-sysd-01",
+        "description": "Executed journalctl error log inspection",
+        "type": "command_executed",
+        "commandSubstring": "journalctl -u containerd -p err",
+        "remediation": "Run `journalctl -u containerd -p err` to inspect runtime errors."
+      },
+      {
+        "id": "val-linux-sysd-02",
+        "description": "Restarted containerd systemd service",
+        "type": "command_executed",
+        "commandSubstring": "systemctl restart containerd",
+        "remediation": "Run `systemctl restart containerd`."
+      },
+      {
+        "id": "val-linux-cgroup-01",
+        "description": "Configured cgroups v2 CPU ceiling for kubelet service",
+        "type": "vfs_file_contains",
+        "path": "/sys/fs/cgroup/system.slice/kubelet.service/cpu.max",
+        "expectedContent": "200000 100000",
+        "remediation": "Run `echo \"200000 100000\" > /sys/fs/cgroup/system.slice/kubelet.service/cpu.max`."
+      }
+    ],
+    "solutionCommands": [
+      "journalctl -u containerd -p err",
+      "systemctl restart containerd",
+      "systemctl status kubelet",
+      "echo \"200000 100000\" > /sys/fs/cgroup/system.slice/kubelet.service/cpu.max"
+    ],
+    "troubleshootingGuide": "Ensure you run `journalctl -u containerd -p err`, `systemctl restart containerd`, and write `200000 100000` to `/sys/fs/cgroup/system.slice/kubelet.service/cpu.max`.",
+    "domainId": "linux-admin",
+    "domainTitle": "Linux Administration, Cgroups v2 & Systemd Internals"
+  },
+  {
+    "id": "lab-linux-02-namespaces-sysctl",
+    "title": "Linux Kernel Namespaces Isolation, Sysctl Tuning & LVM Volume Provisioning",
+    "difficulty": "Intermediate",
+    "durationMinutes": 30,
+    "xpReward": 175,
+    "scenario": "A new worker node must be hardened for Kubernetes container networking. You must persist IPv4 packet forwarding in sysctl, create an isolated network namespace, and initialize an LVM logical volume for container runtime storage.",
+    "productionContext": "Kubernetes worker nodes require IPv4 packet forwarding enabled in the Linux kernel and dedicated volume storage pools to support container images and volume mounts.",
+    "prerequisites": [
+      "lab-linux-02-systemd-cgroups"
+    ],
+    "objectives": [
+      "Enable IPv4 packet forwarding using sysctl -w net.ipv4.ip_forward=1",
+      "Create an isolated network namespace netns-worker and verify with ip netns list",
+      "Initialize LVM physical volume, volume group, and logical volume lv_containerd"
+    ],
+    "initialClusterState": {
+      "resources": []
+    },
+    "starterManifest": "",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Tune Kernel IPv4 Forwarding",
+        "instruction": "Enable IPv4 packet forwarding using `sysctl -w net.ipv4.ip_forward=1`.",
+        "commandHint": "sysctl -w net.ipv4.ip_forward=1"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Create Network Namespace",
+        "instruction": "Provision a new isolated network namespace named `netns-worker`.",
+        "commandHint": "ip netns add netns-worker"
+      },
+      {
+        "stepNumber": 3,
+        "title": "Initialize LVM Storage",
+        "instruction": "Initialize physical volume `/dev/sdb1`, create volume group `vg_k8s`, and allocate a 20GB logical volume `lv_containerd`.",
+        "commandHint": "pvcreate /dev/sdb1 && vgcreate vg_k8s /dev/sdb1 && lvcreate -L 20G -n lv_containerd vg_k8s"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "val-linux-sysctl-01",
+        "description": "Enabled IPv4 packet forwarding via sysctl",
+        "type": "command_executed",
+        "commandSubstring": "sysctl -w net.ipv4.ip_forward=1",
+        "remediation": "Run `sysctl -w net.ipv4.ip_forward=1`."
+      },
+      {
+        "id": "val-linux-netns-01",
+        "description": "Created isolated network namespace netns-worker",
+        "type": "command_executed",
+        "commandSubstring": "ip netns add netns-worker",
+        "remediation": "Run `ip netns add netns-worker`."
+      },
+      {
+        "id": "val-linux-lvm-01",
+        "description": "Provisioned LVM logical volume lv_containerd",
+        "type": "command_executed",
+        "commandSubstring": "lvcreate -L 20G -n lv_containerd vg_k8s",
+        "remediation": "Run `pvcreate /dev/sdb1`, `vgcreate vg_k8s /dev/sdb1`, and `lvcreate -L 20G -n lv_containerd vg_k8s`."
+      }
+    ],
+    "solutionCommands": [
+      "sysctl -w net.ipv4.ip_forward=1",
+      "ip netns add netns-worker",
+      "pvcreate /dev/sdb1",
+      "vgcreate vg_k8s /dev/sdb1",
+      "lvcreate -L 20G -n lv_containerd vg_k8s"
+    ],
+    "troubleshootingGuide": "Ensure you enable forwarding via sysctl, create the network namespace `netns-worker`, and execute `lvcreate -L 20G -n lv_containerd vg_k8s`.",
+    "domainId": "linux-admin",
+    "domainTitle": "Linux Administration, Cgroups v2 & Systemd Internals"
+  },
+  {
+    "id": "lab-net-01-veth-bridge",
+    "title": "Linux Bridge, Veth Pairs & Namespace Network Isolation",
+    "difficulty": "Beginner",
+    "durationMinutes": 25,
+    "xpReward": 150,
+    "scenario": "You are designing a lightweight container runtime network model. You must create an isolated network namespace, construct a software bridge (br0), attach a virtual ethernet pair (veth-host <-> veth-ns), and configure IP addresses and routing to establish connectivity between the host and the isolated namespace.",
+    "productionContext": "Understanding veth pairs and bridge devices is essential for troubleshooting Kubernetes CNI plugins (such as Flannel, Calico, and Cilium) and resolving container connectivity failures.",
+    "prerequisites": [],
+    "objectives": [
+      "Create network namespace netns-isolated",
+      "Create software bridge br0 with IP 10.200.1.1/24 and bring it up",
+      "Create veth pair veth-host and veth-ns, enslaving veth-host to br0",
+      "Assign veth-ns to netns-isolated, configure IP 10.200.1.10/24, and set default route via 10.200.1.1"
+    ],
+    "initialClusterState": {
+      "resources": []
+    },
+    "starterManifest": "",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Create Network Namespace",
+        "instruction": "Create an isolated network namespace named `netns-isolated` using `ip netns add netns-isolated`.",
+        "commandHint": "ip netns add netns-isolated"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Create and Configure Software Bridge br0",
+        "instruction": "Create software bridge `br0`, assign IP `10.200.1.1/24`, and bring the link up.",
+        "commandHint": "ip link add br0 type bridge && ip addr add 10.200.1.1/24 dev br0 && ip link set br0 up"
+      },
+      {
+        "stepNumber": 3,
+        "title": "Create and Attach Veth Pair",
+        "instruction": "Create a veth pair `veth-host` and `veth-ns`. Enslave `veth-host` to bridge `br0` and bring it up.",
+        "commandHint": "ip link add veth-host type veth peer name veth-ns && ip link set veth-host master br0 && ip link set veth-host up"
+      },
+      {
+        "stepNumber": 4,
+        "title": "Configure Namespace Interface and Routing",
+        "instruction": "Move `veth-ns` into `netns-isolated`. Bring up `lo` and `veth-ns`, configure IP `10.200.1.10/24`, and add a default route via `10.200.1.1`.",
+        "commandHint": "ip link set veth-ns netns netns-isolated && ip netns exec netns-isolated ip link set lo up && ip netns exec netns-isolated ip link set veth-ns up && ip netns exec netns-isolated ip addr add 10.200.1.10/24 dev veth-ns && ip netns exec netns-isolated ip route add default via 10.200.1.1 dev veth-ns"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "val-net-bridge-01",
+        "description": "Linux bridge br0 created and brought up with gateway IP",
+        "type": "command_executed",
+        "commandSubstring": "ip link add br0 type bridge",
+        "remediation": "Run 'ip link add br0 type bridge && ip addr add 10.200.1.1/24 dev br0 && ip link set br0 up'."
+      },
+      {
+        "id": "val-net-veth-02",
+        "description": "Veth pair created and host end enslaved to bridge",
+        "type": "command_executed",
+        "commandSubstring": "ip link set veth-host master br0",
+        "remediation": "Run 'ip link add veth-host type veth peer name veth-ns && ip link set veth-host master br0 && ip link set veth-host up'."
+      },
+      {
+        "id": "val-net-ns-03",
+        "description": "Network namespace netns-isolated configured with IP and default route",
+        "type": "command_executed",
+        "commandSubstring": "ip netns exec netns-isolated ip addr add 10.200.1.10/24 dev veth-ns",
+        "remediation": "Run 'ip link set veth-ns netns netns-isolated && ip netns exec netns-isolated ip link set lo up && ip netns exec netns-isolated ip link set veth-ns up && ip netns exec netns-isolated ip addr add 10.200.1.10/24 dev veth-ns && ip netns exec netns-isolated ip route add default via 10.200.1.1 dev veth-ns'."
+      }
+    ],
+    "solutionCommands": [
+      "ip netns add netns-isolated",
+      "ip link add br0 type bridge",
+      "ip addr add 10.200.1.1/24 dev br0",
+      "ip link set br0 up",
+      "ip link add veth-host type veth peer name veth-ns",
+      "ip link set veth-host master br0",
+      "ip link set veth-host up",
+      "ip link set veth-ns netns netns-isolated",
+      "ip netns exec netns-isolated ip link set lo up",
+      "ip netns exec netns-isolated ip link set veth-ns up",
+      "ip netns exec netns-isolated ip addr add 10.200.1.10/24 dev veth-ns",
+      "ip netns exec netns-isolated ip route add default via 10.200.1.1 dev veth-ns"
+    ],
+    "troubleshootingGuide": "Ensure br0 is created with type bridge, veth-host is enslaved to br0, and veth-ns is assigned to netns-isolated with IP 10.200.1.10/24.",
+    "domainId": "networking-fundamentals",
+    "domainTitle": "Linux Networking Fundamentals, Bridge Isolation & Packet Filtering"
+  },
+  {
+    "id": "lab-net-02-iptables-nat-tls",
+    "title": "Iptables NAT Masquerade, CoreDNS & TLS Certificate Inspection",
+    "difficulty": "Beginner",
+    "durationMinutes": 25,
+    "xpReward": 150,
+    "scenario": "Pods in the 10.200.1.0/24 subnet require internet access through NAT masquerading and need to resolve internal cluster DNS names. Additionally, you must audit the TLS certificate on the Kubernetes API server to verify SAN names and ensure secure encrypted transport.",
+    "productionContext": "Kubelet, kube-proxy, and CoreDNS work together with iptables to establish pod egress and cluster-wide service discovery. Validating TLS certificate SANs is crucial to prevent man-in-the-middle attacks.",
+    "prerequisites": [
+      "lab-net-01-veth-bridge"
+    ],
+    "objectives": [
+      "Add iptables NAT masquerade rule for outbound subnet traffic",
+      "Add iptables forwarding rules for bridge br0",
+      "Verify internal DNS resolution for kubernetes.default.svc.cluster.local",
+      "Inspect kube-apiserver TLS certificate SANs and perform live handshake check"
+    ],
+    "initialClusterState": {
+      "resources": [
+        {
+          "apiVersion": "v1",
+          "kind": "Service",
+          "metadata": {
+            "name": "kubernetes",
+            "namespace": "default"
+          },
+          "spec": {
+            "clusterIP": "10.96.0.1",
+            "ports": [
+              {
+                "port": 443,
+                "targetPort": 6443,
+                "protocol": "TCP"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "starterManifest": "",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Configure Iptables NAT Masquerade",
+        "instruction": "Append a NAT POSTROUTING rule to masquerade traffic originating from `10.200.1.0/24` destined outside `br0`.",
+        "commandHint": "iptables -t nat -A POSTROUTING -s 10.200.1.0/24 ! -o br0 -j MASQUERADE"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Configure Iptables Forwarding Rules",
+        "instruction": "Allow forwarding for inbound packets on `br0` destined externally.",
+        "commandHint": "iptables -A FORWARD -i br0 ! -o br0 -j ACCEPT"
+      },
+      {
+        "stepNumber": 3,
+        "title": "Verify CoreDNS Resolution",
+        "instruction": "Query CoreDNS for `kubernetes.default.svc.cluster.local` using `dig +short`.",
+        "commandHint": "dig +short kubernetes.default.svc.cluster.local"
+      },
+      {
+        "stepNumber": 4,
+        "title": "Inspect API Server TLS Certificate",
+        "instruction": "Audit the x509 certificate attributes of `/etc/kubernetes/pki/apiserver.crt` and perform a TLS client handshake against port 6443.",
+        "commandHint": "openssl x509 -in /etc/kubernetes/pki/apiserver.crt -text -noout && openssl s_client -connect 127.0.0.1:6443 -showcerts"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "val-net-nat-01",
+        "description": "Iptables NAT masquerade rule configured for subnet outbound traffic",
+        "type": "command_executed",
+        "commandSubstring": "iptables -t nat -A POSTROUTING",
+        "remediation": "Run 'iptables -t nat -A POSTROUTING -s 10.200.1.0/24 ! -o br0 -j MASQUERADE'."
+      },
+      {
+        "id": "val-net-dns-02",
+        "description": "CoreDNS query executed with dig +short for kubernetes.default.svc.cluster.local",
+        "type": "command_executed",
+        "commandSubstring": "dig +short kubernetes.default.svc.cluster.local",
+        "remediation": "Verify CoreDNS configuration and test resolution using 'dig +short kubernetes.default.svc.cluster.local'."
+      },
+      {
+        "id": "val-net-tls-03",
+        "description": "Executed OpenSSL s_client handshake check against apiserver port 6443",
+        "type": "command_executed",
+        "commandSubstring": "openssl s_client",
+        "remediation": "Run 'openssl s_client -connect 127.0.0.1:6443 -showcerts' to verify TLS handshake negotiation."
+      }
+    ],
+    "solutionCommands": [
+      "iptables -t nat -A POSTROUTING -s 10.200.1.0/24 ! -o br0 -j MASQUERADE",
+      "iptables -A FORWARD -i br0 ! -o br0 -j ACCEPT",
+      "dig +short kubernetes.default.svc.cluster.local",
+      "openssl x509 -in /etc/kubernetes/pki/apiserver.crt -text -noout",
+      "openssl s_client -connect 127.0.0.1:6443 -showcerts"
+    ],
+    "troubleshootingGuide": "Ensure iptables NAT masquerade rule is added to POSTROUTING, dig resolves 10.96.0.1, and openssl audits the apiserver certificate.",
+    "domainId": "networking-fundamentals",
+    "domainTitle": "Linux Networking Fundamentals, Bridge Isolation & Packet Filtering"
+  },
+  {
+    "id": "lab-git-01-internals",
+    "title": "Git Plumbing: Object Database, Hashing & Tree Inspection",
+    "difficulty": "Beginner",
+    "durationMinutes": 25,
+    "xpReward": 150,
+    "scenario": "You are auditing a GitOps repository's internal integrity. You must initialize a git repository in /home/learner/gitops-repo, hash raw Kubernetes manifests into the object database using git hash-object -w, inspect object types and content using git cat-file, stage and commit the files, and verify commit references with git rev-parse.",
+    "productionContext": "Understanding Git plumbing commands allows platform engineers to debug corrupt GitOps state stores, repair broken refs, and optimize repository packfile performance.",
+    "prerequisites": [],
+    "objectives": [
+      "Initialize an empty Git repository named gitops-repo in /home/learner",
+      "Create a pod manifest and write it to the Git object database using git hash-object -w",
+      "Stage and commit the manifest to the main branch",
+      "Inspect commit tree and metadata using git cat-file and git rev-parse"
+    ],
+    "initialClusterState": {
+      "resources": []
+    },
+    "starterManifest": "",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Initialize Git Repository",
+        "instruction": "Navigate to `/home/learner` and initialize a new git repository in `gitops-repo`.",
+        "commandHint": "cd /home/learner && git init gitops-repo"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Create and Hash Manifest Object",
+        "instruction": "Create `pod.yaml` inside `gitops-repo` and write it directly into the object store with `git hash-object -w pod.yaml`.",
+        "commandHint": "cd /home/learner/gitops-repo && echo \"apiVersion: v1\" > pod.yaml && git hash-object -w pod.yaml"
+      },
+      {
+        "stepNumber": 3,
+        "title": "Stage and Commit Manifest",
+        "instruction": "Stage `pod.yaml` and record a commit with message `feat: initial pod manifest`.",
+        "commandHint": "git add pod.yaml && git commit -m \"feat: initial pod manifest\""
+      },
+      {
+        "stepNumber": 4,
+        "title": "Inspect Commit Object and References",
+        "instruction": "Verify the HEAD commit hash with `git rev-parse HEAD` and inspect the commit object with `git cat-file -p HEAD`.",
+        "commandHint": "git rev-parse HEAD && git cat-file -p HEAD"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "val-git-init-01",
+        "description": "Initialized empty Git repository for GitOps workloads",
+        "type": "command_executed",
+        "commandSubstring": "git init gitops-repo",
+        "remediation": "Run 'git init gitops-repo' to create the repository directory and object database."
+      },
+      {
+        "id": "val-git-hash-02",
+        "description": "Hashed raw manifest into Git object database with git hash-object -w",
+        "type": "command_executed",
+        "commandSubstring": "git hash-object -w pod.yaml",
+        "remediation": "Run 'git hash-object -w pod.yaml' to compute the SHA-1 object hash and store it in .git/objects/."
+      },
+      {
+        "id": "val-git-commit-03",
+        "description": "Staged and committed manifest to main branch",
+        "type": "command_executed",
+        "commandSubstring": "git commit -m",
+        "remediation": "Run 'git add pod.yaml && git commit -m \"feat: initial pod manifest\"' to commit the manifest."
+      },
+      {
+        "id": "val-git-cat-04",
+        "description": "Inspected object database structure using git cat-file -p",
+        "type": "command_executed",
+        "commandSubstring": "git cat-file -p HEAD",
+        "remediation": "Run 'git cat-file -p HEAD' to inspect the tree and metadata of the commit object."
+      }
+    ],
+    "solutionCommands": [
+      "cd /home/learner && git init gitops-repo",
+      "cd /home/learner/gitops-repo && echo \"apiVersion: v1\" > pod.yaml",
+      "git hash-object -w pod.yaml",
+      "git add pod.yaml",
+      "git commit -m \"feat: initial pod manifest\"",
+      "git rev-parse HEAD",
+      "git cat-file -p HEAD"
+    ],
+    "troubleshootingGuide": "Ensure you initialize gitops-repo, hash pod.yaml with -w, commit changes, and inspect HEAD with git cat-file -p.",
+    "domainId": "git-fundamentals",
+    "domainTitle": "Git Internals, Content-Addressable Storage, DAG & History Rewriting"
+  },
+  {
+    "id": "lab-git-02-rebase-reflog-cherrypick",
+    "title": "Git Advanced Workflows: Cherry-Pick, Rebase, Bisect & Reflog Recovery",
+    "difficulty": "Beginner",
+    "durationMinutes": 25,
+    "xpReward": 150,
+    "scenario": "A critical security fix was committed to feature/auth that must be cherry-picked to main. Next, feature branches must be rebased onto main to maintain a clean linear GitOps history, regression commits must be traced using git bisect, and history movements must be audited using git reflog.",
+    "productionContext": "Advanced Git fluency is mandatory for GitOps platform teams handling hotfixes across production clusters, resolving merge conflicts, and maintaining audited change logs.",
+    "prerequisites": [
+      "lab-git-01-internals"
+    ],
+    "objectives": [
+      "Create branch feature/auth and commit an authentication fix",
+      "Cherry-pick the fix commit onto the main branch",
+      "Rebase feature branch changes onto main for linear history",
+      "Inspect HEAD movement history with git reflog and run git bisect session"
+    ],
+    "initialClusterState": {
+      "resources": []
+    },
+    "starterManifest": "",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Create Feature Branch and Commit Fix",
+        "instruction": "Initialize or navigate to `/home/learner/gitops-repo`, create branch `feature/auth`, switch to it, add `auth.yaml`, and commit with message `fix(sec): patch auth bypass`.",
+        "commandHint": "cd /home/learner && git init gitops-repo && cd gitops-repo && git branch feature/auth && git checkout feature/auth && echo \"security: hardened\" > auth.yaml && git add auth.yaml && git commit -m \"fix(sec): patch auth bypass\""
+      },
+      {
+        "stepNumber": 2,
+        "title": "Cherry-Pick Fix onto Main",
+        "instruction": "Switch back to `main` and cherry-pick the latest commit from `feature/auth`.",
+        "commandHint": "git checkout main && git cherry-pick feature/auth"
+      },
+      {
+        "stepNumber": 3,
+        "title": "Rebase onto Main",
+        "instruction": "Rebase changes onto `main` to preserve a linear history.",
+        "commandHint": "git rebase main"
+      },
+      {
+        "stepNumber": 4,
+        "title": "Audit History with Reflog and Bisect",
+        "instruction": "Inspect HEAD movements with `git reflog` and initialize a `git bisect` session.",
+        "commandHint": "git reflog && git bisect start && git bisect bad && git bisect reset"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "val-git-branch-01",
+        "description": "Created feature branch feature/auth for hotfix development",
+        "type": "command_executed",
+        "commandSubstring": "git branch feature/auth",
+        "remediation": "Run 'git branch feature/auth' to create the isolated development branch."
+      },
+      {
+        "id": "val-git-cherry-02",
+        "description": "Cherry-picked security commit onto main branch",
+        "type": "command_executed",
+        "commandSubstring": "git cherry-pick feature/auth",
+        "remediation": "Run 'git checkout main && git cherry-pick feature/auth' to graft the commit onto main."
+      },
+      {
+        "id": "val-git-rebase-03",
+        "description": "Rebased branch onto main to ensure linear GitOps history",
+        "type": "command_executed",
+        "commandSubstring": "git rebase main",
+        "remediation": "Run 'git rebase main' to replay commits onto current main branch."
+      },
+      {
+        "id": "val-git-reflog-04",
+        "description": "Audited HEAD reference movements using git reflog",
+        "type": "command_executed",
+        "commandSubstring": "git reflog",
+        "remediation": "Run 'git reflog' to inspect previous HEAD pointer history."
+      }
+    ],
+    "solutionCommands": [
+      "cd /home/learner && git init gitops-repo && cd gitops-repo",
+      "git branch feature/auth",
+      "git checkout feature/auth",
+      "echo \"security: hardened\" > auth.yaml",
+      "git add auth.yaml",
+      "git commit -m \"fix(sec): patch auth bypass\"",
+      "git checkout main",
+      "git cherry-pick feature/auth",
+      "git rebase main",
+      "git reflog",
+      "git bisect start",
+      "git bisect bad",
+      "git bisect reset"
+    ],
+    "troubleshootingGuide": "Ensure you create feature/auth, commit to it, cherry-pick to main, rebase main, and check git reflog.",
+    "domainId": "git-fundamentals",
+    "domainTitle": "Git Internals, Content-Addressable Storage, DAG & History Rewriting"
+  },
+  {
+    "id": "lab-docker-01-multistage-distroless",
+    "title": "Hardening Microservices with Multi-Stage Distroless Builds",
+    "difficulty": "Intermediate",
+    "durationMinutes": 20,
+    "xpReward": 150,
+    "scenario": "A security scan flagged severe vulnerabilities in an enterprise payment API running as root with full bash shells and package managers. You must create a multi-stage Dockerfile, build a hardened distroless image tagged 'payment-api:distroless', launch the container with exposed port 8080, and verify its non-root security context.",
+    "productionContext": "Distroless images strip shells, package managers, and standard utilities, preventing attackers from downloading tools or executing interactive shells during Remote Code Execution (RCE) incidents.",
+    "prerequisites": [
+      "lab-linux-01-permissions-streams"
+    ],
+    "objectives": [
+      "Create a multi-stage Dockerfile targeting gcr.io/distroless/static-debian12:nonroot",
+      "Build the hardened container image tagged payment-api:distroless",
+      "Run the container in detached mode named secure-api exposing port 8080",
+      "Inspect container configuration and verify non-root user execution"
+    ],
+    "initialClusterState": {
+      "resources": []
+    },
+    "starterManifest": "",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Create Multi-Stage Dockerfile",
+        "instruction": "Create a multi-stage `Dockerfile` with a Go builder stage and a final `gcr.io/distroless/static-debian12:nonroot` stage.",
+        "commandHint": "echo \"FROM golang:1.22-alpine AS builder\" > Dockerfile"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Build Distroless Container Image",
+        "instruction": "Build the container image and tag it as `payment-api:distroless`.",
+        "commandHint": "docker build -t payment-api:distroless ."
+      },
+      {
+        "stepNumber": 3,
+        "title": "Deploy Hardened Container",
+        "instruction": "Launch the container in detached mode named `secure-api` exposing port 8080.",
+        "commandHint": "docker run -d --name secure-api -p 8080:8080 payment-api:distroless"
+      },
+      {
+        "stepNumber": 4,
+        "title": "Verify Non-Root Execution Context",
+        "instruction": "Inspect the container's configuration using `docker inspect secure-api` to confirm user context.",
+        "commandHint": "docker inspect secure-api"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "val-docker-build-01",
+        "description": "Built hardened image payment-api:distroless via multi-stage Dockerfile",
+        "type": "command_executed",
+        "commandSubstring": "docker build -t payment-api:distroless",
+        "remediation": "Run 'docker build -t payment-api:distroless .' to build the image."
+      },
+      {
+        "id": "val-docker-run-02",
+        "description": "Started secure-api container with port mapping 8080:8080",
+        "type": "command_executed",
+        "commandSubstring": "docker run -d --name secure-api",
+        "remediation": "Run 'docker run -d --name secure-api -p 8080:8080 payment-api:distroless' to launch the container."
+      },
+      {
+        "id": "val-docker-inspect-03",
+        "description": "Inspected container metadata and verified non-root security context",
+        "type": "command_executed",
+        "commandSubstring": "docker inspect secure-api",
+        "remediation": "Run 'docker inspect secure-api' to audit container security context and user."
+      }
+    ],
+    "solutionCommands": [
+      "echo \"FROM golang:1.22-alpine AS builder\" > Dockerfile",
+      "docker build -t payment-api:distroless .",
+      "docker run -d --name secure-api -p 8080:8080 payment-api:distroless",
+      "docker inspect secure-api"
+    ],
+    "troubleshootingGuide": "Ensure you build the image tagged payment-api:distroless, run it named secure-api, and inspect it.",
+    "domainId": "docker-containers",
+    "domainTitle": "Docker & OCI Container Engineering"
+  },
+  {
+    "id": "lab-docker-02-overlayfs-storage",
+    "title": "OverlayFS Storage Driver, Layer Inspection & Garbage Collection",
+    "difficulty": "Intermediate",
+    "durationMinutes": 20,
+    "xpReward": 150,
+    "scenario": "High node disk utilization was reported on a container host. You must start a caching container, inspect its OverlayFS GraphDriver paths (LowerDir, UpperDir, MergedDir), analyze filesystem modifications made in the writable layer via docker diff, and prune dangling unused image layers.",
+    "productionContext": "Understanding OverlayFS copy-on-write overhead and container writable layer growth is critical to preventing root partition disk exhaustion in production container hosts.",
+    "prerequisites": [
+      "lab-docker-01-multistage-distroless"
+    ],
+    "objectives": [
+      "Launch redis cache container named cache-worker",
+      "Inspect container GraphDriver and OverlayFS directory paths",
+      "Inspect filesystem layer mutations using docker diff",
+      "Prune dangling image layers to reclaim host disk space"
+    ],
+    "initialClusterState": {
+      "resources": []
+    },
+    "starterManifest": "",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Launch Caching Container",
+        "instruction": "Run a Redis container named `cache-worker` on port 6379 in detached mode.",
+        "commandHint": "docker run -d --name cache-worker -p 6379:6379 redis:7.2-alpine"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Inspect OverlayFS GraphDriver",
+        "instruction": "Inspect `cache-worker` using `docker inspect` to view LowerDir, UpperDir, and MergedDir paths.",
+        "commandHint": "docker inspect cache-worker"
+      },
+      {
+        "stepNumber": 3,
+        "title": "Track Filesystem Layer Modifications",
+        "instruction": "Audit container filesystem layer writes and mutations with `docker diff cache-worker`.",
+        "commandHint": "docker diff cache-worker"
+      },
+      {
+        "stepNumber": 4,
+        "title": "Garbage Collect Dangling Images",
+        "instruction": "Reclaim host disk storage by pruning dangling unused image layers.",
+        "commandHint": "docker image prune -f"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "val-docker-run-cache",
+        "description": "Started cache-worker container with redis image",
+        "type": "command_executed",
+        "commandSubstring": "docker run -d --name cache-worker",
+        "remediation": "Run 'docker run -d --name cache-worker -p 6379:6379 redis:7.2-alpine' to start the cache worker."
+      },
+      {
+        "id": "val-docker-inspect-overlay",
+        "description": "Inspected container GraphDriver and OverlayFS storage paths",
+        "type": "command_executed",
+        "commandSubstring": "docker inspect cache-worker",
+        "remediation": "Run 'docker inspect cache-worker' to inspect the OverlayFS mount points."
+      },
+      {
+        "id": "val-docker-diff-layer",
+        "description": "Analyzed writable layer mutations with docker diff",
+        "type": "command_executed",
+        "commandSubstring": "docker diff cache-worker",
+        "remediation": "Run 'docker diff cache-worker' to inspect modified files."
+      },
+      {
+        "id": "val-docker-prune-gc",
+        "description": "Reclaimed disk space by pruning dangling image layers",
+        "type": "command_executed",
+        "commandSubstring": "docker image prune",
+        "remediation": "Run 'docker image prune -f' to remove unreferenced image layers."
+      }
+    ],
+    "solutionCommands": [
+      "docker run -d --name cache-worker -p 6379:6379 redis:7.2-alpine",
+      "docker inspect cache-worker",
+      "docker diff cache-worker",
+      "docker image prune -f"
+    ],
+    "troubleshootingGuide": "Ensure you launch cache-worker, inspect it, run docker diff cache-worker, and prune images.",
+    "domainId": "docker-containers",
+    "domainTitle": "Docker & OCI Container Engineering"
+  },
+  {
+    "id": "lab-cri-01-crictl-diagnostics",
+    "title": "Worker Node Pod Sandbox & Container Diagnostics with crictl",
+    "difficulty": "Intermediate",
+    "durationMinutes": 20,
+    "xpReward": 150,
+    "scenario": "A worker node lost apiserver connectivity, but workloads must be verified locally. Connect directly to the containerd CRI socket using crictl to inspect active Pod sandboxes, inspect container runtime metadata, examine CPU and memory consumption, and audit containerd runtime engine info.",
+    "productionContext": "In production SEV-1 incidents where the Kubernetes control plane is unreachable or etcd has lost quorum, SREs use crictl directly on worker nodes to diagnose node-level container failures.",
+    "prerequisites": [
+      "lab-docker-01-multistage-distroless"
+    ],
+    "objectives": [
+      "List all active Pod sandboxes on the node with crictl pods",
+      "List running containers across all sandboxes with crictl ps",
+      "Inspect container sandbox runtime details with crictl inspect",
+      "Query real-time resource utilization with crictl stats",
+      "Audit containerd CRI configuration and runtimes with crictl info"
+    ],
+    "initialClusterState": {
+      "resources": []
+    },
+    "starterManifest": "",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Query Active Pod Sandboxes",
+        "instruction": "Run `crictl pods` to inspect all active Pod sandboxes managed by containerd.",
+        "commandHint": "crictl pods"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Query Running Containers",
+        "instruction": "Run `crictl ps` to inspect all running containers and their parent Pod IDs.",
+        "commandHint": "crictl ps"
+      },
+      {
+        "stepNumber": 3,
+        "title": "Inspect Container Details",
+        "instruction": "Inspect container runtime details and sandbox metadata using `crictl inspect a1b2c3d4e5f6`.",
+        "commandHint": "crictl inspect a1b2c3d4e5f6"
+      },
+      {
+        "stepNumber": 4,
+        "title": "Audit Stats and Engine Configuration",
+        "instruction": "Audit CPU and memory utilization with `crictl stats` and containerd runtime configuration with `crictl info`.",
+        "commandHint": "crictl stats && crictl info"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "val-cri-pods-01",
+        "description": "Queried active Pod sandboxes on node using crictl pods",
+        "type": "command_executed",
+        "commandSubstring": "crictl pods",
+        "remediation": "Run 'crictl pods' to inspect running pod sandboxes."
+      },
+      {
+        "id": "val-cri-ps-02",
+        "description": "Queried active containers across sandboxes using crictl ps",
+        "type": "command_executed",
+        "commandSubstring": "crictl ps",
+        "remediation": "Run 'crictl ps' to list active containers."
+      },
+      {
+        "id": "val-cri-inspect-03",
+        "description": "Inspected container sandbox metadata using crictl inspect",
+        "type": "command_executed",
+        "commandSubstring": "crictl inspect",
+        "remediation": "Run 'crictl inspect a1b2c3d4e5f6' to view container status."
+      },
+      {
+        "id": "val-cri-stats-04",
+        "description": "Audited container runtime resource stats with crictl stats",
+        "type": "command_executed",
+        "commandSubstring": "crictl stats",
+        "remediation": "Run 'crictl stats' to view CPU and memory consumption."
+      },
+      {
+        "id": "val-cri-info-05",
+        "description": "Audited containerd runtime engine configuration with crictl info",
+        "type": "command_executed",
+        "commandSubstring": "crictl info",
+        "remediation": "Run 'crictl info' to inspect containerd runtime handler configurations."
+      }
+    ],
+    "solutionCommands": [
+      "crictl pods",
+      "crictl ps",
+      "crictl inspect a1b2c3d4e5f6",
+      "crictl stats",
+      "crictl info"
+    ],
+    "troubleshootingGuide": "Ensure you run crictl pods, crictl ps, crictl inspect a1b2c3d4e5f6, crictl stats, and crictl info.",
+    "domainId": "container-runtime-cri",
+    "domainTitle": "OCI Container Runtimes & CRI Architecture"
+  },
+  {
+    "id": "lab-cri-02-sandboxed-runtimes",
+    "title": "Securing Untrusted Workloads with gVisor Sandboxed RuntimeClass",
+    "difficulty": "Intermediate",
+    "durationMinutes": 20,
+    "xpReward": 150,
+    "scenario": "A multi-tenant SaaS application executes untrusted third-party user scripts. Running them with standard runc exposes the host kernel to privilege escalation. You must register a Kubernetes RuntimeClass named 'gvisor' using handler 'runsc' and deploy a hardened Pod 'untrusted-sandbox' referencing this runtime class.",
+    "productionContext": "Using sandboxed OCI runtimes (gVisor or Kata Containers) provides kernel-level fault isolation, guaranteeing that an untrusted workload breakout cannot compromise the host kernel.",
+    "prerequisites": [
+      "lab-cri-01-crictl-diagnostics"
+    ],
+    "objectives": [
+      "Verify containerd supports runsc sandbox via crictl info",
+      "Create and apply a Kubernetes RuntimeClass named gvisor with handler runsc",
+      "Deploy Pod untrusted-sandbox referencing runtimeClassName: gvisor",
+      "Verify pod status is Running under sandboxed isolation"
+    ],
+    "initialClusterState": {
+      "resources": []
+    },
+    "starterManifest": "apiVersion: node.k8s.io/v1\nkind: RuntimeClass\nmetadata:\n  name: gvisor\nhandler: runsc",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Audit containerd Runtime Handlers",
+        "instruction": "Audit containerd runtime configuration to verify `runsc` is available.",
+        "commandHint": "crictl info"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Register RuntimeClass for gVisor",
+        "instruction": "Apply the RuntimeClass manifest registering `gvisor` with handler `runsc`.",
+        "commandHint": "cat <<EOF | kubectl apply -f -\napiVersion: node.k8s.io/v1\nkind: RuntimeClass\nmetadata:\n  name: gvisor\nhandler: runsc\nEOF"
+      },
+      {
+        "stepNumber": 3,
+        "title": "Deploy Sandboxed Pod",
+        "instruction": "Deploy Pod `untrusted-sandbox` with `runtimeClassName: gvisor` in namespace `default`.",
+        "commandHint": "cat <<EOF | kubectl apply -f -\napiVersion: v1\nkind: Pod\nmetadata:\n  name: untrusted-sandbox\n  namespace: default\nspec:\n  runtimeClassName: gvisor\n  containers:\n  - name: sandbox-app\n    image: nginx:1.27-alpine\nEOF"
+      },
+      {
+        "stepNumber": 4,
+        "title": "Verify Running Status",
+        "instruction": "Verify that `untrusted-sandbox` entered the `Running` phase under gVisor isolation.",
+        "commandHint": "kubectl get pod untrusted-sandbox"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "val-cri-info-check",
+        "description": "Verified containerd runtime handlers via crictl info",
+        "type": "command_executed",
+        "commandSubstring": "crictl info",
+        "remediation": "Run 'crictl info' to verify containerd runtime configuration."
+      },
+      {
+        "id": "val-rc-exists",
+        "description": "Registered RuntimeClass gvisor with handler runsc",
+        "type": "resource_exists",
+        "kind": "RuntimeClass",
+        "name": "gvisor",
+        "remediation": "Apply a RuntimeClass manifest with name 'gvisor' and handler 'runsc'."
+      },
+      {
+        "id": "val-pod-exists",
+        "description": "Created Pod untrusted-sandbox referencing RuntimeClass gvisor",
+        "type": "resource_exists",
+        "kind": "Pod",
+        "name": "untrusted-sandbox",
+        "namespace": "default",
+        "remediation": "Deploy Pod 'untrusted-sandbox' in namespace 'default'."
+      },
+      {
+        "id": "val-pod-running",
+        "description": "Pod untrusted-sandbox successfully reconciled and entered Running phase",
+        "type": "pod_status_running",
+        "name": "untrusted-sandbox",
+        "namespace": "default",
+        "remediation": "Ensure Pod 'untrusted-sandbox' has valid container specs and enters Running status."
+      }
+    ],
+    "solutionCommands": [
+      "crictl info",
+      "cat <<EOF | kubectl apply -f -\napiVersion: node.k8s.io/v1\nkind: RuntimeClass\nmetadata:\n  name: gvisor\nhandler: runsc\nEOF",
+      "cat <<EOF | kubectl apply -f -\napiVersion: v1\nkind: Pod\nmetadata:\n  name: untrusted-sandbox\n  namespace: default\nspec:\n  runtimeClassName: gvisor\n  containers:\n  - name: sandbox-app\n    image: nginx:1.27-alpine\nEOF",
+      "kubectl get pod untrusted-sandbox"
+    ],
+    "troubleshootingGuide": "Verify RuntimeClass gvisor with handler runsc is created and pod untrusted-sandbox has runtimeClassName: gvisor and enters Running phase.",
+    "domainId": "container-runtime-cri",
+    "domainTitle": "OCI Container Runtimes & CRI Architecture"
+  },
+  {
+    "id": "lab-helm-01-chart-templating",
+    "title": "Authoring Modular Helm Charts with Helpers & Go Templates",
+    "difficulty": "Intermediate",
+    "durationMinutes": 20,
+    "xpReward": 150,
+    "scenario": "Platform engineering requires packaging an internal billing service into a standardized Helm chart with configurable replicas, port bindings, and standard _helpers.tpl labels. Scaffold the chart, validate it with helm lint, render manifests locally with helm template, and package it into an archive.",
+    "productionContext": "Standardizing microservice deployments into parameterized Helm charts eliminates manual YAML copy-pasting, enforces consistent labels, and enables automated GitOps deployments.",
+    "prerequisites": [
+      "lab-docker-01-multistage-distroless"
+    ],
+    "objectives": [
+      "Scaffold new chart billing-service using helm create",
+      "Lint chart to verify structure and syntax using helm lint",
+      "Render templates locally using helm template billing-release",
+      "Package the validated chart into a .tgz archive using helm package"
+    ],
+    "initialClusterState": {
+      "resources": [],
+      "helmReleases": []
+    },
+    "starterManifest": "",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Scaffold New Helm Chart",
+        "instruction": "Scaffold a new chart structure named `billing-service` using `helm create`.",
+        "commandHint": "helm create billing-service"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Lint Chart Structure and Syntax",
+        "instruction": "Validate chart YAML formatting, keys, and values with `helm lint billing-service`.",
+        "commandHint": "helm lint billing-service"
+      },
+      {
+        "stepNumber": 3,
+        "title": "Render Templates Locally",
+        "instruction": "Render all Kubernetes manifests locally without cluster deployment using `helm template`.",
+        "commandHint": "helm template billing-release billing-service"
+      },
+      {
+        "stepNumber": 4,
+        "title": "Package Chart into Distribution Archive",
+        "instruction": "Package the chart into a `.tgz` distribution archive with `helm package billing-service`.",
+        "commandHint": "helm package billing-service"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "val-helm-create-01",
+        "description": "Scaffolded billing-service Helm chart structure",
+        "type": "command_executed",
+        "commandSubstring": "helm create billing-service",
+        "remediation": "Run 'helm create billing-service' to generate standard chart templates."
+      },
+      {
+        "id": "val-helm-lint-02",
+        "description": "Linted chart templates and values syntax with helm lint",
+        "type": "command_executed",
+        "commandSubstring": "helm lint billing-service",
+        "remediation": "Run 'helm lint billing-service' to verify chart syntax."
+      },
+      {
+        "id": "val-helm-template-03",
+        "description": "Rendered manifest templates with helm template",
+        "type": "command_executed",
+        "commandSubstring": "helm template billing-release billing-service",
+        "remediation": "Run 'helm template billing-release billing-service' to render manifests."
+      },
+      {
+        "id": "val-helm-package-04",
+        "description": "Packaged chart into tarball archive with helm package",
+        "type": "command_executed",
+        "commandSubstring": "helm package billing-service",
+        "remediation": "Run 'helm package billing-service' to create the release package."
+      }
+    ],
+    "solutionCommands": [
+      "helm create billing-service",
+      "helm lint billing-service",
+      "helm template billing-release billing-service",
+      "helm package billing-service"
+    ],
+    "troubleshootingGuide": "Ensure you run helm create billing-service, helm lint billing-service, helm template billing-release billing-service, and helm package billing-service.",
+    "domainId": "helm-packaging",
+    "domainTitle": "Helm v3 Application Packaging & Release Lifecycle"
+  },
+  {
+    "id": "lab-helm-02-lifecycle-rollback-test",
+    "title": "Helm Release Lifecycle: Atomic Upgrades, Helm Test & Rollbacks",
+    "difficulty": "Intermediate",
+    "durationMinutes": 20,
+    "xpReward": 175,
+    "scenario": "Deploy the 'orders-api' release to the 'production' namespace. Execute integration verification using helm test, trigger an upgraded revision with --atomic, inspect release revision history, and perform a rollback to revision 1 upon simulated regression.",
+    "productionContext": "Helm standardizes enterprise microservice releases with atomic upgrades, automated smoke test validation, and instant zero-downtime rollback.",
+    "prerequisites": [
+      "lab-helm-01-chart-templating"
+    ],
+    "objectives": [
+      "Install release orders-api in namespace production with chart bitnami/nginx",
+      "Execute automated release verification with helm test orders-api",
+      "Upgrade release orders-api to revision 2 using helm upgrade",
+      "Inspect release revision history with helm history orders-api",
+      "Roll back release to revision 1 with helm rollback orders-api 1"
+    ],
+    "initialClusterState": {
+      "resources": [],
+      "helmReleases": []
+    },
+    "starterManifest": "# Helm Values Override\nreplicaCount: 2\nimage:\n  repository: nginx\n  tag: 1.27-alpine",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Install Orders API Release",
+        "instruction": "Deploy release `orders-api` in namespace `production` using chart `bitnami/nginx`.",
+        "commandHint": "helm install orders-api bitnami/nginx -n production"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Run Integration Smoke Tests",
+        "instruction": "Verify release functionality and service connectivity using `helm test`.",
+        "commandHint": "helm test orders-api -n production"
+      },
+      {
+        "stepNumber": 3,
+        "title": "Upgrade Release to Revision 2",
+        "instruction": "Apply an upgrade to `orders-api` in `production`.",
+        "commandHint": "helm upgrade orders-api bitnami/nginx -n production"
+      },
+      {
+        "stepNumber": 4,
+        "title": "Inspect Release Revision History",
+        "instruction": "Inspect revision history and status with `helm history orders-api -n production`.",
+        "commandHint": "helm history orders-api -n production"
+      },
+      {
+        "stepNumber": 5,
+        "title": "Roll Back to Previous Stable Revision",
+        "instruction": "Roll back release `orders-api` to revision 1.",
+        "commandHint": "helm rollback orders-api 1 -n production"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "val-helm-deploy-01",
+        "description": "Installed release orders-api in production namespace",
+        "type": "helm_release_deployed",
+        "name": "orders-api",
+        "namespace": "production",
+        "remediation": "Run 'helm install orders-api bitnami/nginx -n production' to deploy the release."
+      },
+      {
+        "id": "val-helm-test-02",
+        "description": "Executed automated test suite with helm test",
+        "type": "command_executed",
+        "commandSubstring": "helm test orders-api",
+        "remediation": "Run 'helm test orders-api -n production' to execute release test pods."
+      },
+      {
+        "id": "val-helm-upgrade-03",
+        "description": "Upgraded release to revision 2 with helm upgrade",
+        "type": "command_executed",
+        "commandSubstring": "helm upgrade orders-api",
+        "remediation": "Run 'helm upgrade orders-api bitnami/nginx -n production' to upgrade the release."
+      },
+      {
+        "id": "val-helm-history-04",
+        "description": "Audited release revisions with helm history",
+        "type": "command_executed",
+        "commandSubstring": "helm history orders-api",
+        "remediation": "Run 'helm history orders-api -n production' to inspect revision log."
+      },
+      {
+        "id": "val-helm-rollback-05",
+        "description": "Rolled back release to revision 1 with helm rollback",
+        "type": "command_executed",
+        "commandSubstring": "helm rollback orders-api 1",
+        "remediation": "Run 'helm rollback orders-api 1 -n production' to restore revision 1."
+      }
+    ],
+    "solutionCommands": [
+      "helm install orders-api bitnami/nginx -n production",
+      "helm test orders-api -n production",
+      "helm upgrade orders-api bitnami/nginx -n production",
+      "helm history orders-api -n production",
+      "helm rollback orders-api 1 -n production"
+    ],
+    "troubleshootingGuide": "Ensure you install orders-api in production, run helm test, upgrade, inspect helm history, and roll back to revision 1.",
+    "domainId": "helm-packaging",
+    "domainTitle": "Helm v3 Application Packaging & Release Lifecycle"
+  },
+  {
+    "id": "lab-kust-01-overlays-patching",
+    "title": "Multi-Environment Overlay Architecture & Strategic Merge Patches",
+    "difficulty": "Intermediate",
+    "durationMinutes": 20,
+    "xpReward": 150,
+    "scenario": "A payments microservice needs separate configurations for staging and production without template duplication. Create a base directory with deployment and service manifests, construct a production overlay that applies namePrefix, namespace 'production', commonLabels, and a strategic merge patch setting replicas to 3, and deploy using kubectl apply -k.",
+    "productionContext": "Kustomize overlays allow platform teams to promote workloads across dev, staging, and production clusters with strict GitOps traceability and zero template engine overhead.",
+    "prerequisites": [
+      "lab-helm-01-chart-templating"
+    ],
+    "objectives": [
+      "Create base Kubernetes manifests and base kustomization.yaml",
+      "Construct production overlay with namespace, namePrefix, and replica patch",
+      "Render composite manifests using kustomize build overlays/production",
+      "Deploy the production overlay with kubectl apply -k overlays/production"
+    ],
+    "initialClusterState": {
+      "resources": []
+    },
+    "starterManifest": "",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Scaffold Base Infrastructure",
+        "instruction": "Create directory `base/` with `deployment.yaml` and `kustomization.yaml`.",
+        "commandHint": "mkdir -p base && echo -e \"apiVersion: apps/v1\\nkind: Deployment\\nmetadata:\\n  name: payments-api\\nspec:\\n  replicas: 1\\n  selector:\\n    matchLabels:\\n      app: payments-api\\n  template:\\n    metadata:\\n      labels:\\n        app: payments-api\\n    spec:\\n      containers:\\n      - name: api\\n        image: nginx:1.27-alpine\" > base/deployment.yaml && echo -e \"resources:\\n- deployment.yaml\" > base/kustomization.yaml"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Create Production Overlay with Strategic Patch",
+        "instruction": "Create `overlays/production/` with a patch scaling replicas to 3 and setting namespace to `production`.",
+        "commandHint": "mkdir -p overlays/production && echo -e \"resources:\\n- ../../base\\nnamespace: production\\nnamePrefix: prod-\\ncommonLabels:\\n  env: production\\npatchesStrategicMerge:\\n- patch-replicas.yaml\" > overlays/production/kustomization.yaml && echo -e \"apiVersion: apps/v1\\nkind: Deployment\\nmetadata:\\n  name: payments-api\\nspec:\\n  replicas: 3\" > overlays/production/patch-replicas.yaml"
+      },
+      {
+        "stepNumber": 3,
+        "title": "Build and Inspect Rendered Output",
+        "instruction": "Render the composite production manifests using `kustomize build overlays/production`.",
+        "commandHint": "kustomize build overlays/production"
+      },
+      {
+        "stepNumber": 4,
+        "title": "Apply Overlay to Cluster",
+        "instruction": "Deploy the rendered production workload using `kubectl apply -k overlays/production`.",
+        "commandHint": "kubectl apply -k overlays/production"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "val-kust-build-01",
+        "description": "Rendered production overlay manifests via kustomize build",
+        "type": "command_executed",
+        "commandSubstring": "kustomize build overlays/production",
+        "remediation": "Run 'kustomize build overlays/production' to verify output YAML."
+      },
+      {
+        "id": "val-kust-apply-02",
+        "description": "Applied production overlay to cluster via kubectl apply -k",
+        "type": "command_executed",
+        "commandSubstring": "kubectl apply -k overlays/production",
+        "remediation": "Run 'kubectl apply -k overlays/production' to deploy manifests."
+      },
+      {
+        "id": "val-kust-dep-exists",
+        "description": "Deployed prod-payments-api Deployment in production namespace",
+        "type": "resource_exists",
+        "kind": "Deployment",
+        "name": "prod-payments-api",
+        "namespace": "production",
+        "remediation": "Ensure prod-payments-api Deployment exists in production namespace."
+      },
+      {
+        "id": "val-kust-replicas-03",
+        "description": "Verified production strategic merge patch scaled replicas to 3",
+        "type": "resource_field_equals",
+        "kind": "Deployment",
+        "name": "prod-payments-api",
+        "namespace": "production",
+        "fieldPath": "spec.replicas",
+        "expectedValue": 3,
+        "remediation": "Ensure patch-replicas.yaml sets spec.replicas to 3."
+      }
+    ],
+    "solutionCommands": [
+      "mkdir -p base && echo -e \"apiVersion: apps/v1\\nkind: Deployment\\nmetadata:\\n  name: payments-api\\nspec:\\n  replicas: 1\\n  selector:\\n    matchLabels:\\n      app: payments-api\\n  template:\\n    metadata:\\n      labels:\\n        app: payments-api\\n    spec:\\n      containers:\\n      - name: api\\n        image: nginx:1.27-alpine\" > base/deployment.yaml && echo -e \"resources:\\n- deployment.yaml\" > base/kustomization.yaml",
+      "mkdir -p overlays/production && echo -e \"resources:\\n- ../../base\\nnamespace: production\\nnamePrefix: prod-\\ncommonLabels:\\n  env: production\\npatchesStrategicMerge:\\n- patch-replicas.yaml\" > overlays/production/kustomization.yaml && echo -e \"apiVersion: apps/v1\\nkind: Deployment\\nmetadata:\\n  name: payments-api\\nspec:\\n  replicas: 3\" > overlays/production/patch-replicas.yaml",
+      "kustomize build overlays/production",
+      "kubectl apply -k overlays/production"
+    ],
+    "troubleshootingGuide": "Ensure base/ and overlays/production/ are created with patch-replicas.yaml scaling replicas to 3, and deploy with kubectl apply -k overlays/production.",
+    "domainId": "kustomize-manifests",
+    "domainTitle": "Kustomize Declarative Configuration Management"
+  },
+  {
+    "id": "lab-kust-02-generators-jsonpatch",
+    "title": "ConfigMap Generators, Secret Generators & Rollout Synchronization",
+    "difficulty": "Intermediate",
+    "durationMinutes": 20,
+    "xpReward": 150,
+    "scenario": "To prevent stale configuration bugs, application configuration must be injected via Kustomize configMapGenerator and secretGenerator. Create a kustomization file defining configMapGenerator for 'api-config' with environment variables and secretGenerator for 'api-secrets', build with kustomize, and apply with kubectl apply -k.",
+    "productionContext": "Generated ConfigMaps with SHA-256 hash suffixes prevent race conditions during updates and guarantee that pods always bind to the exact configuration version they were deployed with.",
+    "prerequisites": [
+      "lab-kust-01-overlays-patching"
+    ],
+    "objectives": [
+      "Create kustomization with configMapGenerator and secretGenerator",
+      "Inspect generated content-hash resource names with kustomize build",
+      "Apply generators to cluster using kubectl apply -k .",
+      "Verify ConfigMap with content-hash suffix is created in cluster"
+    ],
+    "initialClusterState": {
+      "resources": []
+    },
+    "starterManifest": "",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Configure ConfigMap and Secret Generators",
+        "instruction": "Create `kustomization.yaml` defining `configMapGenerator` and `secretGenerator` with literals.",
+        "commandHint": "echo -e \"apiVersion: kustomize.config.k8s.io/v1beta1\\nkind: Kustomization\\nconfigMapGenerator:\\n- name: api-config\\n  literals:\\n  - ENV=production\\n  - LOG_LEVEL=info\\nsecretGenerator:\\n- name: api-secrets\\n  literals:\\n  - DB_PASSWORD=SuperSecretPass123!\" > kustomization.yaml"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Render Generated Manifests with Content Hashes",
+        "instruction": "Verify that `api-config` and `api-secrets` receive unique 10-character hash suffixes using `kustomize build .`.",
+        "commandHint": "kustomize build ."
+      },
+      {
+        "stepNumber": 3,
+        "title": "Deploy Generated Resources",
+        "instruction": "Apply the generated configuration to the cluster with `kubectl apply -k .`.",
+        "commandHint": "kubectl apply -k ."
+      },
+      {
+        "stepNumber": 4,
+        "title": "Inspect ConfigMap in Cluster",
+        "instruction": "Verify the generated ConfigMap exists using `kubectl get configmap api-config-7m8f9b2c4k`.",
+        "commandHint": "kubectl get configmap api-config-7m8f9b2c4k"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "val-kust-build-gen",
+        "description": "Rendered content-hashed ConfigMap and Secret via kustomize build",
+        "type": "command_executed",
+        "commandSubstring": "kustomize build",
+        "remediation": "Run 'kustomize build .' to generate hashed manifests."
+      },
+      {
+        "id": "val-kust-apply-gen",
+        "description": "Applied generated resources to cluster via kubectl apply -k",
+        "type": "command_executed",
+        "commandSubstring": "kubectl apply -k",
+        "remediation": "Run 'kubectl apply -k .' to create the generated resources."
+      },
+      {
+        "id": "val-kust-cm-exists",
+        "description": "Verified content-hashed ConfigMap api-config-7m8f9b2c4k exists in cluster",
+        "type": "resource_exists",
+        "kind": "ConfigMap",
+        "name": "api-config-7m8f9b2c4k",
+        "namespace": "default",
+        "remediation": "Ensure configMapGenerator creates api-config-7m8f9b2c4k."
+      },
+      {
+        "id": "val-kust-sec-exists",
+        "description": "Verified content-hashed Secret api-secrets-4d9a1b2e3f exists in cluster",
+        "type": "resource_exists",
+        "kind": "Secret",
+        "name": "api-secrets-4d9a1b2e3f",
+        "namespace": "default",
+        "remediation": "Ensure secretGenerator creates api-secrets-4d9a1b2e3f."
+      }
+    ],
+    "solutionCommands": [
+      "echo -e \"apiVersion: kustomize.config.k8s.io/v1beta1\\nkind: Kustomization\\nconfigMapGenerator:\\n- name: api-config\\n  literals:\\n  - ENV=production\\n  - LOG_LEVEL=info\\nsecretGenerator:\\n- name: api-secrets\\n  literals:\\n  - DB_PASSWORD=SuperSecretPass123!\" > kustomization.yaml",
+      "kustomize build .",
+      "kubectl apply -k .",
+      "kubectl get configmap api-config-7m8f9b2c4k"
+    ],
+    "troubleshootingGuide": "Ensure you configure configMapGenerator and secretGenerator, render with kustomize build ., and deploy with kubectl apply -k ..",
+    "domainId": "kustomize-manifests",
+    "domainTitle": "Kustomize Declarative Configuration Management"
+  },
+  {
+    "id": "lab-k8s-01-ha-deployments",
+    "title": "Deploying High-Availability Microservices with Zero-Downtime Rollouts",
+    "difficulty": "Intermediate",
+    "durationMinutes": 20,
+    "xpReward": 150,
+    "scenario": "Deploy the payments-api microservice in namespace core-production with 3 replicas for multi-zone fault tolerance, expose it via a ClusterIP Service on port 8080, and verify rolling update status.",
+    "productionContext": "High-availability services in production require multiple replicas spread across nodes, coupled with health probes and backing Services to maintain zero dropped requests.",
+    "prerequisites": [
+      "lab-kust-01-overlays-patching"
+    ],
+    "objectives": [
+      "Create core-production namespace for workload isolation",
+      "Deploy payments-api with 3 replicas using image nginx:1.27-alpine",
+      "Expose payments-api on port 8080 via ClusterIP Service",
+      "Verify rollout status reaches complete state"
+    ],
+    "initialClusterState": {
+      "resources": []
+    },
+    "starterManifest": "",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Create Core Production Namespace",
+        "instruction": "Create namespace `core-production` using `kubectl create namespace core-production`.",
+        "commandHint": "kubectl create namespace core-production"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Deploy Multi-Replica Workload",
+        "instruction": "Deploy `payments-api` with 3 replicas in `core-production`.",
+        "commandHint": "kubectl create deployment payments-api --image=nginx:1.27-alpine -n core-production --replicas=3"
+      },
+      {
+        "stepNumber": 3,
+        "title": "Expose Workload as ClusterIP Service",
+        "instruction": "Expose `payments-api` on port 8080 mapping to target port 80.",
+        "commandHint": "kubectl expose deployment payments-api --port=8080 --target-port=80 -n core-production"
+      },
+      {
+        "stepNumber": 4,
+        "title": "Verify Rollout Status",
+        "instruction": "Verify the deployment rollout completed successfully.",
+        "commandHint": "kubectl rollout status deployment/payments-api -n core-production"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "val-k8s-ns-prod",
+        "description": "Created core-production namespace for workload isolation",
+        "type": "resource_exists",
+        "kind": "Namespace",
+        "name": "core-production",
+        "remediation": "Run 'kubectl create namespace core-production' to create the namespace."
+      },
+      {
+        "id": "val-k8s-dep-prod",
+        "description": "Deployed payments-api Deployment in core-production namespace",
+        "type": "resource_exists",
+        "kind": "Deployment",
+        "name": "payments-api",
+        "namespace": "core-production",
+        "remediation": "Run 'kubectl create deployment payments-api --image=nginx:1.27-alpine -n core-production --replicas=3'."
+      },
+      {
+        "id": "val-k8s-replicas-3",
+        "description": "Verified payments-api has at least 3 replicas configured",
+        "type": "replica_count_min",
+        "kind": "Deployment",
+        "name": "payments-api",
+        "namespace": "core-production",
+        "expectedValue": 3,
+        "remediation": "Run 'kubectl scale deployment payments-api --replicas=3 -n core-production'."
+      },
+      {
+        "id": "val-k8s-svc-prod",
+        "description": "Exposed payments-api via Service in core-production namespace",
+        "type": "resource_exists",
+        "kind": "Service",
+        "name": "payments-api",
+        "namespace": "core-production",
+        "remediation": "Run 'kubectl expose deployment payments-api --port=8080 --target-port=80 -n core-production'."
+      }
+    ],
+    "solutionCommands": [
+      "kubectl create namespace core-production",
+      "kubectl create deployment payments-api --image=nginx:1.27-alpine -n core-production --replicas=3",
+      "kubectl expose deployment payments-api --port=8080 --target-port=80 -n core-production",
+      "kubectl rollout status deployment/payments-api -n core-production"
+    ],
+    "troubleshootingGuide": "Ensure you create namespace core-production, deploy payments-api with 3 replicas, expose it on port 8080, and verify rollout status.",
+    "domainId": "kubernetes-core-v4",
+    "domainTitle": "Kubernetes Core Architecture, Control Plane & RBAC"
+  },
+  {
+    "id": "lab-k8s-02-rbac-least-privilege",
+    "title": "Least-Privilege RBAC: ServiceAccount, Role, RoleBinding & Authorization Audit",
+    "difficulty": "Intermediate",
+    "durationMinutes": 20,
+    "xpReward": 175,
+    "scenario": "Security compliance mandates restricting automated CI/CD access. Provision a dedicated ServiceAccount deploy-bot in namespace staging, grant it scoped permissions to read pods and deployments via Role pod-reader, bind them using RoleBinding deploy-bot-binding, and audit permissions using kubectl auth can-i.",
+    "productionContext": "Least-privilege RBAC minimizes blast radius in multi-tenant clusters, preventing compromised automation credentials from performing unauthorized mutations or cluster-wide escalations.",
+    "prerequisites": [
+      "lab-k8s-01-ha-deployments"
+    ],
+    "objectives": [
+      "Create namespace staging for isolated environment",
+      "Provision ServiceAccount deploy-bot in namespace staging",
+      "Create Role pod-reader granting get, list, and watch on pods and deployments",
+      "Bind deploy-bot to pod-reader using RoleBinding deploy-bot-binding",
+      "Audit permissions using kubectl auth can-i"
+    ],
+    "initialClusterState": {
+      "resources": []
+    },
+    "starterManifest": "",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Create Staging Namespace",
+        "instruction": "Create namespace `staging` using `kubectl create namespace staging`.",
+        "commandHint": "kubectl create namespace staging"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Create Dedicated ServiceAccount",
+        "instruction": "Provision ServiceAccount `deploy-bot` in `staging`.",
+        "commandHint": "kubectl create serviceaccount deploy-bot -n staging"
+      },
+      {
+        "stepNumber": 3,
+        "title": "Create Scoped RBAC Role",
+        "instruction": "Create Role `pod-reader` granting `get`, `list`, and `watch` verbs on `pods` and `deployments`.",
+        "commandHint": "kubectl create role pod-reader --verb=get,list,watch --resource=pods,deployments -n staging"
+      },
+      {
+        "stepNumber": 4,
+        "title": "Bind ServiceAccount to Role",
+        "instruction": "Create RoleBinding `deploy-bot-binding` binding `deploy-bot` to `pod-reader` in `staging`.",
+        "commandHint": "kubectl create rolebinding deploy-bot-binding --role=pod-reader --serviceaccount=staging:deploy-bot -n staging"
+      },
+      {
+        "stepNumber": 5,
+        "title": "Audit Authorized Permissions",
+        "instruction": "Verify that `deploy-bot` is authorized to get pods using `kubectl auth can-i`.",
+        "commandHint": "kubectl auth can-i get pods --as=system:serviceaccount:staging:deploy-bot -n staging"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "val-k8s-sa-bot",
+        "description": "Created ServiceAccount deploy-bot in staging namespace",
+        "type": "resource_exists",
+        "kind": "ServiceAccount",
+        "name": "deploy-bot",
+        "namespace": "staging",
+        "remediation": "Run 'kubectl create serviceaccount deploy-bot -n staging'."
+      },
+      {
+        "id": "val-k8s-role-reader",
+        "description": "Created scoped RBAC Role pod-reader in staging namespace",
+        "type": "resource_exists",
+        "kind": "Role",
+        "name": "pod-reader",
+        "namespace": "staging",
+        "remediation": "Run 'kubectl create role pod-reader --verb=get,list,watch --resource=pods,deployments -n staging'."
+      },
+      {
+        "id": "val-k8s-rb-binding",
+        "description": "Bound deploy-bot to pod-reader via RoleBinding deploy-bot-binding",
+        "type": "resource_exists",
+        "kind": "RoleBinding",
+        "name": "deploy-bot-binding",
+        "namespace": "staging",
+        "remediation": "Run 'kubectl create rolebinding deploy-bot-binding --role=pod-reader --serviceaccount=staging:deploy-bot -n staging'."
+      },
+      {
+        "id": "val-k8s-auth-audit",
+        "description": "Audited authorization permissions with kubectl auth can-i",
+        "type": "command_executed",
+        "commandSubstring": "kubectl auth can-i get pods",
+        "remediation": "Run 'kubectl auth can-i get pods --as=system:serviceaccount:staging:deploy-bot -n staging' to verify RBAC."
+      }
+    ],
+    "solutionCommands": [
+      "kubectl create namespace staging",
+      "kubectl create serviceaccount deploy-bot -n staging",
+      "kubectl create role pod-reader --verb=get,list,watch --resource=pods,deployments -n staging",
+      "kubectl create rolebinding deploy-bot-binding --role=pod-reader --serviceaccount=staging:deploy-bot -n staging",
+      "kubectl auth can-i get pods --as=system:serviceaccount:staging:deploy-bot -n staging"
+    ],
+    "troubleshootingGuide": "Ensure namespace staging, ServiceAccount deploy-bot, Role pod-reader, and RoleBinding deploy-bot-binding exist, and verify with kubectl auth can-i.",
+    "domainId": "kubernetes-core-v4",
+    "domainTitle": "Kubernetes Core Architecture, Control Plane & RBAC"
+  },
+  {
+    "id": "lab-ckad-01-multicontainer-sidecar",
+    "title": "Multi-Container Pod Patterns: InitContainer Preconditions & Log-Processing Sidecars",
+    "difficulty": "Intermediate",
+    "durationMinutes": 20,
+    "xpReward": 150,
+    "scenario": "Configure an order processing microservice in namespace ecommerce requiring data preparation before the core application starts, alongside a log-processing sidecar container streaming events to a shared volume.",
+    "productionContext": "Enterprise production workloads frequently separate cross-cutting concerns (data pre-fetching, log aggregation, TLS termination) into distinct helper containers within the same Pod boundary.",
+    "prerequisites": [
+      "lab-k8s-01-ha-deployments"
+    ],
+    "objectives": [
+      "Create namespace ecommerce for isolated commerce workloads",
+      "Define Pod order-processor with initContainer init-data and shared emptyDir volume",
+      "Add primary container app and sidecar container log-shipper mounted to the shared volume",
+      "Apply Pod manifest and verify Running phase in namespace ecommerce"
+    ],
+    "initialClusterState": {
+      "resources": []
+    },
+    "starterManifest": "",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Create Commerce Namespace",
+        "instruction": "Create namespace `ecommerce` using `kubectl create namespace ecommerce`.",
+        "commandHint": "kubectl create namespace ecommerce"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Generate Multi-Container Manifest",
+        "instruction": "Create `/home/learner/order-processor.yaml` defining Pod `order-processor` with initContainer `init-data` and containers `app` and `log-shipper`.",
+        "commandHint": "echo -e \"...\" > /home/learner/order-processor.yaml"
+      },
+      {
+        "stepNumber": 3,
+        "title": "Apply Multi-Container Pod",
+        "instruction": "Deploy the Pod using `kubectl apply -f /home/learner/order-processor.yaml`.",
+        "commandHint": "kubectl apply -f /home/learner/order-processor.yaml"
+      },
+      {
+        "stepNumber": 4,
+        "title": "Inspect Running Pod",
+        "instruction": "Verify that Pod `order-processor` is in `Running` state.",
+        "commandHint": "kubectl get pod order-processor -n ecommerce"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "val-ckad-ns-ecommerce",
+        "description": "Created ecommerce namespace for commerce workloads",
+        "type": "resource_exists",
+        "kind": "Namespace",
+        "name": "ecommerce",
+        "remediation": "Run 'kubectl create namespace ecommerce'."
+      },
+      {
+        "id": "val-ckad-pod-exists",
+        "description": "Created order-processor Pod in ecommerce namespace",
+        "type": "resource_exists",
+        "kind": "Pod",
+        "name": "order-processor",
+        "namespace": "ecommerce",
+        "remediation": "Apply the pod manifest containing order-processor in namespace ecommerce."
+      },
+      {
+        "id": "val-ckad-init-container",
+        "description": "Configured initContainer init-data for data pre-population",
+        "type": "resource_field_contains",
+        "kind": "Pod",
+        "name": "order-processor",
+        "namespace": "ecommerce",
+        "fieldPath": "spec.initContainers",
+        "expectedValue": "init-data",
+        "remediation": "Add initContainer named init-data in spec.initContainers."
+      },
+      {
+        "id": "val-ckad-sidecar-container",
+        "description": "Configured sidecar container log-shipper for log processing",
+        "type": "resource_field_contains",
+        "kind": "Pod",
+        "name": "order-processor",
+        "namespace": "ecommerce",
+        "fieldPath": "spec.containers",
+        "expectedValue": "log-shipper",
+        "remediation": "Add container named log-shipper to spec.containers."
+      },
+      {
+        "id": "val-ckad-pod-running",
+        "description": "Verified order-processor Pod reaches Running phase",
+        "type": "pod_status_running",
+        "name": "order-processor",
+        "namespace": "ecommerce",
+        "remediation": "Ensure all containers in Pod order-processor start successfully."
+      }
+    ],
+    "solutionCommands": [
+      "kubectl create namespace ecommerce",
+      "echo -e \"apiVersion: v1\\nkind: Pod\\nmetadata:\\n  name: order-processor\\n  namespace: ecommerce\\nspec:\\n  initContainers:\\n  - name: init-data\\n    image: busybox:1.36\\n  containers:\\n  - name: app\\n    image: nginx:1.27-alpine\\n  - name: log-shipper\\n    image: busybox:1.36\" > /home/learner/order-processor.yaml",
+      "kubectl apply -f /home/learner/order-processor.yaml",
+      "kubectl get pod order-processor -n ecommerce"
+    ],
+    "troubleshootingGuide": "Ensure namespace ecommerce exists, verify order-processor.yaml contains both init-data and log-shipper containers, and apply via kubectl apply -f.",
+    "domainId": "ckad-developer",
+    "domainTitle": "Certified Kubernetes Application Developer (CKAD) Workloads & Patterns"
+  },
+  {
+    "id": "lab-ckad-02-probes-cronjobs",
+    "title": "Container Health Probes & Scheduled Batch Automations",
+    "difficulty": "Intermediate",
+    "durationMinutes": 20,
+    "xpReward": 175,
+    "scenario": "Deploy an inventory management API with HTTP liveness and readiness health checks, and configure a scheduled inventory synchronization CronJob executing every 5 minutes in namespace logistics.",
+    "productionContext": "Production Kubernetes services rely on health probes for automatic healing and traffic gating, paired with CronJobs for scheduled data synchronization and periodic maintenance tasks.",
+    "prerequisites": [
+      "lab-ckad-01-multicontainer-sidecar"
+    ],
+    "objectives": [
+      "Create namespace logistics for inventory workloads",
+      "Deploy inventory-api with HTTP liveness and readiness health probes",
+      "Schedule recurring CronJob inventory-sync executing every 5 minutes",
+      "Execute a one-off batch Job inventory-manual-sync to verify immediate execution"
+    ],
+    "initialClusterState": {
+      "resources": []
+    },
+    "starterManifest": "",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Create Logistics Namespace",
+        "instruction": "Create namespace `logistics` using `kubectl create namespace logistics`.",
+        "commandHint": "kubectl create namespace logistics"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Author Deployment Manifest with Probes",
+        "instruction": "Create `/home/learner/inventory-api.yaml` with liveness probe on `/healthz` and readiness probe on `/ready`.",
+        "commandHint": "echo -e \"...\" > /home/learner/inventory-api.yaml"
+      },
+      {
+        "stepNumber": 3,
+        "title": "Deploy API Workload",
+        "instruction": "Apply the Deployment manifest using `kubectl apply -f /home/learner/inventory-api.yaml`.",
+        "commandHint": "kubectl apply -f /home/learner/inventory-api.yaml"
+      },
+      {
+        "stepNumber": 4,
+        "title": "Create Scheduled CronJob",
+        "instruction": "Create CronJob `inventory-sync` scheduled every 5 minutes in `logistics`.",
+        "commandHint": "kubectl create cronjob inventory-sync --image=busybox:1.36 -n logistics"
+      },
+      {
+        "stepNumber": 5,
+        "title": "Create One-Off Batch Job",
+        "instruction": "Execute an immediate batch job `inventory-manual-sync` in `logistics`.",
+        "commandHint": "kubectl create job inventory-manual-sync --image=busybox:1.36 -n logistics"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "val-ckad-ns-logistics",
+        "description": "Created logistics namespace for inventory workloads",
+        "type": "resource_exists",
+        "kind": "Namespace",
+        "name": "logistics",
+        "remediation": "Run 'kubectl create namespace logistics'."
+      },
+      {
+        "id": "val-ckad-dep-inventory",
+        "description": "Deployed inventory-api Deployment in logistics namespace",
+        "type": "resource_exists",
+        "kind": "Deployment",
+        "name": "inventory-api",
+        "namespace": "logistics",
+        "remediation": "Apply the inventory-api Deployment in namespace logistics."
+      },
+      {
+        "id": "val-ckad-liveness-probe",
+        "description": "Configured HTTP livenessProbe on inventory-api container",
+        "type": "resource_field_contains",
+        "kind": "Deployment",
+        "name": "inventory-api",
+        "namespace": "logistics",
+        "fieldPath": "spec.template.spec.containers",
+        "expectedValue": "livenessProbe",
+        "remediation": "Configure livenessProbe in spec.template.spec.containers[0]."
+      },
+      {
+        "id": "val-ckad-readiness-probe",
+        "description": "Configured HTTP readinessProbe on inventory-api container",
+        "type": "resource_field_contains",
+        "kind": "Deployment",
+        "name": "inventory-api",
+        "namespace": "logistics",
+        "fieldPath": "spec.template.spec.containers",
+        "expectedValue": "readinessProbe",
+        "remediation": "Configure readinessProbe in spec.template.spec.containers[0]."
+      },
+      {
+        "id": "val-ckad-cronjob-sync",
+        "description": "Created recurring CronJob inventory-sync in logistics namespace",
+        "type": "resource_exists",
+        "kind": "CronJob",
+        "name": "inventory-sync",
+        "namespace": "logistics",
+        "remediation": "Run 'kubectl create cronjob inventory-sync --image=busybox:1.36 -n logistics'."
+      },
+      {
+        "id": "val-ckad-job-manual",
+        "description": "Created batch Job inventory-manual-sync in logistics namespace",
+        "type": "resource_exists",
+        "kind": "Job",
+        "name": "inventory-manual-sync",
+        "namespace": "logistics",
+        "remediation": "Run 'kubectl create job inventory-manual-sync --image=busybox:1.36 -n logistics'."
+      }
+    ],
+    "solutionCommands": [
+      "kubectl create namespace logistics",
+      "echo -e \"apiVersion: apps/v1\\nkind: Deployment\\nmetadata:\\n  name: inventory-api\\n  namespace: logistics\\nspec:\\n  replicas: 2\\n  selector:\\n    matchLabels:\\n      app: inventory-api\\n  template:\\n    metadata:\\n      labels:\\n        app: inventory-api\\n    spec:\\n      containers:\\n      - name: inventory-api\\n        image: nginx:1.27-alpine\\n        livenessProbe:\\n          httpGet:\\n            path: /healthz\\n            port: 80\\n          initialDelaySeconds: 5\\n          periodSeconds: 10\\n        readinessProbe:\\n          httpGet:\\n            path: /ready\\n            port: 80\\n          initialDelaySeconds: 2\\n          periodSeconds: 5\" > /home/learner/inventory-api.yaml",
+      "kubectl apply -f /home/learner/inventory-api.yaml",
+      "kubectl create cronjob inventory-sync --image=busybox:1.36 -n logistics",
+      "kubectl create job inventory-manual-sync --image=busybox:1.36 -n logistics"
+    ],
+    "troubleshootingGuide": "Ensure namespace logistics exists, apply deployment with liveness and readiness probes, and create CronJob inventory-sync and Job inventory-manual-sync.",
+    "domainId": "ckad-developer",
+    "domainTitle": "Certified Kubernetes Application Developer (CKAD) Workloads & Patterns"
+  },
+  {
+    "id": "lab-cka-01-node-maintenance",
+    "title": "Zero-Downtime Worker Node Maintenance: Cordon, Drain & Taints",
+    "difficulty": "Intermediate",
+    "durationMinutes": 20,
+    "xpReward": 150,
+    "scenario": "Perform an operational maintenance drill on worker node kubelabs-worker-01: cordon the node to stop new pod scheduling, safely drain existing workloads while ignoring DaemonSets, apply a maintenance taint dedicated=special:NoSchedule, and uncordon the node after maintenance completes.",
+    "productionContext": "Operating Kubernetes in production requires executing kernel patches and hardware upgrades without interrupting customer traffic, requiring safe eviction and node cordoning workflows.",
+    "prerequisites": [
+      "lab-k8s-01-ha-deployments"
+    ],
+    "objectives": [
+      "Cordon worker node kubelabs-worker-01 to mark it unschedulable",
+      "Drain existing workloads safely with --ignore-daemonsets",
+      "Apply maintenance taint dedicated=special:NoSchedule",
+      "Uncordon worker node to resume normal scheduling"
+    ],
+    "initialClusterState": {
+      "resources": []
+    },
+    "starterManifest": "",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Cordon Worker Node",
+        "instruction": "Mark `kubelabs-worker-01` unschedulable using `kubectl cordon kubelabs-worker-01`.",
+        "commandHint": "kubectl cordon kubelabs-worker-01"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Drain Workloads Safely",
+        "instruction": "Evict pods from `kubelabs-worker-01` ignoring DaemonSet pods.",
+        "commandHint": "kubectl drain kubelabs-worker-01 --ignore-daemonsets"
+      },
+      {
+        "stepNumber": 3,
+        "title": "Apply Maintenance Taint",
+        "instruction": "Apply taint `dedicated=special:NoSchedule` to `kubelabs-worker-01`.",
+        "commandHint": "kubectl taint nodes kubelabs-worker-01 dedicated=special:NoSchedule"
+      },
+      {
+        "stepNumber": 4,
+        "title": "Uncordon Worker Node",
+        "instruction": "Mark `kubelabs-worker-01` schedulable again using `kubectl uncordon kubelabs-worker-01`.",
+        "commandHint": "kubectl uncordon kubelabs-worker-01"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "val-cka-cordon-exec",
+        "description": "Executed kubectl cordon on kubelabs-worker-01",
+        "type": "command_executed",
+        "commandSubstring": "kubectl cordon kubelabs-worker-01",
+        "remediation": "Run 'kubectl cordon kubelabs-worker-01'."
+      },
+      {
+        "id": "val-cka-drain-exec",
+        "description": "Executed kubectl drain on kubelabs-worker-01",
+        "type": "command_executed",
+        "commandSubstring": "kubectl drain kubelabs-worker-01",
+        "remediation": "Run 'kubectl drain kubelabs-worker-01 --ignore-daemonsets'."
+      },
+      {
+        "id": "val-cka-node-tainted",
+        "description": "Applied dedicated=special:NoSchedule taint to worker node",
+        "type": "resource_field_contains",
+        "kind": "Node",
+        "name": "kubelabs-worker-01",
+        "fieldPath": "spec.taints",
+        "expectedValue": "dedicated",
+        "remediation": "Run 'kubectl taint nodes kubelabs-worker-01 dedicated=special:NoSchedule'."
+      },
+      {
+        "id": "val-cka-node-uncordoned",
+        "description": "Uncordoned kubelabs-worker-01 restoring schedulable status",
+        "type": "resource_field_equals",
+        "kind": "Node",
+        "name": "kubelabs-worker-01",
+        "fieldPath": "spec.unschedulable",
+        "expectedValue": false,
+        "remediation": "Run 'kubectl uncordon kubelabs-worker-01'."
+      }
+    ],
+    "solutionCommands": [
+      "kubectl cordon kubelabs-worker-01",
+      "kubectl drain kubelabs-worker-01 --ignore-daemonsets",
+      "kubectl taint nodes kubelabs-worker-01 dedicated=special:NoSchedule",
+      "kubectl uncordon kubelabs-worker-01"
+    ],
+    "troubleshootingGuide": "Cordon the node, drain with --ignore-daemonsets, apply taint dedicated=special:NoSchedule, and uncordon the node.",
+    "domainId": "cka-administrator",
+    "domainTitle": "Certified Kubernetes Administrator (CKA) Cluster Operations & Maintenance"
+  },
+  {
+    "id": "lab-cka-02-etcd-dr-kubeadm",
+    "title": "Cluster Disaster Recovery & Kubeadm Control-Plane Lifecycle",
+    "difficulty": "Intermediate",
+    "durationMinutes": 20,
+    "xpReward": 175,
+    "scenario": "Execute a critical disaster recovery snapshot of the etcd datastore before planning and applying a control-plane upgrade to v1.32.0 using kubeadm.",
+    "productionContext": "Taking a verified etcd snapshot before executing kubeadm control-plane upgrades is a non-negotiable CKA operational best practice that guarantees cluster rollback capability.",
+    "prerequisites": [
+      "lab-cka-01-node-maintenance"
+    ],
+    "objectives": [
+      "Save etcd point-in-time snapshot to /var/lib/etcd/backup.db",
+      "Inspect and verify snapshot status using etcdctl",
+      "Generate control-plane upgrade plan using kubeadm upgrade plan",
+      "Apply control plane upgrade to version v1.32.0"
+    ],
+    "initialClusterState": {
+      "resources": []
+    },
+    "starterManifest": "",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Save Etcd Snapshot",
+        "instruction": "Create an atomic backup using `etcdctl snapshot save /var/lib/etcd/backup.db`.",
+        "commandHint": "etcdctl snapshot save /var/lib/etcd/backup.db"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Verify Snapshot Integrity",
+        "instruction": "Inspect snapshot metadata using `etcdctl snapshot status /var/lib/etcd/backup.db`.",
+        "commandHint": "etcdctl snapshot status /var/lib/etcd/backup.db"
+      },
+      {
+        "stepNumber": 3,
+        "title": "Plan Control Plane Upgrade",
+        "instruction": "Check component upgrade availability using `kubeadm upgrade plan`.",
+        "commandHint": "kubeadm upgrade plan"
+      },
+      {
+        "stepNumber": 4,
+        "title": "Apply Control Plane Upgrade",
+        "instruction": "Upgrade control plane components using `kubeadm upgrade apply v1.32.0`.",
+        "commandHint": "kubeadm upgrade apply v1.32.0"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "val-cka-etcd-save",
+        "description": "Saved etcd point-in-time snapshot to /var/lib/etcd/backup.db",
+        "type": "command_executed",
+        "commandSubstring": "etcdctl snapshot save",
+        "remediation": "Run 'etcdctl snapshot save /var/lib/etcd/backup.db'."
+      },
+      {
+        "id": "val-cka-etcd-status",
+        "description": "Verified etcd snapshot status and hash integrity",
+        "type": "command_executed",
+        "commandSubstring": "etcdctl snapshot status",
+        "remediation": "Run 'etcdctl snapshot status /var/lib/etcd/backup.db'."
+      },
+      {
+        "id": "val-cka-kubeadm-plan",
+        "description": "Generated kubeadm control plane upgrade plan",
+        "type": "command_executed",
+        "commandSubstring": "kubeadm upgrade plan",
+        "remediation": "Run 'kubeadm upgrade plan'."
+      },
+      {
+        "id": "val-cka-kubeadm-apply",
+        "description": "Applied control plane upgrade to v1.32.0",
+        "type": "command_executed",
+        "commandSubstring": "kubeadm upgrade apply",
+        "remediation": "Run 'kubeadm upgrade apply v1.32.0'."
+      }
+    ],
+    "solutionCommands": [
+      "etcdctl snapshot save /var/lib/etcd/backup.db",
+      "etcdctl snapshot status /var/lib/etcd/backup.db",
+      "kubeadm upgrade plan",
+      "kubeadm upgrade apply v1.32.0"
+    ],
+    "troubleshootingGuide": "Run etcdctl snapshot save followed by etcdctl snapshot status, then run kubeadm upgrade plan and kubeadm upgrade apply v1.32.0.",
+    "domainId": "cka-administrator",
+    "domainTitle": "Certified Kubernetes Administrator (CKA) Cluster Operations & Maintenance"
+  },
+  {
+    "id": "lab-k8snet-01-cni-services-dns",
+    "title": "Service Discovery Architecture: ClusterIP, Headless & CoreDNS Endpoints",
+    "difficulty": "Intermediate",
+    "durationMinutes": 20,
+    "xpReward": 150,
+    "scenario": "Provision a distributed cache cluster in namespace net-discovery: deploy a 2-replica cache-api deployment, expose it via a standard ClusterIP Service on port 6379, configure a headless Service cache-headless for direct pod discovery, and verify endpoint slice readiness.",
+    "productionContext": "Stateful and distributed microservices require both virtual IP load-balanced endpoints (ClusterIP) for client queries and headless DNS SRV discovery for peer clustering.",
+    "prerequisites": [
+      "lab-k8s-01-ha-deployments"
+    ],
+    "objectives": [
+      "Create namespace net-discovery for network workloads",
+      "Deploy cache-api with 2 replicas using image redis:7-alpine",
+      "Expose cache-api via ClusterIP Service on port 6379",
+      "Configure headless Service cache-headless with clusterIP None",
+      "Verify service endpoints are populated with healthy pod IPs"
+    ],
+    "initialClusterState": {
+      "resources": []
+    },
+    "starterManifest": "",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Create Discovery Namespace",
+        "instruction": "Create namespace `net-discovery` using `kubectl create namespace net-discovery`.",
+        "commandHint": "kubectl create namespace net-discovery"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Deploy Multi-Replica Cache",
+        "instruction": "Deploy `cache-api` with 2 replicas in `net-discovery`.",
+        "commandHint": "kubectl create deployment cache-api --image=redis:7-alpine -n net-discovery --replicas=2"
+      },
+      {
+        "stepNumber": 3,
+        "title": "Expose Workload via ClusterIP Service",
+        "instruction": "Expose `cache-api` on port 6379.",
+        "commandHint": "kubectl expose deployment cache-api --port=6379 --target-port=6379 -n net-discovery"
+      },
+      {
+        "stepNumber": 4,
+        "title": "Author Headless Service Manifest",
+        "instruction": "Create `/home/learner/cache-headless.yaml` with `clusterIP: None`.",
+        "commandHint": "echo -e \"...\" > /home/learner/cache-headless.yaml && kubectl apply -f /home/learner/cache-headless.yaml"
+      },
+      {
+        "stepNumber": 5,
+        "title": "Inspect Service Endpoints",
+        "instruction": "Verify that `cache-api` endpoints are populated with ready pod IPs.",
+        "commandHint": "kubectl get endpoints cache-api -n net-discovery"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "val-net-ns-discovery",
+        "description": "Created net-discovery namespace for network workloads",
+        "type": "resource_exists",
+        "kind": "Namespace",
+        "name": "net-discovery",
+        "remediation": "Run 'kubectl create namespace net-discovery'."
+      },
+      {
+        "id": "val-net-dep-cache",
+        "description": "Deployed cache-api Deployment in net-discovery namespace",
+        "type": "resource_exists",
+        "kind": "Deployment",
+        "name": "cache-api",
+        "namespace": "net-discovery",
+        "remediation": "Run 'kubectl create deployment cache-api --image=redis:7-alpine -n net-discovery --replicas=2'."
+      },
+      {
+        "id": "val-net-svc-cache",
+        "description": "Exposed cache-api via ClusterIP Service",
+        "type": "resource_exists",
+        "kind": "Service",
+        "name": "cache-api",
+        "namespace": "net-discovery",
+        "remediation": "Run 'kubectl expose deployment cache-api --port=6379 --target-port=6379 -n net-discovery'."
+      },
+      {
+        "id": "val-net-ep-ready",
+        "description": "Verified Service cache-api has at least 2 ready endpoints",
+        "type": "service_has_endpoints",
+        "name": "cache-api",
+        "namespace": "net-discovery",
+        "expectedValue": 2,
+        "remediation": "Ensure both cache-api pods are Running and matching Service selector."
+      },
+      {
+        "id": "val-net-svc-headless",
+        "description": "Configured headless Service cache-headless with clusterIP None",
+        "type": "resource_field_equals",
+        "kind": "Service",
+        "name": "cache-headless",
+        "namespace": "net-discovery",
+        "fieldPath": "spec.clusterIP",
+        "expectedValue": "None",
+        "remediation": "Apply Service cache-headless with spec.clusterIP: None."
+      }
+    ],
+    "solutionCommands": [
+      "kubectl create namespace net-discovery",
+      "kubectl create deployment cache-api --image=redis:7-alpine -n net-discovery --replicas=2",
+      "kubectl expose deployment cache-api --port=6379 --target-port=6379 -n net-discovery",
+      "echo -e \"apiVersion: v1\\nkind: Service\\nmetadata:\\n  name: cache-headless\\n  namespace: net-discovery\\nspec:\\n  clusterIP: None\\n  selector:\\n    app: cache-api\\n  ports:\\n  - port: 6379\\n    targetPort: 6379\" > /home/learner/cache-headless.yaml",
+      "kubectl apply -f /home/learner/cache-headless.yaml",
+      "kubectl get endpoints cache-api -n net-discovery"
+    ],
+    "troubleshootingGuide": "Verify namespace net-discovery exists, cache-api deployment has 2 replicas, standard Service cache-api has endpoints, and cache-headless has clusterIP None.",
+    "domainId": "k8s-networking",
+    "domainTitle": "Kubernetes Networking: CNI, Services, Ingress & Gateway API"
+  },
+  {
+    "id": "lab-k8snet-02-networkpolicy-gateway",
+    "title": "Zero-Trust NetworkPolicies & Modern Gateway API Route Filtering",
+    "difficulty": "Intermediate",
+    "durationMinutes": 20,
+    "xpReward": 175,
+    "scenario": "Harden namespace net-policy with a default-deny ingress NetworkPolicy, permit authorized ingress traffic on port 80 to checkout-api pods, and configure a modern Gateway API HTTPRoute routing /checkout traffic through edge-gateway.",
+    "productionContext": "Zero-trust compliance mandates denying all lateral East-West traffic by default, while modern North-South ingress utilizes declarative Gateway API HTTPRoutes instead of legacy Ingress annotations.",
+    "prerequisites": [
+      "lab-k8snet-01-cni-services-dns"
+    ],
+    "objectives": [
+      "Create namespace net-policy for secured workloads",
+      "Deploy checkout-api with 2 replicas in net-policy",
+      "Apply default-deny ingress NetworkPolicy default-deny-ingress",
+      "Apply allow-checkout-ingress NetworkPolicy permitting port 80 traffic",
+      "Deploy Gateway API HTTPRoute checkout-route routing /checkout prefix"
+    ],
+    "initialClusterState": {
+      "resources": []
+    },
+    "starterManifest": "",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Create Policy Namespace",
+        "instruction": "Create namespace `net-policy` using `kubectl create namespace net-policy`.",
+        "commandHint": "kubectl create namespace net-policy"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Deploy Target Workload",
+        "instruction": "Deploy `checkout-api` with 2 replicas in `net-policy`.",
+        "commandHint": "kubectl create deployment checkout-api --image=nginx:1.27-alpine -n net-policy --replicas=2"
+      },
+      {
+        "stepNumber": 3,
+        "title": "Enforce Default-Deny Ingress",
+        "instruction": "Create `/home/learner/default-deny.yaml` with default-deny ingress policy and apply it.",
+        "commandHint": "echo -e \"...\" > /home/learner/default-deny.yaml && kubectl apply -f /home/learner/default-deny.yaml"
+      },
+      {
+        "stepNumber": 4,
+        "title": "Whitelist Authorized Ingress Port",
+        "instruction": "Create `/home/learner/allow-checkout.yaml` allowing TCP port 80 to `checkout-api` pods.",
+        "commandHint": "echo -e \"...\" > /home/learner/allow-checkout.yaml && kubectl apply -f /home/learner/allow-checkout.yaml"
+      },
+      {
+        "stepNumber": 5,
+        "title": "Configure Gateway API Route",
+        "instruction": "Create `/home/learner/checkout-route.yaml` routing `/checkout` prefix and apply it.",
+        "commandHint": "echo -e \"...\" > /home/learner/checkout-route.yaml && kubectl apply -f /home/learner/checkout-route.yaml"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "val-net-ns-policy",
+        "description": "Created net-policy namespace for policy workloads",
+        "type": "resource_exists",
+        "kind": "Namespace",
+        "name": "net-policy",
+        "remediation": "Run 'kubectl create namespace net-policy'."
+      },
+      {
+        "id": "val-net-dep-checkout",
+        "description": "Deployed checkout-api in net-policy namespace",
+        "type": "resource_exists",
+        "kind": "Deployment",
+        "name": "checkout-api",
+        "namespace": "net-policy",
+        "remediation": "Run 'kubectl create deployment checkout-api --image=nginx:1.27-alpine -n net-policy --replicas=2'."
+      },
+      {
+        "id": "val-net-np-deny",
+        "description": "Configured default-deny ingress NetworkPolicy",
+        "type": "resource_exists",
+        "kind": "NetworkPolicy",
+        "name": "default-deny-ingress",
+        "namespace": "net-policy",
+        "remediation": "Apply NetworkPolicy default-deny-ingress in namespace net-policy."
+      },
+      {
+        "id": "val-net-np-allow",
+        "description": "Whitelisted port 80 ingress on checkout-api pods",
+        "type": "resource_field_contains",
+        "kind": "NetworkPolicy",
+        "name": "allow-checkout-ingress",
+        "namespace": "net-policy",
+        "fieldPath": "spec.ingress",
+        "expectedValue": "80",
+        "remediation": "Configure NetworkPolicy allow-checkout-ingress with ingress port 80."
+      },
+      {
+        "id": "val-net-route-exists",
+        "description": "Created modern Gateway API HTTPRoute checkout-route",
+        "type": "resource_exists",
+        "kind": "HTTPRoute",
+        "name": "checkout-route",
+        "namespace": "net-policy",
+        "remediation": "Apply HTTPRoute checkout-route in namespace net-policy."
+      },
+      {
+        "id": "val-net-route-prefix",
+        "description": "Configured PathPrefix /checkout on checkout-route",
+        "type": "resource_field_contains",
+        "kind": "HTTPRoute",
+        "name": "checkout-route",
+        "namespace": "net-policy",
+        "fieldPath": "spec.rules",
+        "expectedValue": "/checkout",
+        "remediation": "Set rule match path to /checkout in checkout-route."
+      }
+    ],
+    "solutionCommands": [
+      "kubectl create namespace net-policy",
+      "kubectl create deployment checkout-api --image=nginx:1.27-alpine -n net-policy --replicas=2",
+      "echo -e \"apiVersion: networking.k8s.io/v1\\nkind: NetworkPolicy\\nmetadata:\\n  name: default-deny-ingress\\n  namespace: net-policy\\nspec:\\n  podSelector: {}\\n  policyTypes:\\n  - Ingress\" > /home/learner/default-deny.yaml",
+      "kubectl apply -f /home/learner/default-deny.yaml",
+      "echo -e \"apiVersion: networking.k8s.io/v1\\nkind: NetworkPolicy\\nmetadata:\\n  name: allow-checkout-ingress\\n  namespace: net-policy\\nspec:\\n  podSelector:\\n    matchLabels:\\n      app: checkout-api\\n  policyTypes:\\n  - Ingress\\n  ingress:\\n  - ports:\\n    - protocol: TCP\\n      port: 80\" > /home/learner/allow-checkout.yaml",
+      "kubectl apply -f /home/learner/allow-checkout.yaml",
+      "echo -e \"apiVersion: gateway.networking.k8s.io/v1\\nkind: HTTPRoute\\nmetadata:\\n  name: checkout-route\\n  namespace: net-policy\\nspec:\\n  parentRefs:\\n  - name: edge-gateway\\n  rules:\\n  - matches:\\n    - path:\\n        type: PathPrefix\\n        value: /checkout\\n    backendRefs:\\n    - name: checkout-api\\n      port: 80\" > /home/learner/checkout-route.yaml",
+      "kubectl apply -f /home/learner/checkout-route.yaml"
+    ],
+    "troubleshootingGuide": "Ensure namespace net-policy exists, default-deny and allow-checkout NetworkPolicies are applied, and checkout-route HTTPRoute matches /checkout.",
+    "domainId": "k8s-networking",
+    "domainTitle": "Kubernetes Networking: CNI, Services, Ingress & Gateway API"
+  },
+  {
+    "id": "lab-storage-01-sc-pvc-pv",
+    "title": "Dynamic Storage Provisioning: StorageClass, PVC & Pod Mounts",
+    "difficulty": "Intermediate",
+    "durationMinutes": 20,
+    "xpReward": 150,
+    "scenario": "Create a custom StorageClass fast-nvme configured with volumeBindingMode: WaitForFirstConsumer, define a 10Gi PersistentVolumeClaim data-volume in namespace storage-workloads, and mount the volume into a batch processing Pod data-writer at /mnt/data.",
+    "productionContext": "Dynamic volume provisioning automates cloud block storage creation upon PVC submission, eliminating manual administrator provisioning tickets.",
+    "prerequisites": [
+      "lab-k8s-01-ha-deployments"
+    ],
+    "objectives": [
+      "Create cluster-scoped StorageClass fast-nvme with WaitForFirstConsumer binding",
+      "Create namespace storage-workloads",
+      "Provision 10Gi PersistentVolumeClaim data-volume in storage-workloads",
+      "Deploy Pod data-writer mounting data-volume to /mnt/data",
+      "Verify Pod reaches Running status with mounted storage"
+    ],
+    "initialClusterState": {
+      "resources": []
+    },
+    "starterManifest": "",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Create StorageClass",
+        "instruction": "Create `/home/learner/storageclass.yaml` defining StorageClass `fast-nvme` with `volumeBindingMode: WaitForFirstConsumer`.",
+        "commandHint": "echo -e \"...\" > /home/learner/storageclass.yaml && kubectl apply -f /home/learner/storageclass.yaml"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Create Workload Namespace",
+        "instruction": "Create namespace `storage-workloads`.",
+        "commandHint": "kubectl create namespace storage-workloads"
+      },
+      {
+        "stepNumber": 3,
+        "title": "Provision PersistentVolumeClaim",
+        "instruction": "Create `/home/learner/pvc.yaml` requesting 10Gi with StorageClass `fast-nvme`.",
+        "commandHint": "echo -e \"...\" > /home/learner/pvc.yaml && kubectl apply -f /home/learner/pvc.yaml"
+      },
+      {
+        "stepNumber": 4,
+        "title": "Mount Storage into Pod",
+        "instruction": "Create `/home/learner/pod-writer.yaml` mounting `data-volume` at `/mnt/data`.",
+        "commandHint": "echo -e \"...\" > /home/learner/pod-writer.yaml && kubectl apply -f /home/learner/pod-writer.yaml"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "val-store-sc-exists",
+        "description": "Created cluster-scoped StorageClass fast-nvme",
+        "type": "resource_exists",
+        "kind": "StorageClass",
+        "name": "fast-nvme",
+        "remediation": "Apply StorageClass fast-nvme."
+      },
+      {
+        "id": "val-store-sc-binding",
+        "description": "Configured volumeBindingMode WaitForFirstConsumer on StorageClass",
+        "type": "resource_field_equals",
+        "kind": "StorageClass",
+        "name": "fast-nvme",
+        "fieldPath": "volumeBindingMode",
+        "expectedValue": "WaitForFirstConsumer",
+        "remediation": "Set volumeBindingMode: WaitForFirstConsumer in StorageClass fast-nvme."
+      },
+      {
+        "id": "val-store-ns-workloads",
+        "description": "Created storage-workloads namespace",
+        "type": "resource_exists",
+        "kind": "Namespace",
+        "name": "storage-workloads",
+        "remediation": "Run 'kubectl create namespace storage-workloads'."
+      },
+      {
+        "id": "val-store-pvc-exists",
+        "description": "Created PersistentVolumeClaim data-volume in storage-workloads",
+        "type": "resource_exists",
+        "kind": "PersistentVolumeClaim",
+        "name": "data-volume",
+        "namespace": "storage-workloads",
+        "remediation": "Apply PersistentVolumeClaim data-volume in namespace storage-workloads."
+      },
+      {
+        "id": "val-store-pod-vol",
+        "description": "Mounted data-volume into Pod data-writer volumes",
+        "type": "resource_field_contains",
+        "kind": "Pod",
+        "name": "data-writer",
+        "namespace": "storage-workloads",
+        "fieldPath": "spec.volumes",
+        "expectedValue": "data-volume",
+        "remediation": "Attach persistentVolumeClaim data-volume in spec.volumes of Pod data-writer."
+      },
+      {
+        "id": "val-store-pod-running",
+        "description": "Verified Pod data-writer reaches Running status",
+        "type": "pod_status_running",
+        "name": "data-writer",
+        "namespace": "storage-workloads",
+        "remediation": "Ensure Pod data-writer starts successfully."
+      }
+    ],
+    "solutionCommands": [
+      "echo -e \"apiVersion: storage.k8s.io/v1\\nkind: StorageClass\\nmetadata:\\n  name: fast-nvme\\nprovisioner: kubernetes.io/no-provisioner\\nvolumeBindingMode: WaitForFirstConsumer\" > /home/learner/storageclass.yaml",
+      "kubectl apply -f /home/learner/storageclass.yaml",
+      "kubectl create namespace storage-workloads",
+      "echo -e \"apiVersion: v1\\nkind: PersistentVolumeClaim\\nmetadata:\\n  name: data-volume\\n  namespace: storage-workloads\\nspec:\\n  accessModes:\\n  - ReadWriteOnce\\n  storageClassName: fast-nvme\\n  resources:\\n    requests:\\n      storage: 10Gi\" > /home/learner/pvc.yaml",
+      "kubectl apply -f /home/learner/pvc.yaml",
+      "echo -e \"apiVersion: v1\\nkind: Pod\\nmetadata:\\n  name: data-writer\\n  namespace: storage-workloads\\nspec:\\n  containers:\\n  - name: writer\\n    image: busybox:1.36\\n    command: [\\\"sh\\\", \\\"-c\\\", \\\"sleep 3600\\\"]\\n    volumeMounts:\\n    - name: storage\\n      mountPath: /mnt/data\\n  volumes:\\n  - name: storage\\n    persistentVolumeClaim:\\n      claimName: data-volume\" > /home/learner/pod-writer.yaml",
+      "kubectl apply -f /home/learner/pod-writer.yaml"
+    ],
+    "troubleshootingGuide": "Ensure StorageClass fast-nvme has volumeBindingMode WaitForFirstConsumer, PVC data-volume exists in storage-workloads, and Pod data-writer mounts it.",
+    "domainId": "k8s-storage",
+    "domainTitle": "Kubernetes Storage: CSI, StorageClasses, PVCs & StatefulSets"
+  },
+  {
+    "id": "lab-storage-02-statefulset-volume-claims",
+    "title": "Stateful Workloads: StatefulSet with Ordinal VolumeClaimTemplates",
+    "difficulty": "Intermediate",
+    "durationMinutes": 20,
+    "xpReward": 175,
+    "scenario": "Deploy an HA distributed database cluster redis-cluster in namespace stateful-apps using a StatefulSet with 3 replicas, a headless Service redis-headless, and volumeClaimTemplates requesting 5Gi storage per ordinal pod.",
+    "productionContext": "StatefulSets paired with volumeClaimTemplates guarantee that each replica possesses dedicated persistent storage that automatically rebinds across pod rescheduling and rolling updates.",
+    "prerequisites": [
+      "lab-storage-01-sc-pvc-pv"
+    ],
+    "objectives": [
+      "Create namespace stateful-apps for stateful workloads",
+      "Create headless Service redis-headless with clusterIP None",
+      "Deploy StatefulSet redis-cluster with 3 replicas",
+      "Configure volumeClaimTemplates requesting 5Gi ReadWriteOnce storage",
+      "Verify all 3 ordinal pods (redis-cluster-0, 1, 2) reach Running status"
+    ],
+    "initialClusterState": {
+      "resources": []
+    },
+    "starterManifest": "",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Create Stateful Namespace",
+        "instruction": "Create namespace `stateful-apps` using `kubectl create namespace stateful-apps`.",
+        "commandHint": "kubectl create namespace stateful-apps"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Create Headless Service",
+        "instruction": "Create `/home/learner/redis-headless.yaml` with `clusterIP: None`.",
+        "commandHint": "echo -e \"...\" > /home/learner/redis-headless.yaml && kubectl apply -f /home/learner/redis-headless.yaml"
+      },
+      {
+        "stepNumber": 3,
+        "title": "Author StatefulSet Manifest",
+        "instruction": "Create `/home/learner/redis-statefulset.yaml` with 3 replicas and `volumeClaimTemplates` requesting 5Gi.",
+        "commandHint": "echo -e \"...\" > /home/learner/redis-statefulset.yaml && kubectl apply -f /home/learner/redis-statefulset.yaml"
+      },
+      {
+        "stepNumber": 4,
+        "title": "Inspect Stateful Pods",
+        "instruction": "Verify that all 3 ordinal pods (`redis-cluster-0`, `redis-cluster-1`, `redis-cluster-2`) are running.",
+        "commandHint": "kubectl get pods -n stateful-apps"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "val-store-ns-stateful",
+        "description": "Created stateful-apps namespace for stateful workloads",
+        "type": "resource_exists",
+        "kind": "Namespace",
+        "name": "stateful-apps",
+        "remediation": "Run 'kubectl create namespace stateful-apps'."
+      },
+      {
+        "id": "val-store-svc-headless",
+        "description": "Created headless Service redis-headless in stateful-apps",
+        "type": "resource_exists",
+        "kind": "Service",
+        "name": "redis-headless",
+        "namespace": "stateful-apps",
+        "remediation": "Apply Service redis-headless in namespace stateful-apps."
+      },
+      {
+        "id": "val-store-svc-clusterip",
+        "description": "Configured clusterIP None on headless Service",
+        "type": "resource_field_equals",
+        "kind": "Service",
+        "name": "redis-headless",
+        "namespace": "stateful-apps",
+        "fieldPath": "spec.clusterIP",
+        "expectedValue": "None",
+        "remediation": "Set spec.clusterIP: None on Service redis-headless."
+      },
+      {
+        "id": "val-store-sts-exists",
+        "description": "Deployed StatefulSet redis-cluster with 3 replicas",
+        "type": "resource_exists",
+        "kind": "StatefulSet",
+        "name": "redis-cluster",
+        "namespace": "stateful-apps",
+        "remediation": "Apply StatefulSet redis-cluster in namespace stateful-apps."
+      },
+      {
+        "id": "val-store-sts-templates",
+        "description": "Configured volumeClaimTemplates with 5Gi capacity in StatefulSet",
+        "type": "resource_field_contains",
+        "kind": "StatefulSet",
+        "name": "redis-cluster",
+        "namespace": "stateful-apps",
+        "fieldPath": "spec.volumeClaimTemplates",
+        "expectedValue": "5Gi",
+        "remediation": "Configure volumeClaimTemplates requesting 5Gi in StatefulSet redis-cluster."
+      },
+      {
+        "id": "val-store-pods-count",
+        "description": "Verified at least 3 stateful ordinal pods running in namespace",
+        "type": "resource_count",
+        "kind": "Pod",
+        "namespace": "stateful-apps",
+        "operator": ">=",
+        "expectedValue": 3,
+        "remediation": "Ensure all 3 StatefulSet ordinal pods reach Running state."
+      }
+    ],
+    "solutionCommands": [
+      "kubectl create namespace stateful-apps",
+      "echo -e \"apiVersion: v1\\nkind: Service\\nmetadata:\\n  name: redis-headless\\n  namespace: stateful-apps\\nspec:\\n  clusterIP: None\\n  selector:\\n    app: redis-cluster\\n  ports:\\n  - port: 6379\\n    targetPort: 6379\" > /home/learner/redis-headless.yaml",
+      "kubectl apply -f /home/learner/redis-headless.yaml",
+      "echo -e \"apiVersion: apps/v1\\nkind: StatefulSet\\nmetadata:\\n  name: redis-cluster\\n  namespace: stateful-apps\\nspec:\\n  serviceName: redis-headless\\n  replicas: 3\\n  selector:\\n    matchLabels:\\n      app: redis-cluster\\n  template:\\n    metadata:\\n      labels:\\n        app: redis-cluster\\n    spec:\\n      containers:\\n      - name: redis\\n        image: redis:7-alpine\\n        ports:\\n        - containerPort: 6379\\n  volumeClaimTemplates:\\n  - metadata:\\n      name: redis-data\\n    spec:\\n      accessModes: [ \\\"ReadWriteOnce\\\" ]\\n      resources:\\n        requests:\\n          storage: 5Gi\" > /home/learner/redis-statefulset.yaml",
+      "kubectl apply -f /home/learner/redis-statefulset.yaml"
+    ],
+    "troubleshootingGuide": "Verify namespace stateful-apps exists, redis-headless has clusterIP None, and StatefulSet redis-cluster has 3 replicas and volumeClaimTemplates requesting 5Gi.",
+    "domainId": "k8s-storage",
+    "domainTitle": "Kubernetes Storage: CSI, StorageClasses, PVCs & StatefulSets"
+  },
+  {
+    "id": "lab-cks-01-pod-security-standards",
+    "title": "Hardening Workloads with Restricted Pod Security Standards",
+    "difficulty": "Intermediate",
+    "durationMinutes": 20,
+    "xpReward": 150,
+    "scenario": "Enforce Pod Security Standards in namespace sec-restricted: label the namespace with pod-security.kubernetes.io/enforce=restricted, and deploy a compliant hardened Pod secure-vault with runAsNonRoot: true, allowPrivilegeEscalation: false, capabilities.drop: ['ALL'], and readOnlyRootFilesystem: true.",
+    "productionContext": "CKS hardening standards require production workloads to run with immutable root filesystems, non-root users, and zero ambient kernel capabilities to prevent container breakout.",
+    "prerequisites": [
+      "lab-k8s-01-ha-deployments"
+    ],
+    "objectives": [
+      "Create namespace sec-restricted with restricted PSA enforcement label",
+      "Deploy hardened Pod secure-vault compliant with restricted PSA",
+      "Verify all capabilities are dropped and root filesystem is read-only",
+      "Validate pod compliance using pod_security_standard validation rule"
+    ],
+    "initialClusterState": {
+      "resources": []
+    },
+    "starterManifest": "",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Create Security Namespace",
+        "instruction": "Create namespace `sec-restricted` using `kubectl create namespace sec-restricted`.",
+        "commandHint": "kubectl create namespace sec-restricted"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Enforce Restricted PSA Label",
+        "instruction": "Apply restricted Pod Security Admission label to `sec-restricted`.",
+        "commandHint": "kubectl label namespace sec-restricted pod-security.kubernetes.io/enforce=restricted"
+      },
+      {
+        "stepNumber": 3,
+        "title": "Author Hardened Pod Manifest",
+        "instruction": "Create `/home/learner/secure-vault.yaml` with non-root security context and dropped capabilities.",
+        "commandHint": "echo -e \"...\" > /home/learner/secure-vault.yaml && kubectl apply -f /home/learner/secure-vault.yaml"
+      },
+      {
+        "stepNumber": 4,
+        "title": "Verify Running Status",
+        "instruction": "Verify that Pod `secure-vault` reaches `Running` status.",
+        "commandHint": "kubectl get pod secure-vault -n sec-restricted"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "val-cks-ns-restricted",
+        "description": "Created sec-restricted namespace",
+        "type": "resource_exists",
+        "kind": "Namespace",
+        "name": "sec-restricted",
+        "remediation": "Run 'kubectl create namespace sec-restricted'."
+      },
+      {
+        "id": "val-cks-ns-label",
+        "description": "Configured pod-security.kubernetes.io/enforce=restricted label on namespace",
+        "type": "resource_field_contains",
+        "kind": "Namespace",
+        "name": "sec-restricted",
+        "fieldPath": "metadata.labels",
+        "expectedValue": "restricted",
+        "remediation": "Run 'kubectl label namespace sec-restricted pod-security.kubernetes.io/enforce=restricted'."
+      },
+      {
+        "id": "val-cks-pod-exists",
+        "description": "Created secure-vault Pod in sec-restricted namespace",
+        "type": "resource_exists",
+        "kind": "Pod",
+        "name": "secure-vault",
+        "namespace": "sec-restricted",
+        "remediation": "Apply secure-vault Pod in namespace sec-restricted."
+      },
+      {
+        "id": "val-cks-psa-restricted",
+        "description": "Pod secure-vault complies with restricted Pod Security Standards",
+        "type": "pod_security_standard",
+        "name": "secure-vault",
+        "namespace": "sec-restricted",
+        "level": "restricted",
+        "expectedStatus": "allowed",
+        "remediation": "Set runAsNonRoot: true, allowPrivilegeEscalation: false, and drop ALL capabilities."
+      },
+      {
+        "id": "val-cks-pod-running",
+        "description": "Verified Pod secure-vault reaches Running status",
+        "type": "pod_status_running",
+        "name": "secure-vault",
+        "namespace": "sec-restricted",
+        "remediation": "Ensure Pod secure-vault starts cleanly."
+      }
+    ],
+    "solutionCommands": [
+      "kubectl create namespace sec-restricted",
+      "kubectl label namespace sec-restricted pod-security.kubernetes.io/enforce=restricted",
+      "echo -e \"apiVersion: v1\\nkind: Pod\\nmetadata:\\n  name: secure-vault\\n  namespace: sec-restricted\\nspec:\\n  securityContext:\\n    runAsNonRoot: true\\n    runAsUser: 10001\\n  containers:\\n  - name: vault\\n    image: cgr.dev/chainguard/static:latest\\n    command: [\\\"sh\\\", \\\"-c\\\", \\\"sleep 3600\\\"]\\n    securityContext:\\n      allowPrivilegeEscalation: false\\n      readOnlyRootFilesystem: true\\n      capabilities:\\n        drop:\\n        - ALL\" > /home/learner/secure-vault.yaml",
+      "kubectl apply -f /home/learner/secure-vault.yaml",
+      "kubectl get pod secure-vault -n sec-restricted"
+    ],
+    "troubleshootingGuide": "Verify namespace sec-restricted is labeled with pod-security.kubernetes.io/enforce=restricted, and Pod secure-vault sets runAsNonRoot: true, allowPrivilegeEscalation: false, and drop: ['ALL'].",
+    "domainId": "k8s-security-cks",
+    "domainTitle": "Certified Kubernetes Security Specialist (CKS) Hardening & Defense"
+  },
+  {
+    "id": "lab-cks-02-falco-runtime-security",
+    "title": "Falco Behavioral Threat Detection & Container Runtime Isolation",
+    "difficulty": "Intermediate",
+    "durationMinutes": 20,
+    "xpReward": 175,
+    "scenario": "Deploy an intrusion detection policy and monitor container runtime events in namespace sec-runtime. Execute a Falco simulation audit to detect unauthorized interactive shells, and apply an immutable isolation NetworkPolicy quarantine-policy restricting egress traffic from compromised pods.",
+    "productionContext": "Real-time threat detection allows security operations centers (SOC) to identify active attackers within seconds of container compromise before lateral movement occurs.",
+    "prerequisites": [
+      "lab-cks-01-pod-security-standards"
+    ],
+    "objectives": [
+      "Create namespace sec-runtime for runtime threat monitoring",
+      "Deploy suspicious-workload in sec-runtime",
+      "Execute falco threat inspection command",
+      "Apply isolation NetworkPolicy quarantine-policy isolating suspicious workloads"
+    ],
+    "initialClusterState": {
+      "resources": []
+    },
+    "starterManifest": "",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Create Runtime Namespace",
+        "instruction": "Create namespace `sec-runtime` using `kubectl create namespace sec-runtime`.",
+        "commandHint": "kubectl create namespace sec-runtime"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Deploy Suspicious Workload",
+        "instruction": "Deploy `suspicious-workload` with 1 replica in `sec-runtime`.",
+        "commandHint": "kubectl create deployment suspicious-workload --image=nginx:1.27-alpine -n sec-runtime --replicas=1"
+      },
+      {
+        "stepNumber": 3,
+        "title": "Run Falco Behavioral Audit",
+        "instruction": "Execute runtime behavioral audit using `falco --version`.",
+        "commandHint": "falco --version"
+      },
+      {
+        "stepNumber": 4,
+        "title": "Apply Quarantine NetworkPolicy",
+        "instruction": "Create `/home/learner/quarantine.yaml` isolating `suspicious-workload` from network egress and apply it.",
+        "commandHint": "echo -e \"...\" > /home/learner/quarantine.yaml && kubectl apply -f /home/learner/quarantine.yaml"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "val-cks-ns-runtime",
+        "description": "Created sec-runtime namespace",
+        "type": "resource_exists",
+        "kind": "Namespace",
+        "name": "sec-runtime",
+        "remediation": "Run 'kubectl create namespace sec-runtime'."
+      },
+      {
+        "id": "val-cks-dep-suspicious",
+        "description": "Deployed suspicious-workload in sec-runtime",
+        "type": "resource_exists",
+        "kind": "Deployment",
+        "name": "suspicious-workload",
+        "namespace": "sec-runtime",
+        "remediation": "Run 'kubectl create deployment suspicious-workload --image=nginx:1.27-alpine -n sec-runtime --replicas=1'."
+      },
+      {
+        "id": "val-cks-falco-exec",
+        "description": "Executed Falco behavioral threat inspection",
+        "type": "command_executed",
+        "commandSubstring": "falco",
+        "remediation": "Run 'falco --version'."
+      },
+      {
+        "id": "val-cks-netpol-quarantine",
+        "description": "Applied quarantine NetworkPolicy isolating compromised workload",
+        "type": "resource_exists",
+        "kind": "NetworkPolicy",
+        "name": "quarantine-policy",
+        "namespace": "sec-runtime",
+        "remediation": "Apply NetworkPolicy quarantine-policy in namespace sec-runtime."
+      }
+    ],
+    "solutionCommands": [
+      "kubectl create namespace sec-runtime",
+      "kubectl create deployment suspicious-workload --image=nginx:1.27-alpine -n sec-runtime --replicas=1",
+      "falco --version",
+      "echo -e \"apiVersion: networking.k8s.io/v1\\nkind: NetworkPolicy\\nmetadata:\\n  name: quarantine-policy\\n  namespace: sec-runtime\\nspec:\\n  podSelector:\\n    matchLabels:\\n      app: suspicious-workload\\n  policyTypes:\\n  - Ingress\\n  - Egress\" > /home/learner/quarantine.yaml",
+      "kubectl apply -f /home/learner/quarantine.yaml"
+    ],
+    "troubleshootingGuide": "Ensure namespace sec-runtime exists, deploy suspicious-workload, run falco --version, and apply quarantine-policy NetworkPolicy.",
+    "domainId": "k8s-security-cks",
+    "domainTitle": "Certified Kubernetes Security Specialist (CKS) Hardening & Defense"
+  },
+  {
+    "id": "lab-troubleshoot-01-crashloop-oom",
+    "title": "Diagnosing & Fixing CrashLoopBackOff and OOMKilled Failures",
+    "difficulty": "Intermediate",
+    "durationMinutes": 20,
+    "xpReward": 150,
+    "scenario": "Microservice payment-processor in namespace troubleshoot-apps is stuck in CrashLoopBackOff due to a missing ConfigMap payment-config and insufficient memory limits (64Mi). Create the required ConfigMap with DB_HOST=postgres.troubleshoot-apps.svc, increase container memory limits to 256Mi, and verify the Deployment achieves healthy Running status.",
+    "productionContext": "Over 70% of production Kubernetes workload outages stem from configuration drift (missing ConfigMaps/Secrets) or aggressive memory limits triggering kernel OOM killer terminations.",
+    "prerequisites": [
+      "lab-k8s-01-ha-deployments"
+    ],
+    "objectives": [
+      "Create namespace troubleshoot-apps for isolated debugging",
+      "Create missing ConfigMap payment-config with DB_HOST literal",
+      "Deploy payment-processor with 256Mi memory limits to prevent OOMKilled",
+      "Verify all deployment pods reach healthy Running status"
+    ],
+    "initialClusterState": {
+      "resources": []
+    },
+    "starterManifest": "",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Create Debugging Namespace",
+        "instruction": "Create namespace `troubleshoot-apps` using `kubectl create namespace troubleshoot-apps`.",
+        "commandHint": "kubectl create namespace troubleshoot-apps"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Create Missing Configuration",
+        "instruction": "Create ConfigMap `payment-config` with key `DB_HOST=postgres.troubleshoot-apps.svc`.",
+        "commandHint": "kubectl create configmap payment-config --from-literal=DB_HOST=postgres.troubleshoot-apps.svc -n troubleshoot-apps"
+      },
+      {
+        "stepNumber": 3,
+        "title": "Author Patched Deployment Manifest",
+        "instruction": "Create `/home/learner/payment-processor.yaml` with 256Mi memory limit and apply it.",
+        "commandHint": "echo -e \"...\" > /home/learner/payment-processor.yaml && kubectl apply -f /home/learner/payment-processor.yaml"
+      },
+      {
+        "stepNumber": 4,
+        "title": "Verify Rollout Status",
+        "instruction": "Verify deployment rollout reaches complete state.",
+        "commandHint": "kubectl rollout status deployment/payment-processor -n troubleshoot-apps"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "val-trouble-ns-apps",
+        "description": "Created troubleshoot-apps namespace",
+        "type": "resource_exists",
+        "kind": "Namespace",
+        "name": "troubleshoot-apps",
+        "remediation": "Run 'kubectl create namespace troubleshoot-apps'."
+      },
+      {
+        "id": "val-trouble-cm-config",
+        "description": "Created payment-config ConfigMap in troubleshoot-apps",
+        "type": "resource_exists",
+        "kind": "ConfigMap",
+        "name": "payment-config",
+        "namespace": "troubleshoot-apps",
+        "remediation": "Run 'kubectl create configmap payment-config --from-literal=DB_HOST=postgres.troubleshoot-apps.svc -n troubleshoot-apps'."
+      },
+      {
+        "id": "val-trouble-dep-payment",
+        "description": "Deployed payment-processor Deployment in troubleshoot-apps",
+        "type": "resource_exists",
+        "kind": "Deployment",
+        "name": "payment-processor",
+        "namespace": "troubleshoot-apps",
+        "remediation": "Apply Deployment payment-processor in namespace troubleshoot-apps."
+      },
+      {
+        "id": "val-trouble-mem-limit",
+        "description": "Configured memory limits of at least 256Mi to prevent OOMKilled",
+        "type": "resource_field_contains",
+        "kind": "Deployment",
+        "name": "payment-processor",
+        "namespace": "troubleshoot-apps",
+        "fieldPath": "spec.template.spec.containers",
+        "expectedValue": "256Mi",
+        "remediation": "Set container resources.limits.memory to 256Mi."
+      },
+      {
+        "id": "val-trouble-replicas-ready",
+        "description": "Verified at least 2 ready replicas in payment-processor deployment",
+        "type": "replica_count_min",
+        "kind": "Deployment",
+        "name": "payment-processor",
+        "namespace": "troubleshoot-apps",
+        "expectedValue": 2,
+        "remediation": "Scale payment-processor to 2 ready replicas."
+      }
+    ],
+    "solutionCommands": [
+      "kubectl create namespace troubleshoot-apps",
+      "kubectl create configmap payment-config --from-literal=DB_HOST=postgres.troubleshoot-apps.svc -n troubleshoot-apps",
+      "echo -e \"apiVersion: apps/v1\\nkind: Deployment\\nmetadata:\\n  name: payment-processor\\n  namespace: troubleshoot-apps\\nspec:\\n  replicas: 2\\n  selector:\\n    matchLabels:\\n      app: payment-processor\\n  template:\\n    metadata:\\n      labels:\\n        app: payment-processor\\n    spec:\\n      containers:\\n      - name: processor\\n        image: nginx:1.27-alpine\\n        resources:\\n          limits:\\n            memory: 256Mi\\n            cpu: 500m\\n          requests:\\n            memory: 128Mi\\n            cpu: 100m\" > /home/learner/payment-processor.yaml",
+      "kubectl apply -f /home/learner/payment-processor.yaml",
+      "kubectl rollout status deployment/payment-processor -n troubleshoot-apps"
+    ],
+    "troubleshootingGuide": "Ensure namespace troubleshoot-apps exists, ConfigMap payment-config is created, and payment-processor Deployment has 2 replicas with 256Mi memory limit.",
+    "domainId": "k8s-troubleshooting",
+    "domainTitle": "Kubernetes Troubleshooting: Root Cause Analysis & Outage Remediation"
+  },
+  {
+    "id": "lab-troubleshoot-02-controlplane-kubelet",
+    "title": "Control Plane Recovery: Static Pod Manifests & Kubelet Diagnostics",
+    "difficulty": "Intermediate",
+    "durationMinutes": 20,
+    "xpReward": 175,
+    "scenario": "A control-plane node failure occurred where static pod manifest /etc/kubernetes/manifests/kube-apiserver.yaml was corrupted. Inspect the manifest using cat, repair the manifest syntax error, restart the Kubelet service using systemctl restart kubelet, and verify cluster component statuses.",
+    "productionContext": "Control plane outages require cluster administrators to bypass kubectl and directly troubleshoot node filesystems, static pod manifests, and systemd daemons to recover cluster quorum.",
+    "prerequisites": [
+      "lab-troubleshoot-01-crashloop-oom"
+    ],
+    "objectives": [
+      "Inspect corrupted static pod manifest /etc/kubernetes/manifests/kube-apiserver.yaml",
+      "Write valid static pod manifest configuration",
+      "Restart Kubelet daemon via systemctl restart kubelet",
+      "Verify cluster node health via kubectl get nodes"
+    ],
+    "initialClusterState": {
+      "resources": []
+    },
+    "starterManifest": "",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Inspect Manifest",
+        "instruction": "Inspect `/etc/kubernetes/manifests/kube-apiserver.yaml` using `cat`.",
+        "commandHint": "cat /etc/kubernetes/manifests/kube-apiserver.yaml"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Repair Static Pod Configuration",
+        "instruction": "Write valid YAML configuration to `/etc/kubernetes/manifests/kube-apiserver.yaml`.",
+        "commandHint": "echo -e \"...\" > /etc/kubernetes/manifests/kube-apiserver.yaml"
+      },
+      {
+        "stepNumber": 3,
+        "title": "Restart Kubelet Daemon",
+        "instruction": "Restart Kubelet using `systemctl restart kubelet`.",
+        "commandHint": "systemctl restart kubelet"
+      },
+      {
+        "stepNumber": 4,
+        "title": "Verify Cluster Health",
+        "instruction": "Check node status using `kubectl get nodes`.",
+        "commandHint": "kubectl get nodes"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "val-trouble-cat-exec",
+        "description": "Inspected corrupted static pod manifest via cat",
+        "type": "command_executed",
+        "commandSubstring": "cat /etc/kubernetes/manifests/kube-apiserver.yaml",
+        "remediation": "Run 'cat /etc/kubernetes/manifests/kube-apiserver.yaml'."
+      },
+      {
+        "id": "val-trouble-manifest-repaired",
+        "description": "Repaired kube-apiserver static pod manifest in VFS",
+        "type": "command_executed",
+        "commandSubstring": "> /etc/kubernetes/manifests/kube-apiserver.yaml",
+        "remediation": "Write valid kube-apiserver pod configuration to /etc/kubernetes/manifests/kube-apiserver.yaml."
+      },
+      {
+        "id": "val-trouble-restart-kubelet",
+        "description": "Restarted Kubelet systemd service",
+        "type": "command_executed",
+        "commandSubstring": "systemctl restart kubelet",
+        "remediation": "Run 'systemctl restart kubelet'."
+      },
+      {
+        "id": "val-trouble-nodes-verified",
+        "description": "Verified cluster health with kubectl get nodes",
+        "type": "command_executed",
+        "commandSubstring": "kubectl get nodes",
+        "remediation": "Run 'kubectl get nodes'."
+      }
+    ],
+    "solutionCommands": [
+      "cat /etc/kubernetes/manifests/kube-apiserver.yaml",
+      "echo -e \"apiVersion: v1\\nkind: Pod\\nmetadata:\\n  name: kube-apiserver\\n  namespace: kube-system\\nspec:\\n  containers:\\n  - name: kube-apiserver\\n    image: registry.k8s.io/kube-apiserver:v1.31.0\" > /etc/kubernetes/manifests/kube-apiserver.yaml",
+      "systemctl restart kubelet",
+      "kubectl get nodes"
+    ],
+    "troubleshootingGuide": "Inspect /etc/kubernetes/manifests/kube-apiserver.yaml with cat, repair the manifest with valid Pod YAML, restart kubelet, and verify nodes.",
+    "domainId": "k8s-troubleshooting",
+    "domainTitle": "Kubernetes Troubleshooting: Root Cause Analysis & Outage Remediation"
+  },
+  {
+    "id": "lab-gitops-01-pull-reconciliation",
+    "title": "Pull-Based Reconciliation & Drift Remediation",
+    "difficulty": "Intermediate",
+    "durationMinutes": 20,
+    "xpReward": 150,
+    "scenario": "An engineer manually scaled deployment payment-service in namespace gitops-apps to 5 replicas via ad-hoc imperative kubectl scale, drifting away from the Git desired state of 2 replicas. Inspect the drift, create the canonical GitOps manifest /gitops/payment-service.yaml, and apply it to reconcile payment-service to 2 replicas.",
+    "productionContext": "Manual imperative modifications to production workloads lead to configuration drift and unrepeatable deployments. GitOps reconciliation enforces consistency by reverting uncommitted cluster mutations.",
+    "prerequisites": [
+      "lab-k8s-01-ha-deployments"
+    ],
+    "objectives": [
+      "Inspect current drift and verify payment-service is running 5 replicas.",
+      "Write the declarative GitOps deployment manifest with 2 replicas to /gitops/payment-service.yaml.",
+      "Apply the manifest to gitops-apps to reconcile payment-service to 2 replicas."
+    ],
+    "initialClusterState": {
+      "resources": [
+        {
+          "apiVersion": "v1",
+          "kind": "Namespace",
+          "metadata": {
+            "name": "gitops-apps"
+          }
+        },
+        {
+          "apiVersion": "apps/v1",
+          "kind": "Deployment",
+          "metadata": {
+            "name": "payment-service",
+            "namespace": "gitops-apps",
+            "labels": {
+              "app": "payment-service",
+              "app.kubernetes.io/managed-by": "imperative-manual"
+            }
+          },
+          "spec": {
+            "replicas": 5,
+            "selector": {
+              "matchLabels": {
+                "app": "payment-service"
+              }
+            },
+            "template": {
+              "metadata": {
+                "labels": {
+                  "app": "payment-service"
+                }
+              },
+              "spec": {
+                "containers": [
+                  {
+                    "name": "payment-service",
+                    "image": "ghcr.io/kubelabs/payment:v1.2.0"
+                  }
+                ]
+              }
+            }
+          }
+        }
+      ]
+    },
+    "starterManifest": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: payment-service\n  namespace: gitops-apps\n  labels:\n    app: payment-service\n    app.kubernetes.io/managed-by: gitops\nspec:\n  replicas: 2\n  selector:\n    matchLabels:\n      app: payment-service\n  template:\n    metadata:\n      labels:\n        app: payment-service\n    spec:\n      containers:\n        - name: payment-service\n          image: ghcr.io/kubelabs/payment:v1.2.0\n",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Inspect live configuration drift",
+        "instruction": "Check the current replica count of payment-service in namespace gitops-apps to observe the drift from version control.",
+        "commandHint": "kubectl get deployment payment-service -n gitops-apps"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Create and apply canonical GitOps manifest",
+        "instruction": "Write the desired deployment manifest with 2 replicas to /gitops/payment-service.yaml and apply it to reconcile cluster state.",
+        "commandHint": "cat << 'EOF' > /gitops/payment-service.yaml\n...\nEOF\nkubectl apply -f /gitops/payment-service.yaml"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "vfs-gitops-manifest",
+        "description": "Canonical manifest exists in /gitops/payment-service.yaml",
+        "type": "vfs_file_contains",
+        "path": "/gitops/payment-service.yaml",
+        "pattern": "payment-service",
+        "remediation": "Create /gitops/payment-service.yaml with deployment payment-service"
+      },
+      {
+        "id": "deployment-reconciled-replicas",
+        "description": "payment-service deployment scaled back to desired 2 replicas",
+        "type": "resource_field_equals",
+        "kind": "Deployment",
+        "namespace": "gitops-apps",
+        "name": "payment-service",
+        "fieldPath": "spec.replicas",
+        "expectedValue": 2,
+        "remediation": "Apply /gitops/payment-service.yaml with spec.replicas: 2"
+      }
+    ],
+    "solutionCommands": [
+      "mkdir -p /gitops",
+      "cat << 'EOF' > /gitops/payment-service.yaml\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: payment-service\n  namespace: gitops-apps\n  labels:\n    app: payment-service\n    app.kubernetes.io/managed-by: gitops\nspec:\n  replicas: 2\n  selector:\n    matchLabels:\n      app: payment-service\n  template:\n    metadata:\n      labels:\n        app: payment-service\n    spec:\n      containers:\n        - name: payment-service\n          image: ghcr.io/kubelabs/payment:v1.2.0\nEOF",
+      "kubectl apply -f /gitops/payment-service.yaml"
+    ],
+    "troubleshootingGuide": [
+      {
+        "problem": "payment-service still shows 5 replicas.",
+        "cause": "The manifest in /gitops/payment-service.yaml was not applied via kubectl apply.",
+        "solution": "Execute kubectl apply -f /gitops/payment-service.yaml to reconcile etcd with the desired state."
+      }
+    ],
+    "domainId": "gitops-delivery",
+    "domainTitle": "GitOps Principles, Pull-Based Reconciliation & Continuous Delivery"
+  },
+  {
+    "id": "lab-gitops-02-secrets-management",
+    "title": "Declarative Secret Management with ExternalSecrets",
+    "difficulty": "Intermediate",
+    "durationMinutes": 20,
+    "xpReward": 150,
+    "scenario": "Committing plaintext secrets to Git breaches security compliance. Deploy an ExternalSecret resource vault-db-credentials in namespace gitops-apps that defines secretStoreRef: vault-backend and target.name: db-credentials, and create the corresponding synced Kubernetes Secret db-credentials with keys username: dbadmin and password: vault-secure-pass.",
+    "productionContext": "Modern GitOps architectures never store unencrypted secrets in Git. The External Secrets Operator reconciles external secret managers (HashiCorp Vault, AWS Secrets Manager) into native Kubernetes Secrets.",
+    "prerequisites": [
+      "lab-gitops-01-pull-reconciliation"
+    ],
+    "objectives": [
+      "Create and apply ExternalSecret vault-db-credentials in namespace gitops-apps.",
+      "Create target Kubernetes Secret db-credentials in namespace gitops-apps with credentials."
+    ],
+    "initialClusterState": {
+      "resources": [
+        {
+          "apiVersion": "v1",
+          "kind": "Namespace",
+          "metadata": {
+            "name": "gitops-apps"
+          }
+        }
+      ]
+    },
+    "starterManifest": "apiVersion: external-secrets.io/v1beta1\nkind: ExternalSecret\nmetadata:\n  name: vault-db-credentials\n  namespace: gitops-apps\nspec:\n  refreshInterval: 1h\n  secretStoreRef:\n    name: vault-backend\n    kind: SecretStore\n  target:\n    name: db-credentials\n    creationPolicy: Owner\n  data:\n    - secretKey: username\n      remoteRef:\n        key: secret/database\n        property: username\n    - secretKey: password\n      remoteRef:\n        key: secret/database\n        property: password\n",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Define and apply ExternalSecret resource",
+        "instruction": "Save the ExternalSecret manifest to /gitops/external-secret.yaml and apply it to namespace gitops-apps.",
+        "commandHint": "cat << 'EOF' > /gitops/external-secret.yaml\n...\nEOF\nkubectl apply -f /gitops/external-secret.yaml"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Generate synced Kubernetes Secret",
+        "instruction": "Create the corresponding Kubernetes Secret db-credentials with keys username=dbadmin and password=vault-secure-pass in namespace gitops-apps.",
+        "commandHint": "kubectl create secret generic db-credentials -n gitops-apps --from-literal=username=dbadmin --from-literal=password=vault-secure-pass"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "external-secret-resource-exists",
+        "description": "ExternalSecret vault-db-credentials exists in gitops-apps",
+        "type": "resource_exists",
+        "kind": "ExternalSecret",
+        "namespace": "gitops-apps",
+        "name": "vault-db-credentials",
+        "remediation": "Create ExternalSecret vault-db-credentials in namespace gitops-apps"
+      },
+      {
+        "id": "k8s-secret-db-credentials-exists",
+        "description": "Secret db-credentials exists in namespace gitops-apps",
+        "type": "resource_exists",
+        "kind": "Secret",
+        "namespace": "gitops-apps",
+        "name": "db-credentials",
+        "remediation": "Create secret db-credentials in namespace gitops-apps"
+      }
+    ],
+    "solutionCommands": [
+      "cat << 'EOF' > /gitops/external-secret.yaml\napiVersion: external-secrets.io/v1beta1\nkind: ExternalSecret\nmetadata:\n  name: vault-db-credentials\n  namespace: gitops-apps\nspec:\n  refreshInterval: 1h\n  secretStoreRef:\n    name: vault-backend\n    kind: SecretStore\n  target:\n    name: db-credentials\n    creationPolicy: Owner\n  data:\n    - secretKey: username\n      remoteRef:\n        key: secret/database\n        property: username\n    - secretKey: password\n      remoteRef:\n        key: secret/database\n        property: password\nEOF",
+      "kubectl apply -f /gitops/external-secret.yaml",
+      "kubectl create secret generic db-credentials -n gitops-apps --from-literal=username=dbadmin --from-literal=password=vault-secure-pass"
+    ],
+    "troubleshootingGuide": [
+      {
+        "problem": "Secret db-credentials is not found in namespace gitops-apps.",
+        "cause": "The secret creation command was not executed or used the wrong namespace.",
+        "solution": "Execute kubectl create secret generic db-credentials -n gitops-apps --from-literal=username=dbadmin --from-literal=password=vault-secure-pass."
+      }
+    ],
+    "domainId": "gitops-delivery",
+    "domainTitle": "GitOps Principles, Pull-Based Reconciliation & Continuous Delivery"
+  },
+  {
+    "id": "lab-argo-01-app-declarative-sync",
+    "title": "Deploying and Synchronizing an ArgoCD Application",
+    "difficulty": "Intermediate",
+    "durationMinutes": 20,
+    "xpReward": 150,
+    "scenario": "Deploy an ArgoCD Application resource named frontend-portal in namespace argocd that targets repo https://github.com/kubelabs/frontend.git at path deploy/prod with destination namespace production. Run argocd app sync frontend-portal to achieve Synced and Healthy status, resulting in a running Deployment frontend-portal in namespace production.",
+    "productionContext": "Declarative Application CRDs allow entire Kubernetes application stacks to be version-controlled, reviewed, and deployed automatically across dev, staging, and production clusters.",
+    "prerequisites": [
+      "lab-gitops-01-pull-reconciliation"
+    ],
+    "objectives": [
+      "Create and apply Application manifest for frontend-portal in namespace argocd.",
+      "Execute argocd app sync frontend-portal to reconcile live cluster resources.",
+      "Verify Application is Synced and Healthy and Deployment frontend-portal is running in namespace production."
+    ],
+    "initialClusterState": {
+      "resources": [
+        {
+          "apiVersion": "v1",
+          "kind": "Namespace",
+          "metadata": {
+            "name": "argocd"
+          }
+        },
+        {
+          "apiVersion": "v1",
+          "kind": "Namespace",
+          "metadata": {
+            "name": "production"
+          }
+        }
+      ]
+    },
+    "starterManifest": "apiVersion: argoproj.io/v1alpha1\nkind: Application\nmetadata:\n  name: frontend-portal\n  namespace: argocd\nspec:\n  project: default\n  source:\n    repoURL: https://github.com/kubelabs/frontend.git\n    targetRevision: HEAD\n    path: deploy/prod\n  destination:\n    server: https://kubernetes.default.svc\n    namespace: production\n  syncPolicy:\n    automated:\n      prune: true\n      selfHeal: true\n",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Apply ArgoCD Application manifest",
+        "instruction": "Save the Application specification to /gitops/frontend-app.yaml and apply it to namespace argocd.",
+        "commandHint": "cat << 'EOF' > /gitops/frontend-app.yaml\n...\nEOF\nkubectl apply -f /gitops/frontend-app.yaml"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Synchronize application via ArgoCD CLI",
+        "instruction": "Trigger a sync on frontend-portal using the argocd CLI to reconcile resources into the production namespace.",
+        "commandHint": "argocd app sync frontend-portal"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "argo-app-synced-status",
+        "description": "Application frontend-portal is Synced and Healthy",
+        "type": "argocd_app_synced",
+        "name": "frontend-portal",
+        "namespace": "argocd",
+        "remediation": "Run argocd app sync frontend-portal"
+      },
+      {
+        "id": "frontend-deployment-exists",
+        "description": "Deployment frontend-portal exists in namespace production",
+        "type": "resource_exists",
+        "kind": "Deployment",
+        "namespace": "production",
+        "name": "frontend-portal",
+        "remediation": "Ensure frontend-portal deployment is reconciled in namespace production"
+      }
+    ],
+    "solutionCommands": [
+      "mkdir -p /gitops",
+      "cat << 'EOF' > /gitops/frontend-app.yaml\napiVersion: argoproj.io/v1alpha1\nkind: Application\nmetadata:\n  name: frontend-portal\n  namespace: argocd\nspec:\n  project: default\n  source:\n    repoURL: https://github.com/kubelabs/frontend.git\n    targetRevision: HEAD\n    path: deploy/prod\n  destination:\n    server: https://kubernetes.default.svc\n    namespace: production\n  syncPolicy:\n    automated:\n      prune: true\n      selfHeal: true\nEOF",
+      "kubectl apply -f /gitops/frontend-app.yaml",
+      "argocd app sync frontend-portal"
+    ],
+    "troubleshootingGuide": [
+      {
+        "problem": "Application frontend-portal status is OutOfSync or not found.",
+        "cause": "The Application manifest was not applied or argocd app sync was not run.",
+        "solution": "Apply /gitops/frontend-app.yaml and run argocd app sync frontend-portal."
+      }
+    ],
+    "domainId": "argocd-gitops",
+    "domainTitle": "ArgoCD Enterprise GitOps, ApplicationSets & Sync Waves"
+  },
+  {
+    "id": "lab-argo-02-sync-waves-phased-rollout",
+    "title": "Phased Rollout Orchestration with ArgoCD Sync Waves",
+    "difficulty": "Intermediate",
+    "durationMinutes": 20,
+    "xpReward": 150,
+    "scenario": "To prevent application startup failures, database ConfigMap dependencies must be ready before backend pods start. Apply ConfigMap backend-config with annotation argocd.argoproj.io/sync-wave: '0' and Deployment backend-api with annotation argocd.argoproj.io/sync-wave: '1' in namespace production.",
+    "productionContext": "Sync waves allow Kubernetes resources to be applied in a deterministic sequence, guaranteeing database migrations and secrets exist before dependent microservices start.",
+    "prerequisites": [
+      "lab-argo-01-app-declarative-sync"
+    ],
+    "objectives": [
+      "Deploy ConfigMap backend-config with sync-wave 0 in namespace production.",
+      "Deploy Deployment backend-api with sync-wave 1 in namespace production."
+    ],
+    "initialClusterState": {
+      "resources": [
+        {
+          "apiVersion": "v1",
+          "kind": "Namespace",
+          "metadata": {
+            "name": "production"
+          }
+        }
+      ]
+    },
+    "starterManifest": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: backend-config\n  namespace: production\n  annotations:\n    argocd.argoproj.io/sync-wave: \"0\"\ndata:\n  API_TIMEOUT: \"30s\"\n  LOG_LEVEL: \"info\"\n---\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: backend-api\n  namespace: production\n  annotations:\n    argocd.argoproj.io/sync-wave: \"1\"\nspec:\n  replicas: 2\n  selector:\n    matchLabels:\n      app: backend-api\n  template:\n    metadata:\n      labels:\n        app: backend-api\n    spec:\n      containers:\n        - name: api\n          image: ghcr.io/kubelabs/backend-api:v2.1.0\n",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Define and apply sync wave manifests",
+        "instruction": "Save the ConfigMap and Deployment manifests with argocd.argoproj.io/sync-wave annotations to /gitops/sync-waves.yaml and apply to production.",
+        "commandHint": "cat << 'EOF' > /gitops/sync-waves.yaml\n...\nEOF\nkubectl apply -f /gitops/sync-waves.yaml"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Verify sync wave annotations",
+        "instruction": "Inspect annotations on both resources to confirm wave ordering (0 for config, 1 for workload).",
+        "commandHint": "kubectl get cm backend-config -n production -o yaml\nkubectl get deploy backend-api -n production -o yaml"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "configmap-wave-0-annotation",
+        "description": "ConfigMap backend-config has sync-wave: '0'",
+        "type": "resource_field_equals",
+        "kind": "ConfigMap",
+        "namespace": "production",
+        "name": "backend-config",
+        "fieldPath": "metadata.annotations['argocd.argoproj.io/sync-wave']",
+        "expectedValue": "0",
+        "remediation": "Add annotation argocd.argoproj.io/sync-wave: '0' to ConfigMap backend-config"
+      },
+      {
+        "id": "deployment-wave-1-annotation",
+        "description": "Deployment backend-api has sync-wave: '1'",
+        "type": "resource_field_equals",
+        "kind": "Deployment",
+        "namespace": "production",
+        "name": "backend-api",
+        "fieldPath": "metadata.annotations['argocd.argoproj.io/sync-wave']",
+        "expectedValue": "1",
+        "remediation": "Add annotation argocd.argoproj.io/sync-wave: '1' to Deployment backend-api"
+      }
+    ],
+    "solutionCommands": [
+      "cat << 'EOF' > /gitops/sync-waves.yaml\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: backend-config\n  namespace: production\n  annotations:\n    argocd.argoproj.io/sync-wave: \"0\"\ndata:\n  API_TIMEOUT: \"30s\"\n  LOG_LEVEL: \"info\"\n---\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: backend-api\n  namespace: production\n  annotations:\n    argocd.argoproj.io/sync-wave: \"1\"\nspec:\n  replicas: 2\n  selector:\n    matchLabels:\n      app: backend-api\n  template:\n    metadata:\n      labels:\n        app: backend-api\n    spec:\n      containers:\n        - name: api\n          image: ghcr.io/kubelabs/backend-api:v2.1.0\nEOF",
+      "kubectl apply -f /gitops/sync-waves.yaml"
+    ],
+    "troubleshootingGuide": [
+      {
+        "problem": "Sync wave annotations not detected.",
+        "cause": "The annotation key or value was incorrectly formatted.",
+        "solution": "Ensure metadata.annotations contains 'argocd.argoproj.io/sync-wave': '0' on the ConfigMap and '1' on the Deployment."
+      }
+    ],
+    "domainId": "argocd-gitops",
+    "domainTitle": "ArgoCD Enterprise GitOps, ApplicationSets & Sync Waves"
+  },
+  {
+    "id": "lab-flux-01-gitrepository-kustomization",
+    "title": "Configuring Flux GitRepository Source & Kustomization Reconciliation",
+    "difficulty": "Intermediate",
+    "durationMinutes": 20,
+    "xpReward": 150,
+    "scenario": "Set up Flux GitOps reconciliation: create a GitRepository resource fleet-infra in namespace flux-system referencing URL https://github.com/kubelabs/fleet-infra.git and branch main, and configure a Kustomization resource app-stack targeting path ./clusters/staging with interval 5m, prune: true, and sourceRef pointing to fleet-infra.",
+    "productionContext": "Flux GitRepository and Kustomization resources form the backbone of pull-based delivery, fetching raw git commits as immutable tar artifacts and applying Kustomize overlays.",
+    "prerequisites": [
+      "lab-gitops-01-pull-reconciliation"
+    ],
+    "objectives": [
+      "Deploy GitRepository fleet-infra in namespace flux-system.",
+      "Deploy Kustomization app-stack in namespace flux-system referencing fleet-infra.",
+      "Reconcile Kustomization app-stack using the flux CLI."
+    ],
+    "initialClusterState": {
+      "resources": [
+        {
+          "apiVersion": "v1",
+          "kind": "Namespace",
+          "metadata": {
+            "name": "flux-system"
+          }
+        }
+      ]
+    },
+    "starterManifest": "apiVersion: source.toolkit.fluxcd.io/v1\nkind: GitRepository\nmetadata:\n  name: fleet-infra\n  namespace: flux-system\nspec:\n  interval: 1m\n  url: https://github.com/kubelabs/fleet-infra.git\n  ref:\n    branch: main\n---\napiVersion: kustomize.toolkit.fluxcd.io/v1\nkind: Kustomization\nmetadata:\n  name: app-stack\n  namespace: flux-system\nspec:\n  interval: 5m\n  targetNamespace: default\n  sourceRef:\n    kind: GitRepository\n    name: fleet-infra\n  path: ./clusters/staging\n  prune: true\n",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Apply Flux GitRepository and Kustomization manifests",
+        "instruction": "Save the GitRepository and Kustomization manifests to /gitops/flux-kustomization.yaml and apply to flux-system.",
+        "commandHint": "cat << 'EOF' > /gitops/flux-kustomization.yaml\n...\nEOF\nkubectl apply -f /gitops/flux-kustomization.yaml"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Trigger reconciliation with flux CLI",
+        "instruction": "Run flux reconcile kustomization app-stack to force an immediate reconciliation cycle.",
+        "commandHint": "flux reconcile kustomization app-stack"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "flux-gitrepo-exists",
+        "description": "GitRepository fleet-infra exists in namespace flux-system",
+        "type": "resource_exists",
+        "kind": "GitRepository",
+        "namespace": "flux-system",
+        "name": "fleet-infra",
+        "remediation": "Create GitRepository fleet-infra in namespace flux-system"
+      },
+      {
+        "id": "flux-kustomization-exists",
+        "description": "Kustomization app-stack exists in namespace flux-system",
+        "type": "resource_exists",
+        "kind": "Kustomization",
+        "namespace": "flux-system",
+        "name": "app-stack",
+        "remediation": "Create Kustomization app-stack in namespace flux-system"
+      },
+      {
+        "id": "flux-reconcile-command-executed",
+        "description": "flux reconcile kustomization app-stack executed",
+        "type": "command_executed",
+        "commandSubstring": "flux reconcile kustomization app-stack",
+        "remediation": "Execute flux reconcile kustomization app-stack"
+      }
+    ],
+    "solutionCommands": [
+      "mkdir -p /gitops",
+      "cat << 'EOF' > /gitops/flux-kustomization.yaml\napiVersion: source.toolkit.fluxcd.io/v1\nkind: GitRepository\nmetadata:\n  name: fleet-infra\n  namespace: flux-system\nspec:\n  interval: 1m\n  url: https://github.com/kubelabs/fleet-infra.git\n  ref:\n    branch: main\n---\napiVersion: kustomize.toolkit.fluxcd.io/v1\nkind: Kustomization\nmetadata:\n  name: app-stack\n  namespace: flux-system\nspec:\n  interval: 5m\n  targetNamespace: default\n  sourceRef:\n    kind: GitRepository\n    name: fleet-infra\n  path: ./clusters/staging\n  prune: true\nEOF",
+      "kubectl apply -f /gitops/flux-kustomization.yaml",
+      "flux reconcile kustomization app-stack"
+    ],
+    "troubleshootingGuide": [
+      {
+        "problem": "flux reconcile kustomization command failed or was not executed.",
+        "cause": "Command not run in terminal session.",
+        "solution": "Execute flux reconcile kustomization app-stack in the terminal."
+      }
+    ],
+    "domainId": "fluxcd-gitops",
+    "domainTitle": "FluxCD Multi-Tenancy, Kustomize Controller & HelmReleases"
+  },
+  {
+    "id": "lab-flux-02-helmrelease-reconciliation",
+    "title": "Declarative HelmRelease Management with Flux Helm Controller",
+    "difficulty": "Intermediate",
+    "durationMinutes": 20,
+    "xpReward": 150,
+    "scenario": "Configure declarative Helm management in Flux: deploy a HelmRelease resource redis-cache in namespace flux-system with targetNamespace cache-tier, referencing chart redis version 18.0.0 from HelmRepository bitnami, with spec.values.architecture set to standalone.",
+    "productionContext": "Flux HelmRelease CRDs enable GitOps teams to maintain declarative Helm chart installations with automatic upgrade retries, rollback triggers, and values file validation.",
+    "prerequisites": [
+      "lab-flux-01-gitrepository-kustomization"
+    ],
+    "objectives": [
+      "Create target namespace cache-tier.",
+      "Apply HelmRelease redis-cache in namespace flux-system targeting cache-tier.",
+      "Verify HelmRelease spec parameters (chart name, version, and architecture values)."
+    ],
+    "initialClusterState": {
+      "resources": [
+        {
+          "apiVersion": "v1",
+          "kind": "Namespace",
+          "metadata": {
+            "name": "flux-system"
+          }
+        }
+      ]
+    },
+    "starterManifest": "apiVersion: helm.toolkit.fluxcd.io/v2beta1\nkind: HelmRelease\nmetadata:\n  name: redis-cache\n  namespace: flux-system\nspec:\n  interval: 10m\n  targetNamespace: cache-tier\n  chart:\n    spec:\n      chart: redis\n      version: \"18.0.0\"\n      sourceRef:\n        kind: HelmRepository\n        name: bitnami\n        namespace: flux-system\n  values:\n    architecture: standalone\n",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Create namespace cache-tier",
+        "instruction": "Create the destination namespace cache-tier where Redis will be deployed.",
+        "commandHint": "kubectl create namespace cache-tier"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Apply HelmRelease manifest",
+        "instruction": "Save and apply the HelmRelease specification for redis-cache to namespace flux-system.",
+        "commandHint": "cat << 'EOF' > /gitops/redis-helmrelease.yaml\n...\nEOF\nkubectl apply -f /gitops/redis-helmrelease.yaml"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "namespace-cache-tier-exists",
+        "description": "Namespace cache-tier exists",
+        "type": "resource_exists",
+        "kind": "Namespace",
+        "name": "cache-tier",
+        "remediation": "Run kubectl create namespace cache-tier"
+      },
+      {
+        "id": "helmrelease-redis-cache-exists",
+        "description": "HelmRelease redis-cache exists in namespace flux-system",
+        "type": "resource_exists",
+        "kind": "HelmRelease",
+        "namespace": "flux-system",
+        "name": "redis-cache",
+        "remediation": "Apply HelmRelease redis-cache in namespace flux-system"
+      },
+      {
+        "id": "helmrelease-redis-cache-target-ns",
+        "description": "HelmRelease redis-cache targetNamespace is cache-tier",
+        "type": "resource_field_equals",
+        "kind": "HelmRelease",
+        "namespace": "flux-system",
+        "name": "redis-cache",
+        "fieldPath": "spec.targetNamespace",
+        "expectedValue": "cache-tier",
+        "remediation": "Set spec.targetNamespace: cache-tier in HelmRelease redis-cache"
+      }
+    ],
+    "solutionCommands": [
+      "kubectl create namespace cache-tier",
+      "cat << 'EOF' > /gitops/redis-helmrelease.yaml\napiVersion: helm.toolkit.fluxcd.io/v2beta1\nkind: HelmRelease\nmetadata:\n  name: redis-cache\n  namespace: flux-system\nspec:\n  interval: 10m\n  targetNamespace: cache-tier\n  chart:\n    spec:\n      chart: redis\n      version: \"18.0.0\"\n      sourceRef:\n        kind: HelmRepository\n        name: bitnami\n        namespace: flux-system\n  values:\n    architecture: standalone\nEOF",
+      "kubectl apply -f /gitops/redis-helmrelease.yaml"
+    ],
+    "troubleshootingGuide": [
+      {
+        "problem": "HelmRelease missing or wrong target namespace.",
+        "cause": "Manifest omitted spec.targetNamespace.",
+        "solution": "Verify spec.targetNamespace: cache-tier is specified in HelmRelease."
+      }
+    ],
+    "domainId": "fluxcd-gitops",
+    "domainTitle": "FluxCD Multi-Tenancy, Kustomize Controller & HelmReleases"
+  },
+  {
+    "id": "lab-cicd-01-tekton-pipeline",
+    "title": "Authoring Declarative Tekton Tasks and Pipelines",
+    "difficulty": "Intermediate",
+    "durationMinutes": 20,
+    "xpReward": 150,
+    "scenario": "Deploy a cloud-native build pipeline in namespace tekton-pipelines: create a Tekton Task build-image that runs step build-container with image crictl:latest, and create a Tekton Pipeline app-ci-pipeline referencing Task build-image with workspace shared-workspace.",
+    "productionContext": "Tekton decouples CI workflows from proprietary SaaS runners, running directly on Kubernetes with fine-grained RBAC, native secret management, and elastic pod autoscaling.",
+    "prerequisites": [
+      "lab-k8s-01-ha-deployments"
+    ],
+    "objectives": [
+      "Create namespace tekton-pipelines.",
+      "Deploy Tekton Task build-image in namespace tekton-pipelines.",
+      "Deploy Tekton Pipeline app-ci-pipeline in namespace tekton-pipelines."
+    ],
+    "initialClusterState": {
+      "resources": []
+    },
+    "starterManifest": "apiVersion: tekton.dev/v1\nkind: Task\nmetadata:\n  name: build-image\n  namespace: tekton-pipelines\nspec:\n  steps:\n    - name: build-container\n      image: crictl:latest\n      command: ['echo', 'Building container image']\n---\napiVersion: tekton.dev/v1\nkind: Pipeline\nmetadata:\n  name: app-ci-pipeline\n  namespace: tekton-pipelines\nspec:\n  workspaces:\n    - name: shared-workspace\n  tasks:\n    - name: build-step\n      taskRef:\n        name: build-image\n",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Create namespace tekton-pipelines",
+        "instruction": "Create the dedicated namespace tekton-pipelines for CI workloads.",
+        "commandHint": "kubectl create namespace tekton-pipelines"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Apply Tekton Task and Pipeline manifest",
+        "instruction": "Save the Task and Pipeline specifications to /ci/tekton-pipeline.yaml and apply to the cluster.",
+        "commandHint": "cat << 'EOF' > /ci/tekton-pipeline.yaml\n...\nEOF\nkubectl apply -f /ci/tekton-pipeline.yaml"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "namespace-tekton-exists",
+        "description": "Namespace tekton-pipelines exists",
+        "type": "resource_exists",
+        "kind": "Namespace",
+        "name": "tekton-pipelines",
+        "remediation": "Run kubectl create namespace tekton-pipelines"
+      },
+      {
+        "id": "tekton-task-exists",
+        "description": "Task build-image exists in namespace tekton-pipelines",
+        "type": "resource_exists",
+        "kind": "Task",
+        "namespace": "tekton-pipelines",
+        "name": "build-image",
+        "remediation": "Deploy Task build-image in namespace tekton-pipelines"
+      },
+      {
+        "id": "tekton-pipeline-exists",
+        "description": "Pipeline app-ci-pipeline exists in namespace tekton-pipelines",
+        "type": "resource_exists",
+        "kind": "Pipeline",
+        "namespace": "tekton-pipelines",
+        "name": "app-ci-pipeline",
+        "remediation": "Deploy Pipeline app-ci-pipeline in namespace tekton-pipelines"
+      }
+    ],
+    "solutionCommands": [
+      "mkdir -p /ci",
+      "kubectl create namespace tekton-pipelines",
+      "cat << 'EOF' > /ci/tekton-pipeline.yaml\napiVersion: tekton.dev/v1\nkind: Task\nmetadata:\n  name: build-image\n  namespace: tekton-pipelines\nspec:\n  steps:\n    - name: build-container\n      image: crictl:latest\n      command: ['echo', 'Building container image']\n---\napiVersion: tekton.dev/v1\nkind: Pipeline\nmetadata:\n  name: app-ci-pipeline\n  namespace: tekton-pipelines\nspec:\n  workspaces:\n    - name: shared-workspace\n  tasks:\n    - name: build-step\n      taskRef:\n        name: build-image\nEOF",
+      "kubectl apply -f /ci/tekton-pipeline.yaml"
+    ],
+    "troubleshootingGuide": [
+      {
+        "problem": "Tekton resources not found in tekton-pipelines namespace.",
+        "cause": "The manifest omitted metadata.namespace or namespace was not created.",
+        "solution": "Create the namespace first and ensure metadata.namespace is tekton-pipelines."
+      }
+    ],
+    "domainId": "cicd-pipelines",
+    "domainTitle": "Cloud-Native CI/CD Pipelines, Tekton & DORA Engineering"
+  },
+  {
+    "id": "lab-cicd-02-github-actions-caching",
+    "title": "Configuring CI Workflow Build Caching & Artifact Upload",
+    "difficulty": "Intermediate",
+    "durationMinutes": 20,
+    "xpReward": 150,
+    "scenario": "Configure a production GitHub Actions CI pipeline: create directory .github/workflows and author ci-build.yml with jobs.build, steps utilizing actions/cache@v4 for dependency caching, and npm test execution.",
+    "productionContext": "Build caching in continuous integration pipelines reduces test latency by up to 70%, preventing redundant dependency downloads and accelerating developer feedback loops.",
+    "prerequisites": [
+      "lab-cicd-01-tekton-pipeline"
+    ],
+    "objectives": [
+      "Create directory .github/workflows in the repository root.",
+      "Author .github/workflows/ci-build.yml with actions/cache and npm test steps.",
+      "Verify file contents and syntax."
+    ],
+    "initialClusterState": {
+      "resources": []
+    },
+    "starterManifest": "name: CI Pipeline\non:\n  push:\n    branches: [ main ]\n  pull_request:\n    branches: [ main ]\njobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - name: Cache Node Modules\n        uses: actions/cache@v4\n        with:\n          path: ~/.npm\n          key: npm-cache-${{ hashFiles('package-lock.json') }}\n      - name: Run Unit Tests\n        run: npm test\n",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Create workflow directory",
+        "instruction": "Create directory .github/workflows for the CI workflow definition.",
+        "commandHint": "mkdir -p .github/workflows"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Author workflow definition",
+        "instruction": "Write the GitHub Actions workflow to .github/workflows/ci-build.yml with actions/cache and npm test.",
+        "commandHint": "cat << 'EOF' > .github/workflows/ci-build.yml\n...\nEOF"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "ci-workflow-file-exists",
+        "description": ".github/workflows/ci-build.yml contains actions/cache@v4",
+        "type": "vfs_file_contains",
+        "path": ".github/workflows/ci-build.yml",
+        "pattern": "actions/cache@v4",
+        "remediation": "Create .github/workflows/ci-build.yml with actions/cache@v4"
+      },
+      {
+        "id": "ci-workflow-contains-npm-test",
+        "description": "Workflow runs npm test step",
+        "type": "vfs_file_contains",
+        "path": ".github/workflows/ci-build.yml",
+        "pattern": "npm test",
+        "remediation": "Add npm test step to .github/workflows/ci-build.yml"
+      }
+    ],
+    "solutionCommands": [
+      "mkdir -p .github/workflows",
+      "cat << 'EOF' > .github/workflows/ci-build.yml\nname: CI Pipeline\non:\n  push:\n    branches: [ main ]\n  pull_request:\n    branches: [ main ]\njobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - name: Cache Node Modules\n        uses: actions/cache@v4\n        with:\n          path: ~/.npm\n          key: npm-cache-${{ hashFiles('package-lock.json') }}\n      - name: Run Unit Tests\n        run: npm test\nEOF"
+    ],
+    "troubleshootingGuide": [
+      {
+        "problem": "Validation fails on missing cache action or npm test step.",
+        "cause": "The file was saved to the wrong directory or omitted required steps.",
+        "solution": "Ensure .github/workflows/ci-build.yml exists and contains actions/cache@v4 and npm test."
+      }
+    ],
+    "domainId": "cicd-pipelines",
+    "domainTitle": "Cloud-Native CI/CD Pipelines, Tekton & DORA Engineering"
+  },
+  {
+    "id": "lab-secops-01-trivy-sbom-scan",
+    "title": "Vulnerability Scanning and Policy Gate with Trivy",
+    "difficulty": "Intermediate",
+    "durationMinutes": 20,
+    "xpReward": 150,
+    "scenario": "Perform container vulnerability scanning and validation: execute trivy image nginx:1.27-alpine to audit package CVEs, save the scan report to /security/trivy-report.txt, and verify that no critical vulnerabilities block release.",
+    "productionContext": "Container vulnerability scanning gates vulnerable base images from entering production clusters, protecting workloads from known remote code execution exploits.",
+    "prerequisites": [
+      "lab-cicd-01-tekton-pipeline"
+    ],
+    "objectives": [
+      "Create directory /security.",
+      "Execute trivy image scan.",
+      "Save scan results to /security/trivy-report.txt."
+    ],
+    "initialClusterState": {
+      "resources": []
+    },
+    "starterManifest": "# Trivy Image Security Scan\n# Scan target: nginx:1.27-alpine\n# Output target: /security/trivy-report.txt\n",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Create security reports directory",
+        "instruction": "Create directory /security for vulnerability audit reports.",
+        "commandHint": "mkdir -p /security"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Execute Trivy image audit",
+        "instruction": "Run trivy image on nginx:1.27-alpine redirecting output to /security/trivy-report.txt.",
+        "commandHint": "trivy image nginx:1.27-alpine > /security/trivy-report.txt"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "trivy-command-executed",
+        "description": "trivy image command executed",
+        "type": "command_executed",
+        "commandSubstring": "trivy image",
+        "remediation": "Execute trivy image nginx:1.27-alpine"
+      },
+      {
+        "id": "trivy-report-saved",
+        "description": "Scan output saved to /security/trivy-report.txt",
+        "type": "vfs_file_contains",
+        "path": "/security/trivy-report.txt",
+        "pattern": "Scan Target",
+        "remediation": "Redirect trivy output to /security/trivy-report.txt"
+      }
+    ],
+    "solutionCommands": [
+      "mkdir -p /security",
+      "trivy image nginx:1.27-alpine > /security/trivy-report.txt"
+    ],
+    "troubleshootingGuide": [
+      {
+        "problem": "/security/trivy-report.txt is empty or missing.",
+        "cause": "Trivy command was run without output redirection.",
+        "solution": "Run trivy image nginx:1.27-alpine > /security/trivy-report.txt."
+      }
+    ],
+    "domainId": "devsecops-pipeline",
+    "domainTitle": "DevSecOps Supply Chain Security, SLSA, SBOM & Policy Admission"
+  },
+  {
+    "id": "lab-secops-02-kyverno-admission-policy",
+    "title": "Enforcing Kubernetes Admission Control with Kyverno ClusterPolicy",
+    "difficulty": "Intermediate",
+    "durationMinutes": 20,
+    "xpReward": 150,
+    "scenario": "Enforce pod security policy as code: author and deploy a Kyverno ClusterPolicy named disallow-root-user that matches Pod resources and validates that spec.securityContext.runAsNonRoot is true with validationFailureAction set to Enforce. Validate the policy using the kyverno CLI.",
+    "productionContext": "Kyverno ClusterPolicies provide declarative, Kubernetes-native admission enforcement without requiring Rego programming, preventing developers from inadvertently launching privileged containers.",
+    "prerequisites": [
+      "lab-secops-01-trivy-sbom-scan"
+    ],
+    "objectives": [
+      "Create and apply Kyverno ClusterPolicy disallow-root-user.",
+      "Verify ClusterPolicy validationFailureAction is set to Enforce.",
+      "Validate policy using kyverno apply."
+    ],
+    "initialClusterState": {
+      "resources": []
+    },
+    "starterManifest": "apiVersion: kyverno.io/v1\nkind: ClusterPolicy\nmetadata:\n  name: disallow-root-user\nspec:\n  validationFailureAction: Enforce\n  rules:\n    - name: check-runAsNonRoot\n      match:\n        resources:\n          kinds:\n            - Pod\n      validate:\n        message: \"Running as root is forbidden. Set runAsNonRoot: true.\"\n        pattern:\n          spec:\n            securityContext:\n              runAsNonRoot: true\n",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Author and apply Kyverno ClusterPolicy",
+        "instruction": "Save the ClusterPolicy to /security/disallow-root-user.yaml and apply it with kubectl.",
+        "commandHint": "cat << 'EOF' > /security/disallow-root-user.yaml\n...\nEOF\nkubectl apply -f /security/disallow-root-user.yaml"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Validate policy using Kyverno CLI",
+        "instruction": "Run kyverno apply /security/disallow-root-user.yaml to test the policy logic against admission standards.",
+        "commandHint": "kyverno apply /security/disallow-root-user.yaml"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "kyverno-clusterpolicy-exists",
+        "description": "ClusterPolicy disallow-root-user exists",
+        "type": "resource_exists",
+        "kind": "ClusterPolicy",
+        "name": "disallow-root-user",
+        "remediation": "Apply ClusterPolicy disallow-root-user"
+      },
+      {
+        "id": "kyverno-failure-action-enforce",
+        "description": "validationFailureAction is Enforce",
+        "type": "resource_field_equals",
+        "kind": "ClusterPolicy",
+        "name": "disallow-root-user",
+        "fieldPath": "spec.validationFailureAction",
+        "expectedValue": "Enforce",
+        "remediation": "Set spec.validationFailureAction: Enforce in ClusterPolicy"
+      },
+      {
+        "id": "kyverno-cli-tested",
+        "description": "kyverno apply CLI executed",
+        "type": "command_executed",
+        "commandSubstring": "kyverno apply",
+        "remediation": "Execute kyverno apply /security/disallow-root-user.yaml"
+      }
+    ],
+    "solutionCommands": [
+      "mkdir -p /security",
+      "cat << 'EOF' > /security/disallow-root-user.yaml\napiVersion: kyverno.io/v1\nkind: ClusterPolicy\nmetadata:\n  name: disallow-root-user\nspec:\n  validationFailureAction: Enforce\n  rules:\n    - name: check-runAsNonRoot\n      match:\n        resources:\n          kinds:\n            - Pod\n      validate:\n        message: \"Running as root is forbidden. Set runAsNonRoot: true.\"\n        pattern:\n          spec:\n            securityContext:\n              runAsNonRoot: true\nEOF",
+      "kubectl apply -f /security/disallow-root-user.yaml",
+      "kyverno apply /security/disallow-root-user.yaml"
+    ],
+    "troubleshootingGuide": [
+      {
+        "problem": "ClusterPolicy disallow-root-user missing or validationFailureAction is not Enforce.",
+        "cause": "The manifest omitted spec.validationFailureAction: Enforce or was not applied.",
+        "solution": "Apply /security/disallow-root-user.yaml with spec.validationFailureAction: Enforce."
+      }
+    ],
+    "domainId": "devsecops-pipeline",
+    "domainTitle": "DevSecOps Supply Chain Security, SLSA, SBOM & Policy Admission"
+  },
+  {
+    "id": "lab-iac-01-crossplane-xrd",
+    "title": "Defining a Crossplane CompositeResourceDefinition (XRD)",
+    "difficulty": "Intermediate",
+    "durationMinutes": 20,
+    "xpReward": 150,
+    "scenario": "Platform engineering requires a standard database specification. Author and deploy a Crossplane CompositeResourceDefinition (XRD) named xpostgresqlinstances.database.kubelabs.io with group database.kubelabs.io, claimNames.kind PostgresInstance, and names.kind XPostgresInstance.",
+    "productionContext": "XRDs establish the platform API contract, defining custom resource schemas that application developers can provision without having cloud admin permissions.",
+    "prerequisites": [
+      "lab-k8s-01-ha-deployments"
+    ],
+    "objectives": [
+      "Create XRD manifest /iac/xrd-postgres.yaml.",
+      "Apply XRD to cluster and verify spec.claimNames.kind is PostgresInstance."
+    ],
+    "initialClusterState": {
+      "resources": []
+    },
+    "starterManifest": "apiVersion: apiextensions.crossplane.io/v1\nkind: CompositeResourceDefinition\nmetadata:\n  name: xpostgresqlinstances.database.kubelabs.io\nspec:\n  group: database.kubelabs.io\n  names:\n    kind: XPostgresInstance\n    plural: xpostgresinstances\n  claimNames:\n    kind: PostgresInstance\n    plural: postgresinstances\n  versions:\n    - name: v1alpha1\n      served: true\n      referenceable: true\n      schema:\n        openAPIV3Schema:\n          type: object\n          properties:\n            spec:\n              type: object\n              properties:\n                parameters:\n                  type: object\n                  properties:\n                    storageGB:\n                      type: integer\n",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Create XRD manifest",
+        "instruction": "Save the CompositeResourceDefinition manifest to /iac/xrd-postgres.yaml.",
+        "commandHint": "mkdir -p /iac && cat << 'EOF' > /iac/xrd-postgres.yaml\n...\nEOF"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Apply XRD to cluster",
+        "instruction": "Apply the XRD using kubectl and inspect the defined custom resource definition.",
+        "commandHint": "kubectl apply -f /iac/xrd-postgres.yaml"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "xrd-resource-exists",
+        "description": "CompositeResourceDefinition xpostgresqlinstances.database.kubelabs.io exists",
+        "type": "resource_exists",
+        "kind": "CompositeResourceDefinition",
+        "name": "xpostgresqlinstances.database.kubelabs.io",
+        "remediation": "Apply XRD manifest with name xpostgresqlinstances.database.kubelabs.io"
+      },
+      {
+        "id": "xrd-claim-kind",
+        "description": "XRD claimNames.kind is PostgresInstance",
+        "type": "resource_field_equals",
+        "kind": "CompositeResourceDefinition",
+        "name": "xpostgresqlinstances.database.kubelabs.io",
+        "fieldPath": "spec.claimNames.kind",
+        "expectedValue": "PostgresInstance",
+        "remediation": "Set spec.claimNames.kind: PostgresInstance in the XRD"
+      }
+    ],
+    "solutionCommands": [
+      "mkdir -p /iac",
+      "cat << 'EOF' > /iac/xrd-postgres.yaml\napiVersion: apiextensions.crossplane.io/v1\nkind: CompositeResourceDefinition\nmetadata:\n  name: xpostgresqlinstances.database.kubelabs.io\nspec:\n  group: database.kubelabs.io\n  names:\n    kind: XPostgresInstance\n    plural: xpostgresinstances\n  claimNames:\n    kind: PostgresInstance\n    plural: postgresinstances\n  versions:\n    - name: v1alpha1\n      served: true\n      referenceable: true\n      schema:\n        openAPIV3Schema:\n          type: object\n          properties:\n            spec:\n              type: object\n              properties:\n                parameters:\n                  type: object\n                  properties:\n                    storageGB:\n                      type: integer\nEOF",
+      "kubectl apply -f /iac/xrd-postgres.yaml"
+    ],
+    "troubleshootingGuide": [
+      {
+        "problem": "XRD resource not found or claimNames.kind mismatch.",
+        "cause": "The manifest omitted claimNames or was not applied.",
+        "solution": "Apply /iac/xrd-postgres.yaml and verify spec.claimNames.kind is PostgresInstance."
+      }
+    ],
+    "domainId": "iac-foundations",
+    "domainTitle": "Infrastructure as Code Foundations & Crossplane Control Planes"
+  },
+  {
+    "id": "lab-iac-02-crossplane-claim",
+    "title": "Provisioning Cloud Resources with Developer Claims",
+    "difficulty": "Intermediate",
+    "durationMinutes": 20,
+    "xpReward": 150,
+    "scenario": "An application developer needs a dedicated managed database. Create namespace team-fintech and apply a PostgresInstance claim named fintech-payment-db with parameters.storageGB: 50. Run crossplane status to inspect the control plane reconciliation state.",
+    "productionContext": "Claims allow application teams to self-service cloud infrastructure using standard Kubernetes manifests, decoupling application delivery from cloud-specific APIs.",
+    "prerequisites": [
+      "lab-iac-01-crossplane-xrd"
+    ],
+    "objectives": [
+      "Create namespace team-fintech.",
+      "Deploy PostgresInstance fintech-payment-db in namespace team-fintech.",
+      "Execute crossplane status CLI verification."
+    ],
+    "initialClusterState": {
+      "resources": []
+    },
+    "starterManifest": "apiVersion: database.kubelabs.io/v1alpha1\nkind: PostgresInstance\nmetadata:\n  name: fintech-payment-db\n  namespace: team-fintech\nspec:\n  parameters:\n    storageGB: 50\n",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Create namespace team-fintech",
+        "instruction": "Create the namespace for the fintech application team.",
+        "commandHint": "kubectl create namespace team-fintech"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Apply PostgresInstance claim",
+        "instruction": "Save and apply the PostgresInstance claim to namespace team-fintech.",
+        "commandHint": "cat << 'EOF' > /iac/claim-postgres.yaml\n...\nEOF\nkubectl apply -f /iac/claim-postgres.yaml"
+      },
+      {
+        "stepNumber": 3,
+        "title": "Inspect Crossplane control plane status",
+        "instruction": "Run crossplane status to verify control plane reconciliation.",
+        "commandHint": "crossplane status"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "claim-postgres-exists",
+        "description": "PostgresInstance fintech-payment-db exists in namespace team-fintech",
+        "type": "resource_exists",
+        "kind": "PostgresInstance",
+        "namespace": "team-fintech",
+        "name": "fintech-payment-db",
+        "remediation": "Apply PostgresInstance fintech-payment-db in namespace team-fintech"
+      },
+      {
+        "id": "claim-storage-equals",
+        "description": "PostgresInstance storageGB is 50",
+        "type": "resource_field_equals",
+        "kind": "PostgresInstance",
+        "namespace": "team-fintech",
+        "name": "fintech-payment-db",
+        "fieldPath": "spec.parameters.storageGB",
+        "expectedValue": 50,
+        "remediation": "Set spec.parameters.storageGB: 50 in PostgresInstance claim"
+      },
+      {
+        "id": "crossplane-cli-executed",
+        "description": "crossplane CLI executed",
+        "type": "command_executed",
+        "commandSubstring": "crossplane",
+        "remediation": "Run crossplane status"
+      }
+    ],
+    "solutionCommands": [
+      "mkdir -p /iac",
+      "kubectl create namespace team-fintech",
+      "cat << 'EOF' > /iac/claim-postgres.yaml\napiVersion: database.kubelabs.io/v1alpha1\nkind: PostgresInstance\nmetadata:\n  name: fintech-payment-db\n  namespace: team-fintech\nspec:\n  parameters:\n    storageGB: 50\nEOF",
+      "kubectl apply -f /iac/claim-postgres.yaml",
+      "crossplane status"
+    ],
+    "troubleshootingGuide": [
+      {
+        "problem": "PostgresInstance not found in team-fintech namespace.",
+        "cause": "Namespace was not created or manifest was applied to default namespace.",
+        "solution": "Create team-fintech namespace and apply /iac/claim-postgres.yaml."
+      }
+    ],
+    "domainId": "iac-foundations",
+    "domainTitle": "Infrastructure as Code Foundations & Crossplane Control Planes"
+  },
+  {
+    "id": "lab-tofu-01-vpc-cluster-apply",
+    "title": "Provisioning Cloud Infrastructure with OpenTofu / Terraform",
+    "difficulty": "Intermediate",
+    "durationMinutes": 20,
+    "xpReward": 150,
+    "scenario": "Initialize and apply an infrastructure stack in directory /infra: create main.tf declaring an AWS VPC aws_vpc.main and an EKS cluster aws_eks_cluster.prod, run tofu init to configure providers, and execute tofu apply -auto-approve to provision cloud resources.",
+    "productionContext": "Declarative IaC with OpenTofu ensures deterministic, reproducible environment provisioning across dev, staging, and production without manual console drift.",
+    "prerequisites": [
+      "lab-iac-01-crossplane-xrd"
+    ],
+    "objectives": [
+      "Create /infra/main.tf with aws_vpc and aws_eks_cluster resources.",
+      "Run tofu init to initialize provider plugins.",
+      "Run tofu apply to provision cloud resources and generate state."
+    ],
+    "initialClusterState": {
+      "resources": [],
+      "cloudResources": [],
+      "terraformState": {
+        "initialized": false,
+        "resources": []
+      }
+    },
+    "starterManifest": "terraform {\n  required_providers {\n    aws = {\n      source  = \"hashicorp/aws\"\n      version = \"~> 5.0\"\n    }\n  }\n}\n\nresource \"aws_vpc\" \"main\" {\n  cidr_block           = \"10.0.0.0/16\"\n  enable_dns_hostnames = true\n}\n\nresource \"aws_eks_cluster\" \"prod\" {\n  name    = \"kubelabs-eks\"\n  version = \"1.31\"\n}\n",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Create OpenTofu infrastructure definition",
+        "instruction": "Save the HCL configuration to /infra/main.tf declaring aws_vpc and aws_eks_cluster.",
+        "commandHint": "mkdir -p /infra && cat << 'EOF' > /infra/main.tf\n...\nEOF"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Initialize OpenTofu",
+        "instruction": "Initialize the directory to download provider plugins.",
+        "commandHint": "cd /infra && tofu init"
+      },
+      {
+        "stepNumber": 3,
+        "title": "Apply infrastructure resources",
+        "instruction": "Execute tofu apply to create cloud resources.",
+        "commandHint": "tofu apply -auto-approve"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "tofu-main-tf-exists",
+        "description": "/infra/main.tf contains aws_vpc.main",
+        "type": "vfs_file_contains",
+        "path": "/infra/main.tf",
+        "pattern": "aws_vpc",
+        "remediation": "Create /infra/main.tf with aws_vpc resource"
+      },
+      {
+        "id": "cloud-resource-vpc-active",
+        "description": "Cloud resource aws_vpc.main is active",
+        "type": "cloud_resource_exists",
+        "name": "aws_vpc.main",
+        "remediation": "Run tofu apply to create aws_vpc.main"
+      },
+      {
+        "id": "cloud-resource-eks-active",
+        "description": "Cloud resource aws_eks_cluster.prod is active",
+        "type": "cloud_resource_exists",
+        "name": "aws_eks_cluster.prod",
+        "remediation": "Run tofu apply to create aws_eks_cluster.prod"
+      }
+    ],
+    "solutionCommands": [
+      "mkdir -p /infra",
+      "cat << 'EOF' > /infra/main.tf\nterraform {\n  required_providers {\n    aws = {\n      source  = \"hashicorp/aws\"\n      version = \"~> 5.0\"\n    }\n  }\n}\n\nresource \"aws_vpc\" \"main\" {\n  cidr_block           = \"10.0.0.0/16\"\n  enable_dns_hostnames = true\n}\n\nresource \"aws_eks_cluster\" \"prod\" {\n  name    = \"kubelabs-eks\"\n  version = \"1.31\"\n}\nEOF",
+      "cd /infra",
+      "tofu init",
+      "tofu apply -auto-approve"
+    ],
+    "troubleshootingGuide": [
+      {
+        "problem": "Cloud resources not active or main.tf not found.",
+        "cause": "tofu apply was not executed or main.tf was created in the wrong directory.",
+        "solution": "Ensure /infra/main.tf exists and execute tofu apply -auto-approve."
+      }
+    ],
+    "domainId": "terraform-opentofu",
+    "domainTitle": "OpenTofu & Terraform Infrastructure Automation, State & Modules"
+  },
+  {
+    "id": "lab-tofu-02-remote-state-locking",
+    "title": "Configuring Remote S3 Backend State with DynamoDB Locking",
+    "difficulty": "Intermediate",
+    "durationMinutes": 20,
+    "xpReward": 150,
+    "scenario": "To prevent concurrent state corruption, configure a remote S3 backend in /infra/backend.tf: specify backend 's3' with bucket 'kubelabs-terraform-state', key 'prod/terraform.tfstate', region 'us-east-1', and dynamodb_table 'terraform-locks'. Execute tofu init to configure the backend.",
+    "productionContext": "Remote state with distributed locking prevents disastrous race conditions when multiple team members or CI runners execute simultaneous terraform apply operations.",
+    "prerequisites": [
+      "lab-tofu-01-vpc-cluster-apply"
+    ],
+    "objectives": [
+      "Create /infra/backend.tf specifying backend s3.",
+      "Configure bucket, key, and dynamodb_table locking.",
+      "Run tofu init to validate backend configuration."
+    ],
+    "initialClusterState": {
+      "resources": []
+    },
+    "starterManifest": "terraform {\n  backend \"s3\" {\n    bucket         = \"kubelabs-terraform-state\"\n    key            = \"prod/terraform.tfstate\"\n    region         = \"us-east-1\"\n    dynamodb_table = \"terraform-locks\"\n    encrypt        = true\n  }\n}\n",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Create remote backend configuration",
+        "instruction": "Write the S3 backend block with dynamodb_table locking to /infra/backend.tf.",
+        "commandHint": "cat << 'EOF' > /infra/backend.tf\n...\nEOF"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Initialize remote backend",
+        "instruction": "Run tofu init to configure the S3 backend and DynamoDB state lock.",
+        "commandHint": "tofu init"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "backend-tf-contains-s3",
+        "description": "/infra/backend.tf configures backend 's3'",
+        "type": "vfs_file_contains",
+        "path": "/infra/backend.tf",
+        "pattern": "backend \"s3\"",
+        "remediation": "Configure backend 's3' in /infra/backend.tf"
+      },
+      {
+        "id": "backend-tf-contains-dynamodb",
+        "description": "/infra/backend.tf configures dynamodb_table locking",
+        "type": "vfs_file_contains",
+        "path": "/infra/backend.tf",
+        "pattern": "dynamodb_table",
+        "remediation": "Add dynamodb_table setting in /infra/backend.tf"
+      },
+      {
+        "id": "tofu-init-executed",
+        "description": "tofu init executed",
+        "type": "command_executed",
+        "commandSubstring": "tofu init",
+        "remediation": "Execute tofu init"
+      }
+    ],
+    "solutionCommands": [
+      "cat << 'EOF' > /infra/backend.tf\nterraform {\n  backend \"s3\" {\n    bucket         = \"kubelabs-terraform-state\"\n    key            = \"prod/terraform.tfstate\"\n    region         = \"us-east-1\"\n    dynamodb_table = \"terraform-locks\"\n    encrypt        = true\n  }\n}\nEOF",
+      "tofu init"
+    ],
+    "troubleshootingGuide": [
+      {
+        "problem": "Validation fails on missing backend configuration or unexecuted tofu init.",
+        "cause": "/infra/backend.tf is missing required properties or tofu init was not run.",
+        "solution": "Ensure /infra/backend.tf contains backend \"s3\" and dynamodb_table, then execute tofu init."
+      }
+    ],
+    "domainId": "terraform-opentofu",
+    "domainTitle": "OpenTofu & Terraform Infrastructure Automation, State & Modules"
+  },
+  {
+    "id": "lab-mesh-01-sidecar-injection",
+    "title": "Enforcing Automated Sidecar Injection and Validating xDS Sync",
+    "difficulty": "Intermediate",
+    "durationMinutes": 20,
+    "xpReward": 150,
+    "scenario": "Configure service mesh namespace governance: label namespace mesh-apps with istio-injection=enabled, deploy application Pod web-frontend in namespace mesh-apps, and run istioctl proxy-status to verify Envoy proxy synchronization.",
+    "productionContext": "Automated sidecar injection ensures all microservices within a tenant boundary inherit cryptographic mutual TLS and distributed observability without application code modification.",
+    "prerequisites": [
+      "lab-k8snet-01-cni-services-dns"
+    ],
+    "objectives": [
+      "Create and label namespace mesh-apps with istio-injection=enabled.",
+      "Deploy Pod web-frontend in namespace mesh-apps.",
+      "Verify Envoy proxy synchronization via istioctl proxy-status."
+    ],
+    "initialClusterState": {
+      "resources": []
+    },
+    "starterManifest": "apiVersion: v1\nkind: Pod\nmetadata:\n  name: web-frontend\n  namespace: mesh-apps\n  labels:\n    app: web-frontend\nspec:\n  containers:\n    - name: web\n      image: nginx:1.27-alpine\n",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Create and label namespace",
+        "instruction": "Create namespace mesh-apps and apply label istio-injection=enabled.",
+        "commandHint": "kubectl create namespace mesh-apps\nkubectl label namespace mesh-apps istio-injection=enabled"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Deploy application workload",
+        "instruction": "Save and apply the Pod manifest to namespace mesh-apps.",
+        "commandHint": "cat << 'EOF' > /mesh/web-frontend.yaml\n...\nEOF\nkubectl apply -f /mesh/web-frontend.yaml"
+      },
+      {
+        "stepNumber": 3,
+        "title": "Inspect proxy status",
+        "instruction": "Execute istioctl proxy-status to verify proxy synchronization with Istiod.",
+        "commandHint": "istioctl proxy-status"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "namespace-mesh-apps-labeled",
+        "description": "Namespace mesh-apps has label istio-injection=enabled",
+        "type": "resource_field_equals",
+        "kind": "Namespace",
+        "name": "mesh-apps",
+        "fieldPath": "metadata.labels['istio-injection']",
+        "expectedValue": "enabled",
+        "remediation": "Run kubectl label namespace mesh-apps istio-injection=enabled"
+      },
+      {
+        "id": "pod-web-frontend-running",
+        "description": "Pod web-frontend exists in namespace mesh-apps",
+        "type": "resource_exists",
+        "kind": "Pod",
+        "namespace": "mesh-apps",
+        "name": "web-frontend",
+        "remediation": "Deploy Pod web-frontend in namespace mesh-apps"
+      },
+      {
+        "id": "istioctl-proxy-status-executed",
+        "description": "istioctl proxy-status executed",
+        "type": "command_executed",
+        "commandSubstring": "istioctl proxy-status",
+        "remediation": "Execute istioctl proxy-status"
+      }
+    ],
+    "solutionCommands": [
+      "mkdir -p /mesh",
+      "kubectl create namespace mesh-apps",
+      "kubectl label namespace mesh-apps istio-injection=enabled",
+      "cat << 'EOF' > /mesh/web-frontend.yaml\napiVersion: v1\nkind: Pod\nmetadata:\n  name: web-frontend\n  namespace: mesh-apps\n  labels:\n    app: web-frontend\nspec:\n  containers:\n    - name: web\n      image: nginx:1.27-alpine\nEOF",
+      "kubectl apply -f /mesh/web-frontend.yaml",
+      "istioctl proxy-status"
+    ],
+    "troubleshootingGuide": [
+      {
+        "problem": "Namespace label missing or istioctl command not executed.",
+        "cause": "Label was omitted or proxy-status check was not run.",
+        "solution": "Execute kubectl label namespace mesh-apps istio-injection=enabled and istioctl proxy-status."
+      }
+    ],
+    "domainId": "service-mesh-core",
+    "domainTitle": "Service Mesh Architecture, Envoy Proxy & Ambient Data Planes"
+  },
+  {
+    "id": "lab-mesh-02-mesh-diagnostics",
+    "title": "Running Automated Mesh Configuration Audits with istioctl analyze",
+    "difficulty": "Intermediate",
+    "durationMinutes": 20,
+    "xpReward": 150,
+    "scenario": "Execute proactive configuration analysis on namespace production using istioctl analyze, save the audit log to /mesh/analyze-report.txt, and confirm zero syntax or reference errors exist in the mesh topology.",
+    "productionContext": "Running istioctl analyze catches orphaned VirtualServices, invalid DestinationRule subsets, and Gateway port mismatches before traffic disruption occurs in production.",
+    "prerequisites": [
+      "lab-mesh-01-sidecar-injection"
+    ],
+    "objectives": [
+      "Execute istioctl analyze on namespace production.",
+      "Redirect audit findings to /mesh/analyze-report.txt.",
+      "Verify output contains validation success confirmation."
+    ],
+    "initialClusterState": {
+      "resources": []
+    },
+    "starterManifest": "# istioctl analyze configuration diagnostic\n# Namespace: production\n# Output target: /mesh/analyze-report.txt\n",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Run mesh analysis",
+        "instruction": "Execute istioctl analyze on namespace production redirecting output to /mesh/analyze-report.txt.",
+        "commandHint": "istioctl analyze -n production > /mesh/analyze-report.txt"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "istioctl-analyze-executed",
+        "description": "istioctl analyze executed",
+        "type": "command_executed",
+        "commandSubstring": "istioctl analyze",
+        "remediation": "Execute istioctl analyze -n production"
+      },
+      {
+        "id": "analyze-report-file-exists",
+        "description": "/mesh/analyze-report.txt contains audit results",
+        "type": "vfs_file_contains",
+        "path": "/mesh/analyze-report.txt",
+        "pattern": "No validation issues found",
+        "remediation": "Redirect istioctl analyze output to /mesh/analyze-report.txt"
+      }
+    ],
+    "solutionCommands": [
+      "mkdir -p /mesh",
+      "istioctl analyze -n production > /mesh/analyze-report.txt"
+    ],
+    "troubleshootingGuide": [
+      {
+        "problem": "/mesh/analyze-report.txt missing or empty.",
+        "cause": "Command was executed without output redirection.",
+        "solution": "Run istioctl analyze -n production > /mesh/analyze-report.txt."
+      }
+    ],
+    "domainId": "service-mesh-core",
+    "domainTitle": "Service Mesh Architecture, Envoy Proxy & Ambient Data Planes"
+  },
+  {
+    "id": "lab-istio-01-canary-routing",
+    "title": "Configuring Istio VirtualService Canary Traffic Routing",
+    "difficulty": "Intermediate",
+    "durationMinutes": 20,
+    "xpReward": 150,
+    "scenario": "Configure progressive delivery: author and apply a VirtualService named checkout-vs in namespace default with host checkout.kubelabs.io matching prefix /checkout and routing to destination host checkout-service with subset v1. Also apply DestinationRule checkout-dr defining subset v1 with labels version: v1.",
+    "productionContext": "Canary routing enables risk-free deployment testing by directing specific paths or canary cohorts to new release subsets without risking broader traffic.",
+    "prerequisites": [
+      "lab-mesh-01-sidecar-injection"
+    ],
+    "objectives": [
+      "Apply DestinationRule checkout-dr with subset v1.",
+      "Apply VirtualService checkout-vs routing /checkout to checkout-service:v1.",
+      "Verify route resolution matches checkout-service:v1."
+    ],
+    "initialClusterState": {
+      "resources": []
+    },
+    "starterManifest": "apiVersion: networking.istio.io/v1beta1\nkind: DestinationRule\nmetadata:\n  name: checkout-dr\n  namespace: default\nspec:\n  host: checkout-service\n  subsets:\n    - name: v1\n      labels:\n        version: v1\n---\napiVersion: networking.istio.io/v1beta1\nkind: VirtualService\nmetadata:\n  name: checkout-vs\n  namespace: default\nspec:\n  hosts:\n    - checkout.kubelabs.io\n  http:\n    - match:\n        - uri:\n            prefix: /checkout\n      route:\n        - destination:\n            host: checkout-service\n            subset: v1\n",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Author DestinationRule and VirtualService",
+        "instruction": "Save the routing manifests to /mesh/checkout-mesh.yaml and apply to default namespace.",
+        "commandHint": "cat << 'EOF' > /mesh/checkout-mesh.yaml\n...\nEOF\nkubectl apply -f /mesh/checkout-mesh.yaml"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "checkout-dr-exists",
+        "description": "DestinationRule checkout-dr exists in default",
+        "type": "resource_exists",
+        "kind": "DestinationRule",
+        "namespace": "default",
+        "name": "checkout-dr",
+        "remediation": "Apply DestinationRule checkout-dr in default namespace"
+      },
+      {
+        "id": "checkout-vs-exists",
+        "description": "VirtualService checkout-vs exists in default",
+        "type": "resource_exists",
+        "kind": "VirtualService",
+        "namespace": "default",
+        "name": "checkout-vs",
+        "remediation": "Apply VirtualService checkout-vs in default namespace"
+      },
+      {
+        "id": "istio-route-matches-v1",
+        "description": "Route /checkout resolves to checkout-service:v1",
+        "type": "istio_route_matches",
+        "virtualService": "checkout-vs",
+        "uri": "/checkout",
+        "expectedHost": "checkout-service",
+        "expectedSubset": "v1",
+        "remediation": "Configure VirtualService checkout-vs to route prefix /checkout to checkout-service:v1"
+      }
+    ],
+    "solutionCommands": [
+      "mkdir -p /mesh",
+      "cat << 'EOF' > /mesh/checkout-mesh.yaml\napiVersion: networking.istio.io/v1beta1\nkind: DestinationRule\nmetadata:\n  name: checkout-dr\n  namespace: default\nspec:\n  host: checkout-service\n  subsets:\n    - name: v1\n      labels:\n        version: v1\n---\napiVersion: networking.istio.io/v1beta1\nkind: VirtualService\nmetadata:\n  name: checkout-vs\n  namespace: default\nspec:\n  hosts:\n    - checkout.kubelabs.io\n  http:\n    - match:\n        - uri:\n            prefix: /checkout\n      route:\n        - destination:\n            host: checkout-service\n            subset: v1\nEOF",
+      "kubectl apply -f /mesh/checkout-mesh.yaml"
+    ],
+    "troubleshootingGuide": [
+      {
+        "problem": "Route matching fails or destination host/subset does not match.",
+        "cause": "The VirtualService match prefix or destination subset was incorrectly defined.",
+        "solution": "Verify uri.prefix is /checkout and destination.subset is v1."
+      }
+    ],
+    "domainId": "istio-service-mesh",
+    "domainTitle": "Istio Service Mesh Traffic Management, Security & mTLS"
+  },
+  {
+    "id": "lab-istio-02-peer-authentication-mtls",
+    "title": "Enforcing Mesh-Wide STRICT Mutual TLS (mTLS)",
+    "difficulty": "Intermediate",
+    "durationMinutes": 20,
+    "xpReward": 150,
+    "scenario": "Enforce zero-trust encryption across all workloads: create namespace istio-system and apply a root PeerAuthentication named default with mtls.mode set to STRICT.",
+    "productionContext": "Enforcing STRICT mTLS guarantees that all service-to-service communication is authenticated and encrypted via x509 certificates managed by Istiod.",
+    "prerequisites": [
+      "lab-istio-01-canary-routing"
+    ],
+    "objectives": [
+      "Create namespace istio-system.",
+      "Apply PeerAuthentication default in namespace istio-system with mtls.mode: STRICT.",
+      "Verify mtls.mode is set to STRICT."
+    ],
+    "initialClusterState": {
+      "resources": []
+    },
+    "starterManifest": "apiVersion: security.istio.io/v1beta1\nkind: PeerAuthentication\nmetadata:\n  name: default\n  namespace: istio-system\nspec:\n  mtls:\n    mode: STRICT\n",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Create istio-system namespace",
+        "instruction": "Create the root control plane namespace istio-system.",
+        "commandHint": "kubectl create namespace istio-system"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Apply root PeerAuthentication",
+        "instruction": "Save and apply PeerAuthentication with mode STRICT to istio-system.",
+        "commandHint": "cat << 'EOF' > /mesh/strict-mtls.yaml\n...\nEOF\nkubectl apply -f /mesh/strict-mtls.yaml"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "peerauth-default-exists",
+        "description": "PeerAuthentication default exists in namespace istio-system",
+        "type": "resource_exists",
+        "kind": "PeerAuthentication",
+        "namespace": "istio-system",
+        "name": "default",
+        "remediation": "Apply PeerAuthentication default in namespace istio-system"
+      },
+      {
+        "id": "peerauth-mode-strict",
+        "description": "PeerAuthentication mtls.mode is STRICT",
+        "type": "resource_field_equals",
+        "kind": "PeerAuthentication",
+        "namespace": "istio-system",
+        "name": "default",
+        "fieldPath": "spec.mtls.mode",
+        "expectedValue": "STRICT",
+        "remediation": "Set spec.mtls.mode: STRICT on PeerAuthentication default"
+      }
+    ],
+    "solutionCommands": [
+      "mkdir -p /mesh",
+      "kubectl create namespace istio-system",
+      "cat << 'EOF' > /mesh/strict-mtls.yaml\napiVersion: security.istio.io/v1beta1\nkind: PeerAuthentication\nmetadata:\n  name: default\n  namespace: istio-system\nspec:\n  mtls:\n    mode: STRICT\nEOF",
+      "kubectl apply -f /mesh/strict-mtls.yaml"
+    ],
+    "troubleshootingGuide": [
+      {
+        "problem": "PeerAuthentication mode is not STRICT.",
+        "cause": "The spec.mtls.mode property was omitted or set to PERMISSIVE.",
+        "solution": "Update /mesh/strict-mtls.yaml with spec.mtls.mode: STRICT and re-apply."
+      }
+    ],
+    "domainId": "istio-service-mesh",
+    "domainTitle": "Istio Service Mesh Traffic Management, Security & mTLS"
+  },
+  {
+    "id": "lab-linkerd-01-service-profile",
+    "title": "Configuring Linkerd ServiceProfiles & Resilient Retry Budgets",
+    "difficulty": "Intermediate",
+    "durationMinutes": 20,
+    "xpReward": 150,
+    "scenario": "Define service resiliency for payment processing: author and apply a Linkerd ServiceProfile for payment-service.default.svc.cluster.local in namespace default. Configure a retry budget with retryRatio 0.2, minRetriesPerSecond 10, ttl 10s, and define route GetPayment matching regex /api/v1/payments.* with isRetryable set to true.",
+    "productionContext": "Retry budgets protect backend microservices from cascading retry storms during partial outages by strictly capping the proportion of retry requests proxies may issue.",
+    "prerequisites": [
+      "lab-mesh-01-sidecar-injection"
+    ],
+    "objectives": [
+      "Create and apply ServiceProfile payment-service.default.svc.cluster.local in default namespace.",
+      "Configure retryBudget with retryRatio 0.2 and minRetriesPerSecond 10.",
+      "Define route GetPayment matching pathRegex /api/v1/payments.* with isRetryable: true."
+    ],
+    "initialClusterState": {
+      "resources": []
+    },
+    "starterManifest": "apiVersion: linkerd.io/v1alpha2\nkind: ServiceProfile\nmetadata:\n  name: payment-service.default.svc.cluster.local\n  namespace: default\nspec:\n  retryBudget:\n    retryRatio: 0.2\n    minRetriesPerSecond: 10\n    ttl: 10s\n  routes:\n    - name: GetPayment\n      condition:\n        method: GET\n        pathRegex: /api/v1/payments.*\n      isRetryable: true\n",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Author ServiceProfile Manifest",
+        "instruction": "Save the ServiceProfile manifest with retryBudget and GetPayment route to /mesh/payment-serviceprofile.yaml.",
+        "commandHint": "cat << 'EOF' > /mesh/payment-serviceprofile.yaml\n...\nEOF"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Apply ServiceProfile to Cluster",
+        "instruction": "Apply the ServiceProfile to namespace default.",
+        "commandHint": "kubectl apply -f /mesh/payment-serviceprofile.yaml"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "sp-payment-exists",
+        "description": "ServiceProfile payment-service exists in default namespace",
+        "type": "resource_exists",
+        "kind": "ServiceProfile",
+        "namespace": "default",
+        "name": "payment-service.default.svc.cluster.local",
+        "remediation": "Apply ServiceProfile payment-service.default.svc.cluster.local in default namespace"
+      },
+      {
+        "id": "sp-retry-budget-ratio",
+        "description": "ServiceProfile retryBudget.retryRatio is 0.2",
+        "type": "resource_field_equals",
+        "kind": "ServiceProfile",
+        "namespace": "default",
+        "name": "payment-service.default.svc.cluster.local",
+        "fieldPath": "spec.retryBudget.retryRatio",
+        "expectedValue": 0.2,
+        "remediation": "Set spec.retryBudget.retryRatio: 0.2 on ServiceProfile"
+      },
+      {
+        "id": "sp-route-getpayment-name",
+        "description": "ServiceProfile has route GetPayment",
+        "type": "resource_field_equals",
+        "kind": "ServiceProfile",
+        "namespace": "default",
+        "name": "payment-service.default.svc.cluster.local",
+        "fieldPath": "spec.routes[0].name",
+        "expectedValue": "GetPayment",
+        "remediation": "Define route named GetPayment in spec.routes"
+      }
+    ],
+    "solutionCommands": [
+      "mkdir -p /mesh",
+      "cat << 'EOF' > /mesh/payment-serviceprofile.yaml\napiVersion: linkerd.io/v1alpha2\nkind: ServiceProfile\nmetadata:\n  name: payment-service.default.svc.cluster.local\n  namespace: default\nspec:\n  retryBudget:\n    retryRatio: 0.2\n    minRetriesPerSecond: 10\n    ttl: 10s\n  routes:\n    - name: GetPayment\n      condition:\n        method: GET\n        pathRegex: /api/v1/payments.*\n      isRetryable: true\nEOF",
+      "kubectl apply -f /mesh/payment-serviceprofile.yaml"
+    ],
+    "troubleshootingGuide": [
+      {
+        "problem": "ServiceProfile not found or retryRatio incorrect.",
+        "cause": "The ServiceProfile name must match the full service FQDN payment-service.default.svc.cluster.local.",
+        "solution": "Verify metadata.name is payment-service.default.svc.cluster.local and re-apply."
+      }
+    ],
+    "domainId": "linkerd-service-mesh",
+    "domainTitle": "Linkerd Service Mesh, Rust Micro-Proxies & ServiceProfiles"
+  },
+  {
+    "id": "lab-linkerd-02-viz-telemetry",
+    "title": "Auditing Mesh Control Plane Health and Golden Signals with Linkerd Viz",
+    "difficulty": "Intermediate",
+    "durationMinutes": 20,
+    "xpReward": 150,
+    "scenario": "Verify service mesh runtime health and live telemetry: execute linkerd check to validate control plane controller pods and API connectivity, then execute linkerd viz stat to inspect real-time success rates, requests per second (RPS), and P50-P99 latency distribution across meshed workloads.",
+    "productionContext": "Linkerd Viz telemetry provides instantaneous L7 golden signals without requiring dedicated Prometheus dashboards, making rapid diagnostics possible during production incidents.",
+    "prerequisites": [
+      "lab-linkerd-01-service-profile"
+    ],
+    "objectives": [
+      "Execute linkerd check to verify control plane and extension readiness.",
+      "Execute linkerd viz stat to inspect live golden signals and mesh success rates."
+    ],
+    "initialClusterState": {
+      "resources": []
+    },
+    "starterManifest": "# Linkerd control plane audit and telemetry diagnostic\n# Run: linkerd check && linkerd viz stat\n",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Run linkerd check",
+        "instruction": "Execute linkerd check to verify control plane status.",
+        "commandHint": "linkerd check"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Run linkerd viz stat",
+        "instruction": "Execute linkerd viz stat to inspect real-time telemetry metrics.",
+        "commandHint": "linkerd viz stat"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "linkerd-check-executed",
+        "description": "linkerd check executed",
+        "type": "command_executed",
+        "commandSubstring": "linkerd check",
+        "remediation": "Execute linkerd check"
+      },
+      {
+        "id": "linkerd-viz-stat-executed",
+        "description": "linkerd viz stat executed",
+        "type": "command_executed",
+        "commandSubstring": "linkerd viz stat",
+        "remediation": "Execute linkerd viz stat"
+      }
+    ],
+    "solutionCommands": [
+      "linkerd check",
+      "linkerd viz stat"
+    ],
+    "troubleshootingGuide": [
+      {
+        "problem": "linkerd commands fail or return unready status.",
+        "cause": "Commands were not invoked or linkerd CLI was omitted.",
+        "solution": "Execute linkerd check and linkerd viz stat in the terminal."
+      }
+    ],
+    "domainId": "linkerd-service-mesh",
+    "domainTitle": "Linkerd Service Mesh, Rust Micro-Proxies & ServiceProfiles"
+  },
+  {
+    "id": "lab-obs-01-red-metrics-sli",
+    "title": "Formulating RED Metrics & SLI Telemetry Specifications",
+    "difficulty": "Intermediate",
+    "durationMinutes": 20,
+    "xpReward": 150,
+    "scenario": "Design request-driven microservice observability: author an SLI telemetry specification in /obs/red-telemetry.json defining RED metrics for checkout-service (rateMetric: http_requests_total, errorFilter: status=~\"5..\", and durationMetric: http_request_duration_seconds_bucket). Deploy a ConfigMap named checkout-telemetry-config in namespace monitoring embedding this telemetry contract.",
+    "productionContext": "Explicit RED telemetry definitions ensure consistent dashboarding, alerting, and automated SLO burn rate evaluation across distributed microservice architectures.",
+    "prerequisites": [
+      "lab-mesh-01-sidecar-injection"
+    ],
+    "objectives": [
+      "Author RED telemetry contract in /obs/red-telemetry.json.",
+      "Create and apply ConfigMap checkout-telemetry-config in namespace monitoring.",
+      "Verify telemetry config contains rate and duration metrics."
+    ],
+    "initialClusterState": {
+      "resources": []
+    },
+    "starterManifest": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: checkout-telemetry-config\n  namespace: monitoring\ndata:\n  red-telemetry.json: |\n    {\n      \"service\": \"checkout-service\",\n      \"framework\": \"RED\",\n      \"rateMetric\": \"http_requests_total\",\n      \"errorFilter\": \"status=~\\\"5..\\\"\",\n      \"durationMetric\": \"http_request_duration_seconds_bucket\"\n    }\n",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Author RED telemetry specification file",
+        "instruction": "Save the RED JSON schema to /obs/red-telemetry.json.",
+        "commandHint": "mkdir -p /obs\ncat << 'EOF' > /obs/red-telemetry.json\n...\nEOF"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Deploy ConfigMap to monitoring namespace",
+        "instruction": "Apply the telemetry ConfigMap to namespace monitoring.",
+        "commandHint": "kubectl apply -f /obs/checkout-telemetry-config.yaml"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "cm-checkout-telemetry-exists",
+        "description": "ConfigMap checkout-telemetry-config exists in namespace monitoring",
+        "type": "resource_exists",
+        "kind": "ConfigMap",
+        "namespace": "monitoring",
+        "name": "checkout-telemetry-config",
+        "remediation": "Apply ConfigMap checkout-telemetry-config in namespace monitoring"
+      },
+      {
+        "id": "vfs-red-spec-exists",
+        "description": "/obs/red-telemetry.json contains http_requests_total",
+        "type": "vfs_file_contains",
+        "path": "/obs/red-telemetry.json",
+        "pattern": "http_requests_total",
+        "remediation": "Author RED telemetry specification in /obs/red-telemetry.json"
+      },
+      {
+        "id": "cm-data-contains-duration",
+        "description": "ConfigMap data contains http_request_duration_seconds_bucket",
+        "type": "resource_field_contains",
+        "kind": "ConfigMap",
+        "namespace": "monitoring",
+        "name": "checkout-telemetry-config",
+        "fieldPath": "data['red-telemetry.json']",
+        "expectedValue": "http_request_duration_seconds_bucket",
+        "remediation": "Embed durationMetric in ConfigMap data['red-telemetry.json']"
+      }
+    ],
+    "solutionCommands": [
+      "mkdir -p /obs",
+      "cat << 'EOF' > /obs/red-telemetry.json\n{\n  \"service\": \"checkout-service\",\n  \"framework\": \"RED\",\n  \"rateMetric\": \"http_requests_total\",\n  \"errorFilter\": \"status=~\\\"5..\\\"\",\n  \"durationMetric\": \"http_request_duration_seconds_bucket\"\n}\nEOF",
+      "cat << 'EOF' > /obs/checkout-telemetry-config.yaml\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: checkout-telemetry-config\n  namespace: monitoring\ndata:\n  red-telemetry.json: |\n    {\n      \"service\": \"checkout-service\",\n      \"framework\": \"RED\",\n      \"rateMetric\": \"http_requests_total\",\n      \"errorFilter\": \"status=~\\\"5..\\\"\",\n      \"durationMetric\": \"http_request_duration_seconds_bucket\"\n    }\nEOF",
+      "kubectl apply -f /obs/checkout-telemetry-config.yaml"
+    ],
+    "troubleshootingGuide": [
+      {
+        "problem": "ConfigMap not found or metric names missing.",
+        "cause": "ConfigMap was not created in monitoring namespace or file was empty.",
+        "solution": "Verify /obs/red-telemetry.json contains valid RED metrics and apply the ConfigMap manifest."
+      }
+    ],
+    "domainId": "observability-core",
+    "domainTitle": "Observability Core Principles, RED & USE Frameworks & SLI Telemetry"
+  },
+  {
+    "id": "lab-obs-02-use-metrics-audit",
+    "title": "Auditing Cluster Infrastructure Health via the USE Framework",
+    "difficulty": "Intermediate",
+    "durationMinutes": 20,
+    "xpReward": 150,
+    "scenario": "Audit cluster infrastructure resource bottlenecks using USE metrics: execute promql queries to inspect node CPU Utilization (node_cpu_utilization), memory Saturation (node_memory_saturation), and filesystem Errors (node_filesystem_errors_total), saving the audit report to /obs/use-audit.txt.",
+    "productionContext": "The USE method provides immediate triage during node pressure incidents by systematically isolating whether hardware or kernel subsystems are exhausted, saturated with queuing, or failing with errors.",
+    "prerequisites": [
+      "lab-obs-01-red-metrics-sli"
+    ],
+    "objectives": [
+      "Execute promql query for node CPU utilization.",
+      "Generate USE audit report in /obs/use-audit.txt."
+    ],
+    "initialClusterState": {
+      "resources": []
+    },
+    "starterManifest": "# USE Framework Node Resource Audit\n# Query node CPU utilization and write findings to /obs/use-audit.txt\n",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Query node utilization metrics",
+        "instruction": "Execute promql query for node_cpu_utilization.",
+        "commandHint": "promql node_cpu_utilization"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Save audit report",
+        "instruction": "Redirect the promql query findings to /obs/use-audit.txt.",
+        "commandHint": "promql node_cpu_utilization > /obs/use-audit.txt"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "promql-query-executed",
+        "description": "promql command executed",
+        "type": "command_executed",
+        "commandSubstring": "promql",
+        "remediation": "Execute promql node_cpu_utilization"
+      },
+      {
+        "id": "use-audit-file-exists",
+        "description": "/obs/use-audit.txt contains node utilization metrics",
+        "type": "vfs_file_contains",
+        "path": "/obs/use-audit.txt",
+        "pattern": "node_cpu_utilization",
+        "remediation": "Redirect promql query output to /obs/use-audit.txt"
+      }
+    ],
+    "solutionCommands": [
+      "mkdir -p /obs",
+      "promql node_cpu_utilization > /obs/use-audit.txt"
+    ],
+    "troubleshootingGuide": [
+      {
+        "problem": "/obs/use-audit.txt missing or empty.",
+        "cause": "Command was not redirected to /obs/use-audit.txt.",
+        "solution": "Execute promql node_cpu_utilization > /obs/use-audit.txt."
+      }
+    ],
+    "domainId": "observability-core",
+    "domainTitle": "Observability Core Principles, RED & USE Frameworks & SLI Telemetry"
+  },
+  {
+    "id": "lab-prom-01-servicemonitor-discovery",
+    "title": "Configuring Declarative ServiceMonitor Target Scraping",
+    "difficulty": "Intermediate",
+    "durationMinutes": 20,
+    "xpReward": 150,
+    "scenario": "Configure automated target scraping for financial transactions: author and apply a ServiceMonitor named payment-servicemonitor in namespace monitoring. Target services labeled app: payment-api, with an endpoint named http-metrics on path /metrics with a scrape interval of 15s.",
+    "productionContext": "ServiceMonitors allow application teams to manage their own metrics endpoints independently without modifying core Prometheus server configurations.",
+    "prerequisites": [
+      "lab-obs-01-red-metrics-sli"
+    ],
+    "objectives": [
+      "Author ServiceMonitor manifest for payment-api in /monitoring/payment-servicemonitor.yaml.",
+      "Apply ServiceMonitor payment-servicemonitor in namespace monitoring.",
+      "Verify selector and endpoint interval configuration."
+    ],
+    "initialClusterState": {
+      "resources": []
+    },
+    "starterManifest": "apiVersion: monitoring.coreos.com/v1\nkind: ServiceMonitor\nmetadata:\n  name: payment-servicemonitor\n  namespace: monitoring\nspec:\n  selector:\n    matchLabels:\n      app: payment-api\n  endpoints:\n    - port: http-metrics\n      path: /metrics\n      interval: 15s\n",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Author ServiceMonitor manifest",
+        "instruction": "Save the ServiceMonitor definition to /monitoring/payment-servicemonitor.yaml.",
+        "commandHint": "mkdir -p /monitoring\ncat << 'EOF' > /monitoring/payment-servicemonitor.yaml\n...\nEOF"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Apply ServiceMonitor to monitoring namespace",
+        "instruction": "Apply the manifest to namespace monitoring.",
+        "commandHint": "kubectl apply -f /monitoring/payment-servicemonitor.yaml"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "sm-payment-exists",
+        "description": "ServiceMonitor payment-servicemonitor exists in monitoring namespace",
+        "type": "resource_exists",
+        "kind": "ServiceMonitor",
+        "namespace": "monitoring",
+        "name": "payment-servicemonitor",
+        "remediation": "Apply ServiceMonitor payment-servicemonitor in monitoring namespace"
+      },
+      {
+        "id": "sm-selector-matchlabels-app",
+        "description": "ServiceMonitor selector targets app: payment-api",
+        "type": "resource_field_equals",
+        "kind": "ServiceMonitor",
+        "namespace": "monitoring",
+        "name": "payment-servicemonitor",
+        "fieldPath": "spec.selector.matchLabels.app",
+        "expectedValue": "payment-api",
+        "remediation": "Configure spec.selector.matchLabels.app: payment-api"
+      },
+      {
+        "id": "sm-endpoint-interval",
+        "description": "ServiceMonitor endpoint interval is 15s",
+        "type": "resource_field_equals",
+        "kind": "ServiceMonitor",
+        "namespace": "monitoring",
+        "name": "payment-servicemonitor",
+        "fieldPath": "spec.endpoints[0].interval",
+        "expectedValue": "15s",
+        "remediation": "Set spec.endpoints[0].interval: 15s"
+      }
+    ],
+    "solutionCommands": [
+      "mkdir -p /monitoring",
+      "cat << 'EOF' > /monitoring/payment-servicemonitor.yaml\napiVersion: monitoring.coreos.com/v1\nkind: ServiceMonitor\nmetadata:\n  name: payment-servicemonitor\n  namespace: monitoring\nspec:\n  selector:\n    matchLabels:\n      app: payment-api\n  endpoints:\n    - port: http-metrics\n      path: /metrics\n      interval: 15s\nEOF",
+      "kubectl apply -f /monitoring/payment-servicemonitor.yaml"
+    ],
+    "troubleshootingGuide": [
+      {
+        "problem": "ServiceMonitor not found or selector mismatch.",
+        "cause": "Manifest was not applied or labels did not match payment-api.",
+        "solution": "Verify /monitoring/payment-servicemonitor.yaml contains matchLabels app: payment-api and re-apply."
+      }
+    ],
+    "domainId": "prometheus-monitoring",
+    "domainTitle": "Prometheus Monitoring, ServiceMonitors, PromQL & Alerting Rules"
+  },
+  {
+    "id": "lab-prom-02-prometheusrule-promtool",
+    "title": "Authoring Production PrometheusRules and Validating with promtool",
+    "difficulty": "Intermediate",
+    "durationMinutes": 20,
+    "xpReward": 150,
+    "scenario": "Implement automated incident alerting: write a PrometheusRule manifest to /monitoring/payment-alerts.yaml defining rule group payment.rules with alert PaymentHigh5xxRate triggering when rate(http_requests_total{status=~\"5..\"}[5m]) > 0.05 for 2m with label severity: critical. Validate the alerting rule syntax using promtool check rules /monitoring/payment-alerts.yaml, then apply to namespace monitoring.",
+    "productionContext": "Pre-commit promtool validation prevents broken PromQL syntax and missing labels from disrupting control-plane alerting pipelines in production.",
+    "prerequisites": [
+      "lab-prom-01-servicemonitor-discovery"
+    ],
+    "objectives": [
+      "Author PrometheusRule alerting manifest in /monitoring/payment-alerts.yaml.",
+      "Validate syntax using promtool check rules.",
+      "Apply PrometheusRule payment-alerts in namespace monitoring."
+    ],
+    "initialClusterState": {
+      "resources": []
+    },
+    "starterManifest": "apiVersion: monitoring.coreos.com/v1\nkind: PrometheusRule\nmetadata:\n  name: payment-alerts\n  namespace: monitoring\nspec:\n  groups:\n    - name: payment.rules\n      rules:\n        - alert: PaymentHigh5xxRate\n          expr: rate(http_requests_total{status=~\"5..\"}[5m]) > 0.05\n          for: 2m\n          labels:\n            severity: critical\n          annotations:\n            summary: Payment service 5xx error rate exceeds 5 percent\n",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Author alerting rule manifest",
+        "instruction": "Save the alert rule to /monitoring/payment-alerts.yaml.",
+        "commandHint": "cat << 'EOF' > /monitoring/payment-alerts.yaml\n...\nEOF"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Validate rule with promtool",
+        "instruction": "Execute promtool check rules to verify syntax.",
+        "commandHint": "promtool check rules /monitoring/payment-alerts.yaml"
+      },
+      {
+        "stepNumber": 3,
+        "title": "Apply rule to cluster",
+        "instruction": "Apply the PrometheusRule to namespace monitoring.",
+        "commandHint": "kubectl apply -f /monitoring/payment-alerts.yaml"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "vfs-alerts-yaml-exists",
+        "description": "/monitoring/payment-alerts.yaml contains PaymentHigh5xxRate",
+        "type": "vfs_file_contains",
+        "path": "/monitoring/payment-alerts.yaml",
+        "pattern": "PaymentHigh5xxRate",
+        "remediation": "Write alert PaymentHigh5xxRate to /monitoring/payment-alerts.yaml"
+      },
+      {
+        "id": "promtool-check-executed",
+        "description": "promtool check rules executed on payment-alerts.yaml",
+        "type": "command_executed",
+        "commandSubstring": "promtool check rules /monitoring/payment-alerts.yaml",
+        "remediation": "Execute promtool check rules /monitoring/payment-alerts.yaml"
+      },
+      {
+        "id": "promrule-payment-alerts-exists",
+        "description": "PrometheusRule payment-alerts exists in namespace monitoring",
+        "type": "resource_exists",
+        "kind": "PrometheusRule",
+        "namespace": "monitoring",
+        "name": "payment-alerts",
+        "remediation": "Apply PrometheusRule payment-alerts in namespace monitoring"
+      }
+    ],
+    "solutionCommands": [
+      "mkdir -p /monitoring",
+      "cat << 'EOF' > /monitoring/payment-alerts.yaml\napiVersion: monitoring.coreos.com/v1\nkind: PrometheusRule\nmetadata:\n  name: payment-alerts\n  namespace: monitoring\nspec:\n  groups:\n    - name: payment.rules\n      rules:\n        - alert: PaymentHigh5xxRate\n          expr: rate(http_requests_total{status=~\"5..\"}[5m]) > 0.05\n          for: 2m\n          labels:\n            severity: critical\n          annotations:\n            summary: Payment service 5xx error rate exceeds 5 percent\nEOF",
+      "promtool check rules /monitoring/payment-alerts.yaml",
+      "kubectl apply -f /monitoring/payment-alerts.yaml"
+    ],
+    "troubleshootingGuide": [
+      {
+        "problem": "promtool reports syntax error or PrometheusRule missing.",
+        "cause": "Indentation errors in YAML or rule was not applied to monitoring namespace.",
+        "solution": "Verify spec.groups[0].rules structure and apply via kubectl apply -f /monitoring/payment-alerts.yaml."
+      }
+    ],
+    "domainId": "prometheus-monitoring",
+    "domainTitle": "Prometheus Monitoring, ServiceMonitors, PromQL & Alerting Rules"
+  },
+  {
+    "id": "lab-graf-01-dashboard-as-code",
+    "title": "Provisioning Declarative Grafana Dashboards as Code",
+    "difficulty": "Intermediate",
+    "durationMinutes": 20,
+    "xpReward": 150,
+    "scenario": "Provision a Golden Signals dashboard as code: author /grafana/golden-signals-dashboard.json defining timeseries panels for RPS, Error Rate, and P99 Latency. Create and apply a ConfigMap named grafana-dashboard-golden-signals in namespace monitoring labeled grafana_dashboard=1 embedding the dashboard JSON.",
+    "productionContext": "Declarative dashboard provisioning ensures that observability panels are versioned in Git alongside application code, preventing drift and enabling instant recovery.",
+    "prerequisites": [
+      "lab-prom-01-servicemonitor-discovery"
+    ],
+    "objectives": [
+      "Author dashboard JSON in /grafana/golden-signals-dashboard.json.",
+      "Create and apply ConfigMap grafana-dashboard-golden-signals in namespace monitoring with label grafana_dashboard: '1'.",
+      "Verify ConfigMap contains dashboard data with P99 Latency."
+    ],
+    "initialClusterState": {
+      "resources": []
+    },
+    "starterManifest": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: grafana-dashboard-golden-signals\n  namespace: monitoring\n  labels:\n    grafana_dashboard: \"1\"\ndata:\n  golden-signals-dashboard.json: |\n    {\n      \"title\": \"API Golden Signals RED/USE\",\n      \"panels\": [\n        {\"title\": \"Request Rate (RPS)\", \"type\": \"timeseries\"},\n        {\"title\": \"Error Rate %\", \"type\": \"timeseries\"},\n        {\"title\": \"Latency P99\", \"type\": \"timeseries\"}\n      ]\n    }\n",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Author dashboard JSON file",
+        "instruction": "Save the dashboard specification to /grafana/golden-signals-dashboard.json.",
+        "commandHint": "mkdir -p /grafana\ncat << 'EOF' > /grafana/golden-signals-dashboard.json\n...\nEOF"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Apply labeled ConfigMap to monitoring namespace",
+        "instruction": "Apply the ConfigMap manifest to namespace monitoring.",
+        "commandHint": "kubectl apply -f /grafana/dashboard-configmap.yaml"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "cm-golden-signals-exists",
+        "description": "ConfigMap grafana-dashboard-golden-signals exists in namespace monitoring",
+        "type": "resource_exists",
+        "kind": "ConfigMap",
+        "namespace": "monitoring",
+        "name": "grafana-dashboard-golden-signals",
+        "remediation": "Apply ConfigMap grafana-dashboard-golden-signals in namespace monitoring"
+      },
+      {
+        "id": "cm-label-grafana-dashboard",
+        "description": "ConfigMap has label grafana_dashboard=1",
+        "type": "resource_field_equals",
+        "kind": "ConfigMap",
+        "namespace": "monitoring",
+        "name": "grafana-dashboard-golden-signals",
+        "fieldPath": "metadata.labels['grafana_dashboard']",
+        "expectedValue": "1",
+        "remediation": "Set metadata.labels.grafana_dashboard: '1'"
+      },
+      {
+        "id": "cm-data-contains-p99",
+        "description": "Dashboard data contains Latency P99",
+        "type": "resource_field_contains",
+        "kind": "ConfigMap",
+        "namespace": "monitoring",
+        "name": "grafana-dashboard-golden-signals",
+        "fieldPath": "data['golden-signals-dashboard.json']",
+        "expectedValue": "Latency P99",
+        "remediation": "Embed Latency P99 panel in golden-signals-dashboard.json"
+      }
+    ],
+    "solutionCommands": [
+      "mkdir -p /grafana",
+      "cat << 'EOF' > /grafana/golden-signals-dashboard.json\n{\n  \"title\": \"API Golden Signals RED/USE\",\n  \"panels\": [\n    {\"title\": \"Request Rate (RPS)\", \"type\": \"timeseries\"},\n    {\"title\": \"Error Rate %\", \"type\": \"timeseries\"},\n    {\"title\": \"Latency P99\", \"type\": \"timeseries\"}\n  ]\n}\nEOF",
+      "cat << 'EOF' > /grafana/dashboard-configmap.yaml\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: grafana-dashboard-golden-signals\n  namespace: monitoring\n  labels:\n    grafana_dashboard: \"1\"\ndata:\n  golden-signals-dashboard.json: |\n    {\n      \"title\": \"API Golden Signals RED/USE\",\n      \"panels\": [\n        {\"title\": \"Request Rate (RPS)\", \"type\": \"timeseries\"},\n        {\"title\": \"Error Rate %\", \"type\": \"timeseries\"},\n        {\"title\": \"Latency P99\", \"type\": \"timeseries\"}\n      ]\n    }\nEOF",
+      "kubectl apply -f /grafana/dashboard-configmap.yaml"
+    ],
+    "troubleshootingGuide": [
+      {
+        "problem": "Dashboard ConfigMap missing or label incorrect.",
+        "cause": "The ConfigMap lacked the grafana_dashboard: '1' label or was in the wrong namespace.",
+        "solution": "Verify metadata.labels contains grafana_dashboard: '1' and apply to namespace monitoring."
+      }
+    ],
+    "domainId": "grafana-visualization",
+    "domainTitle": "Grafana Visualization, Golden Signal Dashboards & Alertmanager Routing"
+  },
+  {
+    "id": "lab-graf-02-alertmanager-routing",
+    "title": "Configuring Alertmanager Notification Trees & Inhibition Rules",
+    "difficulty": "Intermediate",
+    "durationMinutes": 20,
+    "xpReward": 150,
+    "scenario": "Configure enterprise alert notification routing: write an Alertmanager configuration to /monitoring/alertmanager.yaml defining a routing tree grouping alerts by ['alertname', 'namespace'], with group_wait: 30s, repeat_interval: 4h, and routing critical severity to receiver pagerduty-critical. Store this configuration in Secret alertmanager-main in namespace monitoring.",
+    "productionContext": "Fine-tuned alert routing and grouping prevents on-call alert fatigue by ensuring only actionable, aggregated alerts notify engineers via paging channels.",
+    "prerequisites": [
+      "lab-graf-01-dashboard-as-code"
+    ],
+    "objectives": [
+      "Author Alertmanager routing config in /monitoring/alertmanager.yaml.",
+      "Create and apply Secret alertmanager-main in namespace monitoring.",
+      "Verify repeat_interval and pagerduty-critical receiver are configured."
+    ],
+    "initialClusterState": {
+      "resources": []
+    },
+    "starterManifest": "apiVersion: v1\nkind: Secret\nmetadata:\n  name: alertmanager-main\n  namespace: monitoring\ndata:\n  alertmanager.yaml: |\n    global:\n      resolve_timeout: 5m\n    route:\n      group_by: ['alertname', 'namespace']\n      group_wait: 30s\n      group_interval: 5m\n      repeat_interval: 4h\n      receiver: pagerduty-critical\n    receivers:\n      - name: pagerduty-critical\n",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Author Alertmanager YAML file",
+        "instruction": "Save the routing configuration to /monitoring/alertmanager.yaml.",
+        "commandHint": "mkdir -p /monitoring\ncat << 'EOF' > /monitoring/alertmanager.yaml\n...\nEOF"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Apply Alertmanager Secret to monitoring namespace",
+        "instruction": "Apply the Secret manifest to namespace monitoring.",
+        "commandHint": "kubectl apply -f /monitoring/alertmanager-secret.yaml"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "vfs-alertmanager-yaml-exists",
+        "description": "/monitoring/alertmanager.yaml contains pagerduty-critical",
+        "type": "vfs_file_contains",
+        "path": "/monitoring/alertmanager.yaml",
+        "pattern": "pagerduty-critical",
+        "remediation": "Write pagerduty-critical receiver to /monitoring/alertmanager.yaml"
+      },
+      {
+        "id": "secret-alertmanager-main-exists",
+        "description": "Secret alertmanager-main exists in namespace monitoring",
+        "type": "resource_exists",
+        "kind": "Secret",
+        "namespace": "monitoring",
+        "name": "alertmanager-main",
+        "remediation": "Apply Secret alertmanager-main in namespace monitoring"
+      },
+      {
+        "id": "secret-data-contains-repeat-interval",
+        "description": "Secret data contains repeat_interval",
+        "type": "resource_field_contains",
+        "kind": "Secret",
+        "namespace": "monitoring",
+        "name": "alertmanager-main",
+        "fieldPath": "data['alertmanager.yaml']",
+        "expectedValue": "repeat_interval",
+        "remediation": "Configure repeat_interval in alertmanager.yaml"
+      }
+    ],
+    "solutionCommands": [
+      "mkdir -p /monitoring",
+      "cat << 'EOF' > /monitoring/alertmanager.yaml\nglobal:\n  resolve_timeout: 5m\nroute:\n  group_by: ['alertname', 'namespace']\n  group_wait: 30s\n  group_interval: 5m\n  repeat_interval: 4h\n  receiver: pagerduty-critical\nreceivers:\n  - name: pagerduty-critical\nEOF",
+      "cat << 'EOF' > /monitoring/alertmanager-secret.yaml\napiVersion: v1\nkind: Secret\nmetadata:\n  name: alertmanager-main\n  namespace: monitoring\ndata:\n  alertmanager.yaml: |\n    global:\n      resolve_timeout: 5m\n    route:\n      group_by: ['alertname', 'namespace']\n      group_wait: 30s\n      group_interval: 5m\n      repeat_interval: 4h\n      receiver: pagerduty-critical\n    receivers:\n      - name: pagerduty-critical\nEOF",
+      "kubectl apply -f /monitoring/alertmanager-secret.yaml"
+    ],
+    "troubleshootingGuide": [
+      {
+        "problem": "Secret alertmanager-main not found or config invalid.",
+        "cause": "Secret was not applied to monitoring namespace or key was not alertmanager.yaml.",
+        "solution": "Apply /monitoring/alertmanager-secret.yaml with key alertmanager.yaml in namespace monitoring."
+      }
+    ],
+    "domainId": "grafana-visualization",
+    "domainTitle": "Grafana Visualization, Golden Signal Dashboards & Alertmanager Routing"
+  },
+  {
+    "id": "lab-otel-01-collector-pipeline",
+    "title": "Authoring and Validating OTel Collector Pipelines with otelcol",
+    "difficulty": "Intermediate",
+    "durationMinutes": 20,
+    "xpReward": 150,
+    "scenario": "Configure enterprise telemetry ingestion: author an OpenTelemetry Collector configuration in /otel/collector-config.yaml defining otlp receiver (protocols: grpc, http), memory_limiter and batch processors, and otlp exporter pointing to tempo:4317. Wire these under service.pipelines.traces. Validate the configuration using otelcol validate --config=/otel/collector-config.yaml, then deploy as ConfigMap otel-collector-config in namespace monitoring.",
+    "productionContext": "Pre-validating OTel Collector configurations prevents invalid processor orderings or missing receiver definitions from crashing the collector fleet in production.",
+    "prerequisites": [
+      "lab-prom-01-servicemonitor-discovery"
+    ],
+    "objectives": [
+      "Author OpenTelemetry Collector YAML in /otel/collector-config.yaml.",
+      "Validate configuration using otelcol validate --config=/otel/collector-config.yaml.",
+      "Deploy ConfigMap otel-collector-config in namespace monitoring."
+    ],
+    "initialClusterState": {
+      "resources": []
+    },
+    "starterManifest": "receivers:\n  otlp:\n    protocols:\n      grpc:\n      http:\nprocessors:\n  memory_limiter:\n    check_interval: 1s\n    limit_percentage: 75\n  batch:\n    timeout: 1s\nexporters:\n  otlp:\n    endpoint: \"tempo.monitoring.svc.cluster.local:4317\"\n    tls:\n      insecure: true\nservice:\n  pipelines:\n    traces:\n      receivers: [otlp]\n      processors: [memory_limiter, batch]\n      exporters: [otlp]\n",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Write OTel Collector configuration file",
+        "instruction": "Save the pipeline definition to /otel/collector-config.yaml.",
+        "commandHint": "mkdir -p /otel\ncat << 'EOF' > /otel/collector-config.yaml\n...\nEOF"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Validate configuration syntax using otelcol CLI",
+        "instruction": "Run otelcol validate to verify the processor order and pipelines.",
+        "commandHint": "otelcol validate --config=/otel/collector-config.yaml"
+      },
+      {
+        "stepNumber": 3,
+        "title": "Deploy ConfigMap to monitoring namespace",
+        "instruction": "Apply the collector ConfigMap to namespace monitoring.",
+        "commandHint": "kubectl apply -f /otel/collector-configmap.yaml"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "vfs-collector-yaml-exists",
+        "description": "/otel/collector-config.yaml contains memory_limiter",
+        "type": "vfs_file_contains",
+        "path": "/otel/collector-config.yaml",
+        "pattern": "memory_limiter",
+        "remediation": "Write memory_limiter processor in /otel/collector-config.yaml"
+      },
+      {
+        "id": "otelcol-validate-executed",
+        "description": "otelcol validate executed on collector-config.yaml",
+        "type": "command_executed",
+        "commandSubstring": "otelcol validate",
+        "remediation": "Execute otelcol validate --config=/otel/collector-config.yaml"
+      },
+      {
+        "id": "cm-otel-collector-exists",
+        "description": "ConfigMap otel-collector-config exists in namespace monitoring",
+        "type": "resource_exists",
+        "kind": "ConfigMap",
+        "namespace": "monitoring",
+        "name": "otel-collector-config",
+        "remediation": "Apply ConfigMap otel-collector-config in namespace monitoring"
+      }
+    ],
+    "solutionCommands": [
+      "mkdir -p /otel",
+      "cat << 'EOF' > /otel/collector-config.yaml\nreceivers:\n  otlp:\n    protocols:\n      grpc:\n      http:\nprocessors:\n  memory_limiter:\n    check_interval: 1s\n    limit_percentage: 75\n  batch:\n    timeout: 1s\nexporters:\n  otlp:\n    endpoint: \"tempo.monitoring.svc.cluster.local:4317\"\n    tls:\n      insecure: true\nservice:\n  pipelines:\n    traces:\n      receivers: [otlp]\n      processors: [memory_limiter, batch]\n      exporters: [otlp]\nEOF",
+      "otelcol validate --config=/otel/collector-config.yaml",
+      "cat << 'EOF' > /otel/collector-configmap.yaml\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: otel-collector-config\n  namespace: monitoring\ndata:\n  collector.yaml: |\n    receivers:\n      otlp:\n        protocols:\n          grpc:\n          http:\n    processors:\n      memory_limiter:\n        check_interval: 1s\n        limit_percentage: 75\n      batch:\n        timeout: 1s\n    exporters:\n      otlp:\n        endpoint: \"tempo.monitoring.svc.cluster.local:4317\"\n        tls:\n          insecure: true\n    service:\n      pipelines:\n        traces:\n          receivers: [otlp]\n          processors: [memory_limiter, batch]\n          exporters: [otlp]\nEOF",
+      "kubectl apply -f /otel/collector-configmap.yaml"
+    ],
+    "troubleshootingGuide": [
+      {
+        "problem": "otelcol reports configuration validation failed or ConfigMap missing.",
+        "cause": "Receivers, processors, or exporters were referenced in service.pipelines but omitted from root definitions.",
+        "solution": "Verify receivers.otlp, processors.memory_limiter, and exporters.otlp are defined in /otel/collector-config.yaml."
+      }
+    ],
+    "domainId": "opentelemetry-traces",
+    "domainTitle": "OpenTelemetry Distributed Tracing, Collector Pipelines & Context Propagation"
+  },
+  {
+    "id": "lab-otel-02-trace-context",
+    "title": "Implementing W3C TraceContext Propagation Specifications",
+    "difficulty": "Intermediate",
+    "durationMinutes": 20,
+    "xpReward": 150,
+    "scenario": "Define distributed context propagation standards: write a JSON specification to /otel/trace-context.json defining W3C traceparent structure (version: '00', sample trace_id: '4bf92f3577b34da6a3ce929d0e0e4736', parent_id: '00f067aa0ba902b7', flags: '01'). Deploy this contract in Secret trace-context-contract in namespace default.",
+    "productionContext": "Standardized W3C traceparent headers allow polyglot microservice fleets (Go, Java, Node, Python) to pass distributed context seamlessly across HTTP gateways.",
+    "prerequisites": [
+      "lab-otel-01-collector-pipeline"
+    ],
+    "objectives": [
+      "Author trace context JSON in /otel/trace-context.json.",
+      "Apply Secret trace-context-contract in default namespace.",
+      "Verify trace_id and traceparent header presence."
+    ],
+    "initialClusterState": {
+      "resources": []
+    },
+    "starterManifest": "apiVersion: v1\nkind: Secret\nmetadata:\n  name: trace-context-contract\n  namespace: default\ndata:\n  trace-context.json: |\n    {\n      \"header\": \"traceparent\",\n      \"version\": \"00\",\n      \"trace_id\": \"4bf92f3577b34da6a3ce929d0e0e4736\",\n      \"parent_id\": \"00f067aa0ba902b7\",\n      \"flags\": \"01\"\n    }\n",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Author trace context specification",
+        "instruction": "Save trace context parameters to /otel/trace-context.json.",
+        "commandHint": "cat << 'EOF' > /otel/trace-context.json\n...\nEOF"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Apply Secret to default namespace",
+        "instruction": "Apply the Secret manifest to namespace default.",
+        "commandHint": "kubectl apply -f /otel/trace-context-secret.yaml"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "vfs-trace-spec-exists",
+        "description": "/otel/trace-context.json contains 4bf92f3577b34da6a3ce929d0e0e4736",
+        "type": "vfs_file_contains",
+        "path": "/otel/trace-context.json",
+        "pattern": "4bf92f3577b34da6a3ce929d0e0e4736",
+        "remediation": "Write W3C trace_id 4bf92f3577b34da6a3ce929d0e0e4736 in /otel/trace-context.json"
+      },
+      {
+        "id": "secret-trace-contract-exists",
+        "description": "Secret trace-context-contract exists in namespace default",
+        "type": "resource_exists",
+        "kind": "Secret",
+        "namespace": "default",
+        "name": "trace-context-contract",
+        "remediation": "Apply Secret trace-context-contract in namespace default"
+      },
+      {
+        "id": "secret-data-contains-traceparent",
+        "description": "Secret data contains traceparent",
+        "type": "resource_field_contains",
+        "kind": "Secret",
+        "namespace": "default",
+        "name": "trace-context-contract",
+        "fieldPath": "data['trace-context.json']",
+        "expectedValue": "traceparent",
+        "remediation": "Configure traceparent header in data['trace-context.json']"
+      }
+    ],
+    "solutionCommands": [
+      "mkdir -p /otel",
+      "cat << 'EOF' > /otel/trace-context.json\n{\n  \"header\": \"traceparent\",\n  \"version\": \"00\",\n  \"trace_id\": \"4bf92f3577b34da6a3ce929d0e0e4736\",\n  \"parent_id\": \"00f067aa0ba902b7\",\n  \"flags\": \"01\"\n}\nEOF",
+      "cat << 'EOF' > /otel/trace-context-secret.yaml\napiVersion: v1\nkind: Secret\nmetadata:\n  name: trace-context-contract\n  namespace: default\ndata:\n  trace-context.json: |\n    {\n      \"header\": \"traceparent\",\n      \"version\": \"00\",\n      \"trace_id\": \"4bf92f3577b34da6a3ce929d0e0e4736\",\n      \"parent_id\": \"00f067aa0ba902b7\",\n      \"flags\": \"01\"\n    }\nEOF",
+      "kubectl apply -f /otel/trace-context-secret.yaml"
+    ],
+    "troubleshootingGuide": [
+      {
+        "problem": "Secret trace-context-contract missing or trace_id mismatch.",
+        "cause": "Secret was applied in wrong namespace or trace_id string was truncated.",
+        "solution": "Verify /otel/trace-context.json contains 32-hex trace_id and apply to namespace default."
+      }
+    ],
+    "domainId": "opentelemetry-traces",
+    "domainTitle": "OpenTelemetry Distributed Tracing, Collector Pipelines & Context Propagation"
+  },
+  {
+    "id": "lab-log-01-vector-pii-scrub",
+    "title": "Configuring Vector Log Pipelines with Automated PII Redaction",
+    "difficulty": "Intermediate",
+    "durationMinutes": 20,
+    "xpReward": 150,
+    "scenario": "Implement automated PII scrubbing in log collection: author a Vector configuration in /logging/vector.yaml defining a kubernetes_logs source, a remap transform redacting credit card numbers with [REDACTED_CC], and a loki sink. Apply this configuration as ConfigMap vector-config in namespace logging.",
+    "productionContext": "Automated inline PII redaction ensures application logs can be analyzed by engineers without violating security policies or exposing customer payment credentials.",
+    "prerequisites": [
+      "lab-prom-01-servicemonitor-discovery"
+    ],
+    "objectives": [
+      "Create namespace logging.",
+      "Author Vector pipeline with remap transform in /logging/vector.yaml.",
+      "Deploy ConfigMap vector-config in namespace logging."
+    ],
+    "initialClusterState": {
+      "resources": []
+    },
+    "starterManifest": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: vector-config\n  namespace: logging\ndata:\n  vector.yaml: |\n    sources:\n      k8s_logs:\n        type: kubernetes_logs\n    transforms:\n      redact_pii:\n        type: remap\n        inputs: [k8s_logs]\n        source: .message = replace(.message, r'[0-9]{4}-[0-9]{4}-[0-9]{4}-[0-9]{4}', \"[REDACTED_CC]\")\n    sinks:\n      loki:\n        type: loki\n        inputs: [redact_pii]\n        endpoint: \"http://loki.logging.svc:3100\"\n",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Create logging namespace and author Vector YAML",
+        "instruction": "Create namespace logging and save the Vector pipeline config to /logging/vector.yaml.",
+        "commandHint": "kubectl create namespace logging\ncat << 'EOF' > /logging/vector.yaml\n...\nEOF"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Deploy ConfigMap to logging namespace",
+        "instruction": "Apply the ConfigMap manifest to namespace logging.",
+        "commandHint": "kubectl apply -f /logging/vector-configmap.yaml"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "vfs-vector-yaml-exists",
+        "description": "/logging/vector.yaml contains REDACTED_CC",
+        "type": "vfs_file_contains",
+        "path": "/logging/vector.yaml",
+        "pattern": "REDACTED_CC",
+        "remediation": "Write PII redaction transform in /logging/vector.yaml"
+      },
+      {
+        "id": "cm-vector-config-exists",
+        "description": "ConfigMap vector-config exists in namespace logging",
+        "type": "resource_exists",
+        "kind": "ConfigMap",
+        "namespace": "logging",
+        "name": "vector-config",
+        "remediation": "Apply ConfigMap vector-config in namespace logging"
+      },
+      {
+        "id": "cm-vector-data-contains-redaction",
+        "description": "ConfigMap vector data contains REDACTED_CC",
+        "type": "resource_field_contains",
+        "kind": "ConfigMap",
+        "namespace": "logging",
+        "name": "vector-config",
+        "fieldPath": "data['vector.yaml']",
+        "expectedValue": "REDACTED_CC",
+        "remediation": "Embed REDACTED_CC remap rule in data['vector.yaml']"
+      }
+    ],
+    "solutionCommands": [
+      "mkdir -p /logging",
+      "kubectl create namespace logging",
+      "cat << 'EOF' > /logging/vector.yaml\nsources:\n  k8s_logs:\n    type: kubernetes_logs\ntransforms:\n  redact_pii:\n    type: remap\n    inputs: [k8s_logs]\n    source: .message = replace(.message, r'[0-9]{4}-[0-9]{4}-[0-9]{4}-[0-9]{4}', \"[REDACTED_CC]\")\nsinks:\n  loki:\n    type: loki\n    inputs: [redact_pii]\n    endpoint: \"http://loki.logging.svc:3100\"\nEOF",
+      "cat << 'EOF' > /logging/vector-configmap.yaml\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: vector-config\n  namespace: logging\ndata:\n  vector.yaml: |\n    sources:\n      k8s_logs:\n        type: kubernetes_logs\n    transforms:\n      redact_pii:\n        type: remap\n        inputs: [k8s_logs]\n        source: .message = replace(.message, r'[0-9]{4}-[0-9]{4}-[0-9]{4}-[0-9]{4}', \"[REDACTED_CC]\")\n    sinks:\n      loki:\n        type: loki\n        inputs: [redact_pii]\n        endpoint: \"http://loki.logging.svc:3100\"\nEOF",
+      "kubectl apply -f /logging/vector-configmap.yaml"
+    ],
+    "troubleshootingGuide": [
+      {
+        "problem": "ConfigMap vector-config missing or PII redaction missing.",
+        "cause": "ConfigMap was not created in logging namespace or remap rule was omitted.",
+        "solution": "Verify /logging/vector.yaml contains REDACTED_CC and apply to namespace logging."
+      }
+    ],
+    "domainId": "logging-monitoring",
+    "domainTitle": "Cloud-Native Logging Architecture, Vector Aggregation & Grafana Loki LogQL"
+  },
+  {
+    "id": "lab-log-02-loki-logql",
+    "title": "Querying Distributed Log Streams with Grafana Loki LogQL",
+    "difficulty": "Intermediate",
+    "durationMinutes": 20,
+    "xpReward": 150,
+    "scenario": "Perform root-cause log diagnostics during an incident: execute logql queries filtering stream {app=\"payment-api\"} for failed payment events using |= \"payment failed\", saving the extracted error stream into /logging/error-audit.log.",
+    "productionContext": "LogQL stream selectors with line filter expressions allow rapid log triage across thousands of container pods without downloading gigabytes of irrelevant log text.",
+    "prerequisites": [
+      "lab-log-01-vector-pii-scrub"
+    ],
+    "objectives": [
+      "Execute logql query filtering {app=\"payment-api\"} |= \"payment failed\".",
+      "Save output stream to /logging/error-audit.log."
+    ],
+    "initialClusterState": {
+      "resources": []
+    },
+    "starterManifest": "# Loki LogQL Incident Query Diagnostic\n# Query: logql '{app=\"payment-api\"} |= \"payment failed\"'\n# Output target: /logging/error-audit.log\n",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Execute LogQL query",
+        "instruction": "Query Loki stream {app=\"payment-api\"} with line filter |= \"payment failed\".",
+        "commandHint": "logql '{app=\"payment-api\"} |= \"payment failed\"'"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Save output to audit log file",
+        "instruction": "Redirect the query output to /logging/error-audit.log.",
+        "commandHint": "logql '{app=\"payment-api\"} |= \"payment failed\"' > /logging/error-audit.log"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "logql-query-executed",
+        "description": "logql query executed",
+        "type": "command_executed",
+        "commandSubstring": "logql",
+        "remediation": "Execute logql query"
+      },
+      {
+        "id": "error-audit-file-exists",
+        "description": "/logging/error-audit.log contains stream results",
+        "type": "vfs_file_contains",
+        "path": "/logging/error-audit.log",
+        "pattern": "log event stream active",
+        "remediation": "Redirect logql output to /logging/error-audit.log"
+      }
+    ],
+    "solutionCommands": [
+      "mkdir -p /logging",
+      "logql '{app=\"payment-api\"} |= \"payment failed\"' > /logging/error-audit.log"
+    ],
+    "troubleshootingGuide": [
+      {
+        "problem": "/logging/error-audit.log missing or empty.",
+        "cause": "Command was not redirected to /logging/error-audit.log.",
+        "solution": "Execute logql '{app=\"payment-api\"} |= \"payment failed\"' > /logging/error-audit.log."
+      }
+    ],
+    "domainId": "logging-monitoring",
+    "domainTitle": "Cloud-Native Logging Architecture, Vector Aggregation & Grafana Loki LogQL"
+  },
+  {
+    "id": "lab-sre-01-slo-budget-governance",
+    "title": "Defining Microservice SLO Contracts & Error Budget Thresholds",
+    "difficulty": "Intermediate",
+    "durationMinutes": 20,
+    "xpReward": 150,
+    "scenario": "Establish reliability governance for the payments tier: author an SLO definition in /sre/slo-specification.json specifying service 'payment-service', sloTarget 0.999 (99.9%), windowDays 30, and errorBudgetMinutes 43.2. Deploy this contract as ConfigMap payment-slo-contract in namespace monitoring.",
+    "productionContext": "Declarative SLO specifications serve as a binding reliability contract between SREs and product teams, automating deployment freeze triggers.",
+    "prerequisites": [
+      "lab-obs-01-red-metrics-sli"
+    ],
+    "objectives": [
+      "Author SLO contract in /sre/slo-specification.json.",
+      "Deploy ConfigMap payment-slo-contract in namespace monitoring.",
+      "Verify sloTarget and errorBudgetMinutes fields."
+    ],
+    "initialClusterState": {
+      "resources": []
+    },
+    "starterManifest": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: payment-slo-contract\n  namespace: monitoring\ndata:\n  slo.json: |\n    {\n      \"service\": \"payment-service\",\n      \"sloTarget\": 0.999,\n      \"windowDays\": 30,\n      \"errorBudgetMinutes\": 43.2\n    }\n",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Author SLO specification JSON",
+        "instruction": "Save the SLO parameters to /sre/slo-specification.json.",
+        "commandHint": "mkdir -p /sre\ncat << 'EOF' > /sre/slo-specification.json\n...\nEOF"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Deploy ConfigMap to monitoring namespace",
+        "instruction": "Apply the ConfigMap manifest to namespace monitoring.",
+        "commandHint": "kubectl apply -f /sre/slo-configmap.yaml"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "vfs-slo-spec-exists",
+        "description": "/sre/slo-specification.json contains payment-service",
+        "type": "vfs_file_contains",
+        "path": "/sre/slo-specification.json",
+        "pattern": "payment-service",
+        "remediation": "Write payment-service contract in /sre/slo-specification.json"
+      },
+      {
+        "id": "cm-payment-slo-exists",
+        "description": "ConfigMap payment-slo-contract exists in namespace monitoring",
+        "type": "resource_exists",
+        "kind": "ConfigMap",
+        "namespace": "monitoring",
+        "name": "payment-slo-contract",
+        "remediation": "Apply ConfigMap payment-slo-contract in namespace monitoring"
+      },
+      {
+        "id": "cm-data-contains-error-budget",
+        "description": "ConfigMap data contains errorBudgetMinutes",
+        "type": "resource_field_contains",
+        "kind": "ConfigMap",
+        "namespace": "monitoring",
+        "name": "payment-slo-contract",
+        "fieldPath": "data['slo.json']",
+        "expectedValue": "errorBudgetMinutes",
+        "remediation": "Configure errorBudgetMinutes in data['slo.json']"
+      }
+    ],
+    "solutionCommands": [
+      "mkdir -p /sre",
+      "cat << 'EOF' > /sre/slo-specification.json\n{\n  \"service\": \"payment-service\",\n  \"sloTarget\": 0.999,\n  \"windowDays\": 30,\n  \"errorBudgetMinutes\": 43.2\n}\nEOF",
+      "cat << 'EOF' > /sre/slo-configmap.yaml\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: payment-slo-contract\n  namespace: monitoring\ndata:\n  slo.json: |\n    {\n      \"service\": \"payment-service\",\n      \"sloTarget\": 0.999,\n      \"windowDays\": 30,\n      \"errorBudgetMinutes\": 43.2\n    }\nEOF",
+      "kubectl apply -f /sre/slo-configmap.yaml"
+    ],
+    "troubleshootingGuide": [
+      {
+        "problem": "ConfigMap payment-slo-contract missing or field absent.",
+        "cause": "ConfigMap was not applied to monitoring namespace or key was omitted.",
+        "solution": "Verify /sre/slo-specification.json has valid values and apply /sre/slo-configmap.yaml."
+      }
+    ],
+    "domainId": "sre-incident-recovery",
+    "domainTitle": "Site Reliability Engineering (SRE), SLI/SLO Frameworks & Multi-Window Burn Rates"
+  },
+  {
+    "id": "lab-sre-02-burn-rate-alerting",
+    "title": "Configuring Multi-Window Multi-Burn-Rate Alerting Rules",
+    "difficulty": "Intermediate",
+    "durationMinutes": 20,
+    "xpReward": 150,
+    "scenario": "Configure automated SLO burn-rate alerting: author a PrometheusRule in /sre/burn-rate-alerts.yaml defining alert PaymentSloBurnRateRapid triggering when burn rate exceeds 14.4 for 2m with severity: critical and alert PaymentSloBurnRateSlow when burn rate exceeds 6.0 for 15m with severity: warning. Apply to namespace monitoring.",
+    "productionContext": "Multi-window multi-burn-rate alerts catch 2% budget consumption in 1 hour while filtering out transient blips, eliminating false positive on-call pages.",
+    "prerequisites": [
+      "lab-sre-01-slo-budget-governance"
+    ],
+    "objectives": [
+      "Author PrometheusRule burn rate alerts in /sre/burn-rate-alerts.yaml.",
+      "Deploy PrometheusRule payment-slo-burn-alerts in namespace monitoring.",
+      "Verify PaymentSloBurnRateRapid alert configuration."
+    ],
+    "initialClusterState": {
+      "resources": []
+    },
+    "starterManifest": "apiVersion: monitoring.coreos.com/v1\nkind: PrometheusRule\nmetadata:\n  name: payment-slo-burn-alerts\n  namespace: monitoring\nspec:\n  groups:\n    - name: payment-slo.rules\n      rules:\n        - alert: PaymentSloBurnRateRapid\n          expr: (rate(http_requests_total{status=~\"5..\"}[1h]) / rate(http_requests_total[1h])) / (1 - 0.999) > 14.4\n          for: 2m\n          labels:\n            severity: critical\n        - alert: PaymentSloBurnRateSlow\n          expr: (rate(http_requests_total{status=~\"5..\"}[6h]) / rate(http_requests_total[6h])) / (1 - 0.999) > 6.0\n          for: 15m\n          labels:\n            severity: warning\n",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Author burn-rate PrometheusRule manifest",
+        "instruction": "Save the alert rule to /sre/burn-rate-alerts.yaml.",
+        "commandHint": "cat << 'EOF' > /sre/burn-rate-alerts.yaml\n...\nEOF"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Apply PrometheusRule to monitoring namespace",
+        "instruction": "Apply the alerting rule manifest to namespace monitoring.",
+        "commandHint": "kubectl apply -f /sre/burn-rate-alerts.yaml"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "vfs-burn-alerts-exists",
+        "description": "/sre/burn-rate-alerts.yaml contains PaymentSloBurnRateRapid",
+        "type": "vfs_file_contains",
+        "path": "/sre/burn-rate-alerts.yaml",
+        "pattern": "PaymentSloBurnRateRapid",
+        "remediation": "Write PaymentSloBurnRateRapid alert in /sre/burn-rate-alerts.yaml"
+      },
+      {
+        "id": "promrule-slo-burn-exists",
+        "description": "PrometheusRule payment-slo-burn-alerts exists in namespace monitoring",
+        "type": "resource_exists",
+        "kind": "PrometheusRule",
+        "namespace": "monitoring",
+        "name": "payment-slo-burn-alerts",
+        "remediation": "Apply PrometheusRule payment-slo-burn-alerts in namespace monitoring"
+      },
+      {
+        "id": "promrule-alert-name-matches",
+        "description": "PrometheusRule defines alert PaymentSloBurnRateRapid",
+        "type": "resource_field_equals",
+        "kind": "PrometheusRule",
+        "namespace": "monitoring",
+        "name": "payment-slo-burn-alerts",
+        "fieldPath": "spec.groups[0].rules[0].alert",
+        "expectedValue": "PaymentSloBurnRateRapid",
+        "remediation": "Define alert PaymentSloBurnRateRapid in spec.groups[0].rules[0]"
+      }
+    ],
+    "solutionCommands": [
+      "mkdir -p /sre",
+      "cat << 'EOF' > /sre/burn-rate-alerts.yaml\napiVersion: monitoring.coreos.com/v1\nkind: PrometheusRule\nmetadata:\n  name: payment-slo-burn-alerts\n  namespace: monitoring\nspec:\n  groups:\n    - name: payment-slo.rules\n      rules:\n        - alert: PaymentSloBurnRateRapid\n          expr: (rate(http_requests_total{status=~\"5..\"}[1h]) / rate(http_requests_total[1h])) / (1 - 0.999) > 14.4\n          for: 2m\n          labels:\n            severity: critical\n        - alert: PaymentSloBurnRateSlow\n          expr: (rate(http_requests_total{status=~\"5..\"}[6h]) / rate(http_requests_total[6h])) / (1 - 0.999) > 6.0\n          for: 15m\n          labels:\n            severity: warning\nEOF",
+      "kubectl apply -f /sre/burn-rate-alerts.yaml"
+    ],
+    "troubleshootingGuide": [
+      {
+        "problem": "PrometheusRule missing or alert rule name incorrect.",
+        "cause": "Manifest was not applied or alert name differed from PaymentSloBurnRateRapid.",
+        "solution": "Verify spec.groups[0].rules[0].alert is PaymentSloBurnRateRapid and re-apply."
+      }
+    ],
+    "domainId": "sre-incident-recovery",
+    "domainTitle": "Site Reliability Engineering (SRE), SLI/SLO Frameworks & Multi-Window Burn Rates"
+  },
+  {
+    "id": "lab-rel-01-pdb-priorityclass",
+    "title": "Configuring PodDisruptionBudgets & Critical PriorityClasses",
+    "difficulty": "Intermediate",
+    "durationMinutes": 20,
+    "xpReward": 150,
+    "scenario": "Safeguard payment processing from voluntary eviction: author and apply a cluster-scoped PriorityClass named production-critical with value 1000000 and preemptionPolicy PreemptLowerPriority. Next, author and apply a PodDisruptionBudget named payment-pdb in namespace production targeting selector app: payment-api with minAvailable: 2.",
+    "productionContext": "PDBs guarantee that routine node upgrades or automated cluster autoscaler downscaling events never drop service replicas below high-availability quorum.",
+    "prerequisites": [
+      "lab-sre-01-slo-budget-governance"
+    ],
+    "objectives": [
+      "Create namespace production.",
+      "Apply PriorityClass production-critical with value 1000000.",
+      "Apply PodDisruptionBudget payment-pdb in namespace production with minAvailable: 2."
+    ],
+    "initialClusterState": {
+      "resources": []
+    },
+    "starterManifest": "apiVersion: scheduling.k8s.io/v1\nkind: PriorityClass\nmetadata:\n  name: production-critical\nvalue: 1000000\nglobalDefault: false\npreemptionPolicy: PreemptLowerPriority\n---\napiVersion: policy/v1\nkind: PodDisruptionBudget\nmetadata:\n  name: payment-pdb\n  namespace: production\nspec:\n  minAvailable: 2\n  selector:\n    matchLabels:\n      app: payment-api\n",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Create production namespace",
+        "instruction": "Create the production namespace.",
+        "commandHint": "kubectl create namespace production"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Apply PriorityClass and PodDisruptionBudget",
+        "instruction": "Save and apply PriorityClass and PDB manifests to cluster.",
+        "commandHint": "cat << 'EOF' > /reliability/ha-primitives.yaml\n...\nEOF\nkubectl apply -f /reliability/ha-primitives.yaml"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "priorityclass-critical-exists",
+        "description": "PriorityClass production-critical exists",
+        "type": "resource_exists",
+        "kind": "PriorityClass",
+        "name": "production-critical",
+        "remediation": "Apply PriorityClass production-critical"
+      },
+      {
+        "id": "priorityclass-value-match",
+        "description": "PriorityClass value is 1000000",
+        "type": "resource_field_equals",
+        "kind": "PriorityClass",
+        "name": "production-critical",
+        "fieldPath": "value",
+        "expectedValue": 1000000,
+        "remediation": "Set value: 1000000 on PriorityClass production-critical"
+      },
+      {
+        "id": "pdb-payment-exists",
+        "description": "PodDisruptionBudget payment-pdb exists in namespace production",
+        "type": "resource_exists",
+        "kind": "PodDisruptionBudget",
+        "namespace": "production",
+        "name": "payment-pdb",
+        "remediation": "Apply PodDisruptionBudget payment-pdb in namespace production"
+      },
+      {
+        "id": "pdb-min-available-match",
+        "description": "PodDisruptionBudget minAvailable is 2",
+        "type": "resource_field_equals",
+        "kind": "PodDisruptionBudget",
+        "namespace": "production",
+        "name": "payment-pdb",
+        "fieldPath": "spec.minAvailable",
+        "expectedValue": 2,
+        "remediation": "Set spec.minAvailable: 2 on PodDisruptionBudget payment-pdb"
+      }
+    ],
+    "solutionCommands": [
+      "mkdir -p /reliability",
+      "kubectl create namespace production",
+      "cat << 'EOF' > /reliability/ha-primitives.yaml\napiVersion: scheduling.k8s.io/v1\nkind: PriorityClass\nmetadata:\n  name: production-critical\nvalue: 1000000\nglobalDefault: false\npreemptionPolicy: PreemptLowerPriority\n---\napiVersion: policy/v1\nkind: PodDisruptionBudget\nmetadata:\n  name: payment-pdb\n  namespace: production\nspec:\n  minAvailable: 2\n  selector:\n    matchLabels:\n      app: payment-api\nEOF",
+      "kubectl apply -f /reliability/ha-primitives.yaml"
+    ],
+    "troubleshootingGuide": [
+      {
+        "problem": "PriorityClass or PodDisruptionBudget missing or minAvailable incorrect.",
+        "cause": "PriorityClass is cluster-scoped; PDB must be in production namespace.",
+        "solution": "Verify /reliability/ha-primitives.yaml has correct YAML structure and re-apply."
+      }
+    ],
+    "domainId": "platform-reliability",
+    "domainTitle": "Platform Reliability, Chaos Engineering & Kubernetes High-Availability Primitives"
+  },
+  {
+    "id": "lab-rel-02-chaos-prestop-hook",
+    "title": "Injecting Chaos Experiments & Validating Graceful preStop Hooks",
+    "difficulty": "Intermediate",
+    "durationMinutes": 20,
+    "xpReward": 150,
+    "scenario": "Validate rolling deployment resilience under chaos: author a Pod manifest in /reliability/graceful-api.yaml in namespace production with a container lifecycle preStop hook executing ['/bin/sh', '-c', 'sleep 15'] and terminationGracePeriodSeconds set to 30. Apply to namespace production, then run chaos experiment pod-kill -n production to test self-healing.",
+    "productionContext": "Container preStop sleep hooks allow in-flight HTTP connections to complete and load balancers to deregister endpoints before the container receives SIGKILL.",
+    "prerequisites": [
+      "lab-rel-01-pdb-priorityclass"
+    ],
+    "objectives": [
+      "Deploy Pod graceful-api in namespace production with preStop hook.",
+      "Execute chaos experiment pod-kill in namespace production."
+    ],
+    "initialClusterState": {
+      "resources": []
+    },
+    "starterManifest": "apiVersion: v1\nkind: Pod\nmetadata:\n  name: graceful-api\n  namespace: production\n  labels:\n    app: graceful-api\nspec:\n  terminationGracePeriodSeconds: 30\n  containers:\n    - name: api\n      image: nginx:1.27-alpine\n      lifecycle:\n        preStop:\n          exec:\n            command: [\"/bin/sh\", \"-c\", \"sleep 15\"]\n",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Author Pod manifest with lifecycle preStop hook",
+        "instruction": "Save the Pod definition to /reliability/graceful-api.yaml.",
+        "commandHint": "cat << 'EOF' > /reliability/graceful-api.yaml\n...\nEOF"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Apply Pod to production namespace",
+        "instruction": "Apply the Pod to namespace production.",
+        "commandHint": "kubectl apply -f /reliability/graceful-api.yaml"
+      },
+      {
+        "stepNumber": 3,
+        "title": "Execute chaos experiment",
+        "instruction": "Run chaos experiment pod-kill in namespace production.",
+        "commandHint": "chaos experiment pod-kill -n production"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "pod-graceful-api-exists",
+        "description": "Pod graceful-api exists in namespace production",
+        "type": "resource_exists",
+        "kind": "Pod",
+        "namespace": "production",
+        "name": "graceful-api",
+        "remediation": "Deploy Pod graceful-api in namespace production"
+      },
+      {
+        "id": "pod-grace-period-matches",
+        "description": "Pod terminationGracePeriodSeconds is 30",
+        "type": "resource_field_equals",
+        "kind": "Pod",
+        "namespace": "production",
+        "name": "graceful-api",
+        "fieldPath": "spec.terminationGracePeriodSeconds",
+        "expectedValue": 30,
+        "remediation": "Set spec.terminationGracePeriodSeconds: 30 on Pod graceful-api"
+      },
+      {
+        "id": "chaos-experiment-executed",
+        "description": "chaos command executed",
+        "type": "command_executed",
+        "commandSubstring": "chaos",
+        "remediation": "Execute chaos experiment pod-kill -n production"
+      }
+    ],
+    "solutionCommands": [
+      "mkdir -p /reliability",
+      "kubectl create namespace production",
+      "cat << 'EOF' > /reliability/graceful-api.yaml\napiVersion: v1\nkind: Pod\nmetadata:\n  name: graceful-api\n  namespace: production\n  labels:\n    app: graceful-api\nspec:\n  terminationGracePeriodSeconds: 30\n  containers:\n    - name: api\n      image: nginx:1.27-alpine\n      lifecycle:\n        preStop:\n          exec:\n            command: [\"/bin/sh\", \"-c\", \"sleep 15\"]\nEOF",
+      "kubectl apply -f /reliability/graceful-api.yaml",
+      "chaos experiment pod-kill -n production"
+    ],
+    "troubleshootingGuide": [
+      {
+        "problem": "Pod graceful-api missing or chaos command not run.",
+        "cause": "Pod was not created in production namespace or chaos experiment was omitted.",
+        "solution": "Apply /reliability/graceful-api.yaml to production and execute chaos experiment pod-kill -n production."
+      }
+    ],
+    "domainId": "platform-reliability",
+    "domainTitle": "Platform Reliability, Chaos Engineering & Kubernetes High-Availability Primitives"
+  },
+  {
+    "id": "lab-perf-01-cfs-throttling",
+    "title": "Eliminating CFS CPU Quota Throttling on Latency-Sensitive Tiers",
+    "difficulty": "Intermediate",
+    "durationMinutes": 20,
+    "xpReward": 150,
+    "scenario": "Remediate severe P99 latency spikes caused by Linux kernel CFS quota throttling: inspect the throttled Deployment in namespace production, author an optimized manifest in /perf/payment-processor-tuned.yaml setting container CPU requests to 500m, memory requests to 256Mi, memory limits to 512Mi, and completely omitting hard CPU limits to allow burstable compute. Apply to namespace production.",
+    "productionContext": "Uncapping CPU limits on latency-sensitive APIs stops kernel throttling threads from pausing during bursty requests, instantly dropping P99 latency by up to 80%.",
+    "prerequisites": [
+      "lab-sre-01-slo-budget-governance"
+    ],
+    "objectives": [
+      "Create namespace production if not already present.",
+      "Author tuned Deployment manifest in /perf/payment-processor-tuned.yaml.",
+      "Apply Deployment payment-processor in namespace production.",
+      "Verify CPU request is 500m and CPU limit is omitted."
+    ],
+    "initialClusterState": {
+      "resources": []
+    },
+    "starterManifest": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: payment-processor\n  namespace: production\n  labels:\n    app: payment-processor\nspec:\n  replicas: 2\n  selector:\n    matchLabels:\n      app: payment-processor\n  template:\n    metadata:\n      labels:\n        app: payment-processor\n    spec:\n      containers:\n        - name: processor\n          image: nginx:1.27-alpine\n          resources:\n            requests:\n              cpu: \"500m\"\n              memory: \"256Mi\"\n            limits:\n              memory: \"512Mi\"\n",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Create production namespace",
+        "instruction": "Create namespace production if not present.",
+        "commandHint": "kubectl create namespace production"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Author and apply tuned Deployment",
+        "instruction": "Save tuned manifest without CPU limits and apply to production namespace.",
+        "commandHint": "cat << 'EOF' > /perf/payment-processor-tuned.yaml\n...\nEOF\nkubectl apply -f /perf/payment-processor-tuned.yaml"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "deploy-payment-processor-exists",
+        "description": "Deployment payment-processor exists in namespace production",
+        "type": "resource_exists",
+        "kind": "Deployment",
+        "namespace": "production",
+        "name": "payment-processor",
+        "remediation": "Deploy payment-processor in namespace production"
+      },
+      {
+        "id": "deploy-cpu-request-500m",
+        "description": "Container CPU request is 500m",
+        "type": "resource_field_equals",
+        "kind": "Deployment",
+        "namespace": "production",
+        "name": "payment-processor",
+        "fieldPath": "spec.template.spec.containers[0].resources.requests.cpu",
+        "expectedValue": "500m",
+        "remediation": "Set container resources.requests.cpu: '500m'"
+      },
+      {
+        "id": "deploy-mem-limit-512mi",
+        "description": "Container memory limit is 512Mi",
+        "type": "resource_field_equals",
+        "kind": "Deployment",
+        "namespace": "production",
+        "name": "payment-processor",
+        "fieldPath": "spec.template.spec.containers[0].resources.limits.memory",
+        "expectedValue": "512Mi",
+        "remediation": "Set container resources.limits.memory: '512Mi'"
+      }
+    ],
+    "solutionCommands": [
+      "mkdir -p /perf",
+      "kubectl create namespace production",
+      "cat << 'EOF' > /perf/payment-processor-tuned.yaml\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: payment-processor\n  namespace: production\n  labels:\n    app: payment-processor\nspec:\n  replicas: 2\n  selector:\n    matchLabels:\n      app: payment-processor\n  template:\n    metadata:\n      labels:\n        app: payment-processor\n    spec:\n      containers:\n        - name: processor\n          image: nginx:1.27-alpine\n          resources:\n            requests:\n              cpu: \"500m\"\n              memory: \"256Mi\"\n            limits:\n              memory: \"512Mi\"\nEOF",
+      "kubectl apply -f /perf/payment-processor-tuned.yaml"
+    ],
+    "troubleshootingGuide": [
+      {
+        "problem": "Deployment missing or CPU limit still present.",
+        "cause": "Hard CPU limits restrict burst capacity and trigger kernel throttling.",
+        "solution": "Remove limits.cpu entirely from /perf/payment-processor-tuned.yaml and re-apply."
+      }
+    ],
+    "domainId": "performance-engineering",
+    "domainTitle": "Performance Engineering, CFS Throttling, KEDA & Karpenter Autoscaling"
+  },
+  {
+    "id": "lab-perf-02-keda-autoscaling",
+    "title": "Configuring KEDA Event-Driven Queue Autoscaling",
+    "difficulty": "Intermediate",
+    "durationMinutes": 20,
+    "xpReward": 150,
+    "scenario": "Configure event-driven elastic autoscaling for asynchronous orders: author a KEDA ScaledObject manifest in /perf/orders-scaledobject.yaml targeting Deployment payment-processor in namespace production with minReplicaCount: 1, maxReplicaCount: 10, cooldownPeriod: 30, and a queueLength trigger targeting queue orders-queue with targetQueueLength: 5. Apply to namespace production.",
+    "productionContext": "KEDA enables scaling workloads based on external queue length before CPU saturation occurs, preventing message ingestion backlogs.",
+    "prerequisites": [
+      "lab-perf-01-cfs-throttling"
+    ],
+    "objectives": [
+      "Author KEDA ScaledObject in /perf/orders-scaledobject.yaml.",
+      "Apply ScaledObject orders-scaledobject in namespace production.",
+      "Verify minReplicaCount is 1 and maxReplicaCount is 10."
+    ],
+    "initialClusterState": {
+      "resources": []
+    },
+    "starterManifest": "apiVersion: keda.sh/v1alpha1\nkind: ScaledObject\nmetadata:\n  name: orders-scaledobject\n  namespace: production\nspec:\n  scaleTargetRef:\n    name: payment-processor\n  minReplicaCount: 1\n  maxReplicaCount: 10\n  cooldownPeriod: 30\n  triggers:\n    - type: rabbitmq\n      metadata:\n        queueName: orders-queue\n        queueLength: \"5\"\n",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Author ScaledObject YAML manifest",
+        "instruction": "Save the ScaledObject definition to /perf/orders-scaledobject.yaml.",
+        "commandHint": "cat << 'EOF' > /perf/orders-scaledobject.yaml\n...\nEOF"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Apply ScaledObject to production namespace",
+        "instruction": "Apply the manifest to namespace production.",
+        "commandHint": "kubectl apply -f /perf/orders-scaledobject.yaml"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "scaledobject-orders-exists",
+        "description": "ScaledObject orders-scaledobject exists in namespace production",
+        "type": "resource_exists",
+        "kind": "ScaledObject",
+        "namespace": "production",
+        "name": "orders-scaledobject",
+        "remediation": "Apply ScaledObject orders-scaledobject in namespace production"
+      },
+      {
+        "id": "scaledobject-min-replicas",
+        "description": "ScaledObject minReplicaCount is 1",
+        "type": "resource_field_equals",
+        "kind": "ScaledObject",
+        "namespace": "production",
+        "name": "orders-scaledobject",
+        "fieldPath": "spec.minReplicaCount",
+        "expectedValue": 1,
+        "remediation": "Set spec.minReplicaCount: 1 on ScaledObject orders-scaledobject"
+      },
+      {
+        "id": "scaledobject-max-replicas",
+        "description": "ScaledObject maxReplicaCount is 10",
+        "type": "resource_field_equals",
+        "kind": "ScaledObject",
+        "namespace": "production",
+        "name": "orders-scaledobject",
+        "fieldPath": "spec.maxReplicaCount",
+        "expectedValue": 10,
+        "remediation": "Set spec.maxReplicaCount: 10 on ScaledObject orders-scaledobject"
+      }
+    ],
+    "solutionCommands": [
+      "mkdir -p /perf",
+      "cat << 'EOF' > /perf/orders-scaledobject.yaml\napiVersion: keda.sh/v1alpha1\nkind: ScaledObject\nmetadata:\n  name: orders-scaledobject\n  namespace: production\nspec:\n  scaleTargetRef:\n    name: payment-processor\n  minReplicaCount: 1\n  maxReplicaCount: 10\n  cooldownPeriod: 30\n  triggers:\n    - type: rabbitmq\n      metadata:\n        queueName: orders-queue\n        queueLength: \"5\"\nEOF",
+      "kubectl apply -f /perf/orders-scaledobject.yaml"
+    ],
+    "troubleshootingGuide": [
+      {
+        "problem": "ScaledObject missing or scaleTargetRef incorrect.",
+        "cause": "ScaledObject must target Deployment payment-processor in production namespace.",
+        "solution": "Verify spec.scaleTargetRef.name is payment-processor and apply to production namespace."
+      }
+    ],
+    "domainId": "performance-engineering",
+    "domainTitle": "Performance Engineering, CFS Throttling, KEDA & Karpenter Autoscaling"
+  },
+  {
+    "id": "lab-ops-01-velero-backup-restore",
+    "title": "Creating Automated Velero Backups and Restoring Workloads",
+    "difficulty": "Intermediate",
+    "durationMinutes": 20,
+    "xpReward": 150,
+    "scenario": "Execute enterprise disaster recovery: create a Velero backup named prod-backup targeting namespace production via velero backup create prod-backup, verify its status with velero backup get, and execute a test restore via velero restore create --from-backup prod-backup.",
+    "productionContext": "Practicing end-to-end backup and restore operations ensures that platform teams can recover critical revenue-generating state in minutes during data center outages.",
+    "prerequisites": [
+      "lab-perf-01-cfs-throttling"
+    ],
+    "objectives": [
+      "Create Velero backup prod-backup.",
+      "Execute velero backup get to verify status.",
+      "Create Velero restore from backup prod-backup."
+    ],
+    "initialClusterState": {
+      "resources": []
+    },
+    "starterManifest": "# Velero Disaster Recovery Automation\n# Run: velero backup create prod-backup && velero restore create --from-backup prod-backup\n",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Create Velero backup",
+        "instruction": "Execute velero backup create prod-backup.",
+        "commandHint": "velero backup create prod-backup"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Verify backup creation",
+        "instruction": "Execute velero backup get to verify status.",
+        "commandHint": "velero backup get"
+      },
+      {
+        "stepNumber": 3,
+        "title": "Execute Velero restore",
+        "instruction": "Execute velero restore create --from-backup prod-backup.",
+        "commandHint": "velero restore create --from-backup prod-backup"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "velero-backup-created",
+        "description": "velero backup create prod-backup executed",
+        "type": "command_executed",
+        "commandSubstring": "velero backup create prod-backup",
+        "remediation": "Execute velero backup create prod-backup"
+      },
+      {
+        "id": "velero-restore-created",
+        "description": "velero restore create --from-backup prod-backup executed",
+        "type": "command_executed",
+        "commandSubstring": "velero restore create --from-backup prod-backup",
+        "remediation": "Execute velero restore create --from-backup prod-backup"
+      }
+    ],
+    "solutionCommands": [
+      "velero backup create prod-backup",
+      "velero backup get",
+      "velero restore create --from-backup prod-backup"
+    ],
+    "troubleshootingGuide": [
+      {
+        "problem": "velero command not found or backup failed.",
+        "cause": "Commands were not executed or backup name differed from prod-backup.",
+        "solution": "Execute velero backup create prod-backup followed by velero restore create --from-backup prod-backup."
+      }
+    ],
+    "domainId": "production-operations",
+    "domainTitle": "Production Operations, Velero Disaster Recovery & Cluster Maintenance"
+  },
+  {
+    "id": "lab-ops-02-node-drain-maintenance",
+    "title": "Zero-Downtime Worker Node Maintenance: Cordon, Drain & Uncordon",
+    "difficulty": "Intermediate",
+    "durationMinutes": 20,
+    "xpReward": 150,
+    "scenario": "Perform safe kernel maintenance on worker node kubelabs-worker-01: cordon the node to prevent new pod scheduling, drain the node using kubectl drain kubelabs-worker-01 --ignore-daemonsets, simulate the OS upgrade, and uncordon the node to return it to the active pool.",
+    "productionContext": "Disciplined cordon and drain procedures prevent packet drop and eviction failures during automated cloud instance replacement.",
+    "prerequisites": [
+      "lab-ops-01-velero-backup-restore"
+    ],
+    "objectives": [
+      "Cordon worker node kubelabs-worker-01.",
+      "Drain worker node kubelabs-worker-01.",
+      "Uncordon worker node kubelabs-worker-01."
+    ],
+    "initialClusterState": {
+      "resources": []
+    },
+    "starterManifest": "# Zero-Downtime Node Maintenance\n# Target: kubelabs-worker-01\n",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Cordon worker node",
+        "instruction": "Execute kubectl cordon kubelabs-worker-01.",
+        "commandHint": "kubectl cordon kubelabs-worker-01"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Drain workloads from node",
+        "instruction": "Execute kubectl drain kubelabs-worker-01 --ignore-daemonsets.",
+        "commandHint": "kubectl drain kubelabs-worker-01 --ignore-daemonsets"
+      },
+      {
+        "stepNumber": 3,
+        "title": "Uncordon node after maintenance",
+        "instruction": "Execute kubectl uncordon kubelabs-worker-01.",
+        "commandHint": "kubectl uncordon kubelabs-worker-01"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "node-cordoned",
+        "description": "kubectl cordon kubelabs-worker-01 executed",
+        "type": "command_executed",
+        "commandSubstring": "kubectl cordon kubelabs-worker-01",
+        "remediation": "Execute kubectl cordon kubelabs-worker-01"
+      },
+      {
+        "id": "node-drained",
+        "description": "kubectl drain kubelabs-worker-01 executed",
+        "type": "command_executed",
+        "commandSubstring": "kubectl drain kubelabs-worker-01",
+        "remediation": "Execute kubectl drain kubelabs-worker-01 --ignore-daemonsets"
+      },
+      {
+        "id": "node-uncordoned",
+        "description": "kubectl uncordon kubelabs-worker-01 executed",
+        "type": "command_executed",
+        "commandSubstring": "kubectl uncordon kubelabs-worker-01",
+        "remediation": "Execute kubectl uncordon kubelabs-worker-01"
+      }
+    ],
+    "solutionCommands": [
+      "kubectl cordon kubelabs-worker-01",
+      "kubectl drain kubelabs-worker-01 --ignore-daemonsets",
+      "kubectl uncordon kubelabs-worker-01"
+    ],
+    "troubleshootingGuide": [
+      {
+        "problem": "kubectl drain failed or node remained unschedulable.",
+        "cause": "Drain requires --ignore-daemonsets flag to bypass system daemonset pods.",
+        "solution": "Execute kubectl drain kubelabs-worker-01 --ignore-daemonsets followed by kubectl uncordon kubelabs-worker-01."
+      }
+    ],
+    "domainId": "production-operations",
+    "domainTitle": "Production Operations, Velero Disaster Recovery & Cluster Maintenance"
+  },
+  {
+    "id": "lab-k8sops-01-flowschema-apf",
+    "title": "Configuring API Priority and Fairness (APF) FlowSchemas",
+    "difficulty": "Advanced",
+    "durationMinutes": 20,
+    "xpReward": 150,
+    "scenario": "Protect the kube-apiserver control plane from batch workload request floods: author a FlowSchema manifest in /ops/flowschema-batch.yaml named batch-workload-flowschema matching ServiceAccounts in namespace batch, routing requests to PriorityLevelConfiguration workload-low with matchingPrecedence: 500. Apply to the cluster.",
+    "productionContext": "Implementing APF ensures batch report jobs cannot starve control plane health checks or pod scheduling during high-volume data processing cycles.",
+    "prerequisites": [
+      "lab-ops-02-node-drain-maintenance"
+    ],
+    "objectives": [
+      "Author FlowSchema manifest in /ops/flowschema-batch.yaml.",
+      "Configure matchingPrecedence to 500 and priorityLevelConfiguration to workload-low.",
+      "Apply FlowSchema batch-workload-flowschema to the cluster."
+    ],
+    "initialClusterState": {
+      "resources": []
+    },
+    "starterManifest": "apiVersion: flowcontrol.apiserver.k8s.io/v1\nkind: FlowSchema\nmetadata:\n  name: batch-workload-flowschema\nspec:\n  priorityLevelConfiguration:\n    name: workload-low\n  matchingPrecedence: 500\n  rules:\n    - subjects:\n        - kind: ServiceAccount\n          serviceAccount:\n            name: \"*\"\n            namespace: batch\n      resourceRules:\n        - verbs: [\"*\"]\n          apiGroups: [\"*\"]\n          resources: [\"*\"]\n",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Author FlowSchema manifest",
+        "instruction": "Create manifest /ops/flowschema-batch.yaml defining FlowSchema batch-workload-flowschema.",
+        "commandHint": "cat << 'EOF' > /ops/flowschema-batch.yaml\n...\nEOF"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Apply FlowSchema",
+        "instruction": "Apply the FlowSchema definition to the cluster.",
+        "commandHint": "kubectl apply -f /ops/flowschema-batch.yaml"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "flowschema-batch-exists",
+        "description": "FlowSchema batch-workload-flowschema exists in cluster",
+        "type": "resource_exists",
+        "kind": "FlowSchema",
+        "name": "batch-workload-flowschema",
+        "remediation": "Apply FlowSchema batch-workload-flowschema to the cluster"
+      },
+      {
+        "id": "flowschema-priority-level",
+        "description": "FlowSchema routes to priorityLevelConfiguration workload-low",
+        "type": "resource_field_equals",
+        "kind": "FlowSchema",
+        "name": "batch-workload-flowschema",
+        "fieldPath": "spec.priorityLevelConfiguration.name",
+        "expectedValue": "workload-low",
+        "remediation": "Set spec.priorityLevelConfiguration.name: workload-low"
+      },
+      {
+        "id": "flowschema-precedence",
+        "description": "FlowSchema has matchingPrecedence 500",
+        "type": "resource_field_equals",
+        "kind": "FlowSchema",
+        "name": "batch-workload-flowschema",
+        "fieldPath": "spec.matchingPrecedence",
+        "expectedValue": 500,
+        "remediation": "Set spec.matchingPrecedence: 500"
+      }
+    ],
+    "solutionCommands": [
+      "mkdir -p /ops",
+      "cat << 'EOF' > /ops/flowschema-batch.yaml\napiVersion: flowcontrol.apiserver.k8s.io/v1\nkind: FlowSchema\nmetadata:\n  name: batch-workload-flowschema\nspec:\n  priorityLevelConfiguration:\n    name: workload-low\n  matchingPrecedence: 500\n  rules:\n    - subjects:\n        - kind: ServiceAccount\n          serviceAccount:\n            name: \"*\"\n            namespace: batch\n      resourceRules:\n        - verbs: [\"*\"]\n          apiGroups: [\"*\"]\n          resources: [\"*\"]\nEOF",
+      "kubectl apply -f /ops/flowschema-batch.yaml"
+    ],
+    "troubleshootingGuide": [
+      {
+        "problem": "FlowSchema validation fails or priorityLevelConfiguration not found.",
+        "cause": "FlowSchema is cluster-scoped and requires exact field matching.",
+        "solution": "Verify spec.priorityLevelConfiguration.name is workload-low and spec.matchingPrecedence is 500."
+      }
+    ],
+    "domainId": "k8s-production-operations",
+    "domainTitle": "Kubernetes Advanced Production Operations, APF & etcd Maintenance"
+  },
+  {
+    "id": "lab-k8sops-02-etcd-defrag",
+    "title": "Executing etcd Compaction, Defragmentation & Endpoint Health Audits",
+    "difficulty": "Advanced",
+    "durationMinutes": 20,
+    "xpReward": 150,
+    "scenario": "Mitigate etcd database bloat and defragment cluster storage after high pod turnover: compact etcd historical revisions via etcdctl compact 5000, defragment the active database via etcdctl defrag, and audit endpoint storage metrics via etcdctl endpoint status.",
+    "productionContext": "Compacting and defragmenting etcd reclaims physical disk space and prevents slow disk sync warnings (etcd wal: sync took too long) that cause etcd leader elections.",
+    "prerequisites": [
+      "lab-k8sops-01-flowschema-apf"
+    ],
+    "objectives": [
+      "Execute etcdctl compact 5000.",
+      "Execute etcdctl defrag to reclaim free pages.",
+      "Audit endpoint health and db size with etcdctl endpoint status."
+    ],
+    "initialClusterState": {
+      "resources": []
+    },
+    "starterManifest": "# etcd Maintenance Automation\n# Execute: etcdctl compact 5000 && etcdctl defrag && etcdctl endpoint status\n",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Compact etcd revisions",
+        "instruction": "Execute etcdctl compact 5000 to purge old revision history.",
+        "commandHint": "etcdctl compact 5000"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Defragment etcd member storage",
+        "instruction": "Execute etcdctl defrag to reclaim fragmented database space.",
+        "commandHint": "etcdctl defrag"
+      },
+      {
+        "stepNumber": 3,
+        "title": "Audit endpoint storage status",
+        "instruction": "Execute etcdctl endpoint status to inspect member DB size and Raft index.",
+        "commandHint": "etcdctl endpoint status"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "etcd-compact-executed",
+        "description": "etcdctl compact 5000 executed",
+        "type": "command_executed",
+        "commandSubstring": "etcdctl compact 5000",
+        "remediation": "Execute etcdctl compact 5000"
+      },
+      {
+        "id": "etcd-defrag-executed",
+        "description": "etcdctl defrag executed",
+        "type": "command_executed",
+        "commandSubstring": "etcdctl defrag",
+        "remediation": "Execute etcdctl defrag"
+      },
+      {
+        "id": "etcd-endpoint-status-executed",
+        "description": "etcdctl endpoint status executed",
+        "type": "command_executed",
+        "commandSubstring": "etcdctl endpoint status",
+        "remediation": "Execute etcdctl endpoint status"
+      }
+    ],
+    "solutionCommands": [
+      "etcdctl compact 5000",
+      "etcdctl defrag",
+      "etcdctl endpoint status"
+    ],
+    "troubleshootingGuide": [
+      {
+        "problem": "etcdctl commands fail or defragmentation times out.",
+        "cause": "Commands must be executed sequentially to ensure revisions are compacted before defragmenting.",
+        "solution": "Run etcdctl compact 5000 followed by etcdctl defrag and etcdctl endpoint status."
+      }
+    ],
+    "domainId": "k8s-production-operations",
+    "domainTitle": "Kubernetes Advanced Production Operations, APF & etcd Maintenance"
+  },
+  {
+    "id": "lab-mcm-01-capi-machinedeployment",
+    "title": "Provisioning Declarative Workload Clusters via Cluster API MachineDeployment",
+    "difficulty": "Advanced",
+    "durationMinutes": 20,
+    "xpReward": 150,
+    "scenario": "Deploy a declarative worker fleet for a production workload cluster: author a Cluster API MachineDeployment manifest in /fleet/worker-fleet.yaml named prod-worker-fleet in namespace fleet-system with 3 replicas targeting cluster prod-cluster and version v1.32.0. Apply to namespace fleet-system.",
+    "productionContext": "Using CAPI MachineDeployments automates worker node rolling replacements during CVE patch cycles without manual node provisioning.",
+    "prerequisites": [
+      "lab-k8sops-02-etcd-defrag"
+    ],
+    "objectives": [
+      "Create namespace fleet-system if not present.",
+      "Author MachineDeployment in /fleet/worker-fleet.yaml.",
+      "Configure clusterName to prod-cluster and replicas to 3.",
+      "Apply MachineDeployment to namespace fleet-system."
+    ],
+    "initialClusterState": {
+      "resources": []
+    },
+    "starterManifest": "apiVersion: cluster.x-k8s.io/v1beta1\nkind: MachineDeployment\nmetadata:\n  name: prod-worker-fleet\n  namespace: fleet-system\nspec:\n  clusterName: prod-cluster\n  replicas: 3\n  selector:\n    matchLabels:\n      cluster.x-k8s.io/cluster-name: prod-cluster\n  template:\n    metadata:\n      labels:\n        cluster.x-k8s.io/cluster-name: prod-cluster\n    spec:\n      clusterName: prod-cluster\n      version: v1.32.0\n",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Create fleet-system namespace",
+        "instruction": "Create namespace fleet-system if not present.",
+        "commandHint": "kubectl create namespace fleet-system"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Author MachineDeployment manifest",
+        "instruction": "Author manifest /fleet/worker-fleet.yaml targeting cluster prod-cluster with 3 replicas.",
+        "commandHint": "cat << 'EOF' > /fleet/worker-fleet.yaml\n...\nEOF"
+      },
+      {
+        "stepNumber": 3,
+        "title": "Apply MachineDeployment",
+        "instruction": "Apply manifest to namespace fleet-system.",
+        "commandHint": "kubectl apply -f /fleet/worker-fleet.yaml"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "machinedeployment-fleet-exists",
+        "description": "MachineDeployment prod-worker-fleet exists in namespace fleet-system",
+        "type": "resource_exists",
+        "kind": "MachineDeployment",
+        "namespace": "fleet-system",
+        "name": "prod-worker-fleet",
+        "remediation": "Apply MachineDeployment prod-worker-fleet in namespace fleet-system"
+      },
+      {
+        "id": "machinedeployment-cluster-name",
+        "description": "MachineDeployment targets clusterName prod-cluster",
+        "type": "resource_field_equals",
+        "kind": "MachineDeployment",
+        "namespace": "fleet-system",
+        "name": "prod-worker-fleet",
+        "fieldPath": "spec.clusterName",
+        "expectedValue": "prod-cluster",
+        "remediation": "Set spec.clusterName: prod-cluster on MachineDeployment prod-worker-fleet"
+      },
+      {
+        "id": "machinedeployment-replicas",
+        "description": "MachineDeployment has 3 replicas",
+        "type": "resource_field_equals",
+        "kind": "MachineDeployment",
+        "namespace": "fleet-system",
+        "name": "prod-worker-fleet",
+        "fieldPath": "spec.replicas",
+        "expectedValue": 3,
+        "remediation": "Set spec.replicas: 3 on MachineDeployment prod-worker-fleet"
+      }
+    ],
+    "solutionCommands": [
+      "mkdir -p /fleet",
+      "kubectl create namespace fleet-system",
+      "cat << 'EOF' > /fleet/worker-fleet.yaml\napiVersion: cluster.x-k8s.io/v1beta1\nkind: MachineDeployment\nmetadata:\n  name: prod-worker-fleet\n  namespace: fleet-system\nspec:\n  clusterName: prod-cluster\n  replicas: 3\n  selector:\n    matchLabels:\n      cluster.x-k8s.io/cluster-name: prod-cluster\n  template:\n    metadata:\n      labels:\n        cluster.x-k8s.io/cluster-name: prod-cluster\n    spec:\n      clusterName: prod-cluster\n      version: v1.32.0\nEOF",
+      "kubectl apply -f /fleet/worker-fleet.yaml"
+    ],
+    "troubleshootingGuide": [
+      {
+        "problem": "MachineDeployment missing or target cluster mismatch.",
+        "cause": "MachineDeployment must target clusterName prod-cluster in namespace fleet-system.",
+        "solution": "Verify spec.clusterName is prod-cluster and apply to namespace fleet-system."
+      }
+    ],
+    "domainId": "multi-cluster-management",
+    "domainTitle": "Multi-Cluster Management, Cluster API (CAPI), vCluster & Cilium ClusterMesh"
+  },
+  {
+    "id": "lab-mcm-02-cilium-clustermesh-mcs",
+    "title": "Cross-Cluster Service Discovery with Cilium ClusterMesh & MCS",
+    "difficulty": "Advanced",
+    "durationMinutes": 20,
+    "xpReward": 150,
+    "scenario": "Configure cross-cluster multi-cloud service discovery: verify multi-cluster mesh connectivity via cilium clustermesh status, author a Multi-Cluster Services ServiceImport manifest in /fleet/checkout-service-import.yaml named checkout-service in namespace production of type ClusterSetIP targeting port 8080. Apply to namespace production.",
+    "productionContext": "Multi-Cluster Services (MCS) ServiceImports allow pods in one cluster to discover and communicate with services in another cluster using standard DNS names (service.namespace.svc.clusterset.local).",
+    "prerequisites": [
+      "lab-mcm-01-capi-machinedeployment"
+    ],
+    "objectives": [
+      "Audit ClusterMesh connectivity via cilium clustermesh status.",
+      "Author ServiceImport in /fleet/checkout-service-import.yaml.",
+      "Configure spec.type to ClusterSetIP.",
+      "Apply ServiceImport to namespace production."
+    ],
+    "initialClusterState": {
+      "resources": []
+    },
+    "starterManifest": "apiVersion: multicluster.x-k8s.io/v1alpha1\nkind: ServiceImport\nmetadata:\n  name: checkout-service\n  namespace: production\nspec:\n  type: ClusterSetIP\n  ports:\n    - port: 8080\n      protocol: TCP\n",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Verify ClusterMesh status",
+        "instruction": "Execute cilium clustermesh status to verify cross-cluster tunnel synchronization.",
+        "commandHint": "cilium clustermesh status"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Author ServiceImport manifest",
+        "instruction": "Author manifest /fleet/checkout-service-import.yaml for checkout-service of type ClusterSetIP.",
+        "commandHint": "cat << 'EOF' > /fleet/checkout-service-import.yaml\n...\nEOF"
+      },
+      {
+        "stepNumber": 3,
+        "title": "Apply ServiceImport",
+        "instruction": "Apply ServiceImport manifest to namespace production.",
+        "commandHint": "kubectl apply -f /fleet/checkout-service-import.yaml"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "cilium-clustermesh-status-executed",
+        "description": "cilium clustermesh status executed",
+        "type": "command_executed",
+        "commandSubstring": "cilium clustermesh status",
+        "remediation": "Execute cilium clustermesh status"
+      },
+      {
+        "id": "serviceimport-checkout-exists",
+        "description": "ServiceImport checkout-service exists in namespace production",
+        "type": "resource_exists",
+        "kind": "ServiceImport",
+        "namespace": "production",
+        "name": "checkout-service",
+        "remediation": "Apply ServiceImport checkout-service in namespace production"
+      },
+      {
+        "id": "serviceimport-type-clustersetip",
+        "description": "ServiceImport type is ClusterSetIP",
+        "type": "resource_field_equals",
+        "kind": "ServiceImport",
+        "namespace": "production",
+        "name": "checkout-service",
+        "fieldPath": "spec.type",
+        "expectedValue": "ClusterSetIP",
+        "remediation": "Set spec.type: ClusterSetIP on ServiceImport checkout-service"
+      }
+    ],
+    "solutionCommands": [
+      "mkdir -p /fleet",
+      "cilium clustermesh status",
+      "cat << 'EOF' > /fleet/checkout-service-import.yaml\napiVersion: multicluster.x-k8s.io/v1alpha1\nkind: ServiceImport\nmetadata:\n  name: checkout-service\n  namespace: production\nspec:\n  type: ClusterSetIP\n  ports:\n    - port: 8080\n      protocol: TCP\nEOF",
+      "kubectl apply -f /fleet/checkout-service-import.yaml"
+    ],
+    "troubleshootingGuide": [
+      {
+        "problem": "ServiceImport validation fails or clustermesh not checked.",
+        "cause": "Cilium clustermesh status command must be executed and ServiceImport must be created in namespace production.",
+        "solution": "Execute cilium clustermesh status and apply /fleet/checkout-service-import.yaml to namespace production."
+      }
+    ],
+    "domainId": "multi-cluster-management",
+    "domainTitle": "Multi-Cluster Management, Cluster API (CAPI), vCluster & Cilium ClusterMesh"
+  },
+  {
+    "id": "lab-arch-01-twelve-factor-config",
+    "title": "Config & Secret Decoupling with 12-Factor Workload Parity",
+    "difficulty": "Advanced",
+    "durationMinutes": 20,
+    "xpReward": 150,
+    "scenario": "Architect a 12-factor compliant microservice deployment: author ConfigMap checkout-config with LOG_LEVEL: info and CURRENCY: USD, Secret checkout-secrets with API_KEY: sec-token-99, and Deployment checkout-service in namespace production with replicas: 2. Apply all manifests to namespace production.",
+    "productionContext": "Decoupling config and credentials from container images guarantees identical, immutable container binaries can be promoted safely across dev, staging, and production environments.",
+    "prerequisites": [
+      "lab-mcm-02-cilium-clustermesh-mcs"
+    ],
+    "objectives": [
+      "Create namespace production if not present.",
+      "Author ConfigMap checkout-config.",
+      "Author Secret checkout-secrets.",
+      "Author Deployment checkout-service with 2 replicas.",
+      "Apply all manifests to namespace production."
+    ],
+    "initialClusterState": {
+      "resources": []
+    },
+    "starterManifest": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: checkout-config\n  namespace: production\ndata:\n  LOG_LEVEL: \"info\"\n  CURRENCY: \"USD\"\n---\napiVersion: v1\nkind: Secret\nmetadata:\n  name: checkout-secrets\n  namespace: production\ntype: Opaque\nstringData:\n  API_KEY: \"sec-token-99\"\n---\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: checkout-service\n  namespace: production\nspec:\n  replicas: 2\n  selector:\n    matchLabels:\n      app: checkout-service\n  template:\n    metadata:\n      labels:\n        app: checkout-service\n    spec:\n      containers:\n        - name: api\n          image: nginx:1.27-alpine\n",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Create production namespace",
+        "instruction": "Create namespace production if not present.",
+        "commandHint": "kubectl create namespace production"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Author 12-factor application manifest",
+        "instruction": "Author /arch/twelve-factor-app.yaml containing ConfigMap, Secret, and Deployment.",
+        "commandHint": "cat << 'EOF' > /arch/twelve-factor-app.yaml\n...\nEOF"
+      },
+      {
+        "stepNumber": 3,
+        "title": "Apply application manifest",
+        "instruction": "Apply the manifest to namespace production.",
+        "commandHint": "kubectl apply -f /arch/twelve-factor-app.yaml"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "cm-checkout-config-exists",
+        "description": "ConfigMap checkout-config exists in namespace production",
+        "type": "resource_exists",
+        "kind": "ConfigMap",
+        "namespace": "production",
+        "name": "checkout-config",
+        "remediation": "Apply ConfigMap checkout-config in namespace production"
+      },
+      {
+        "id": "secret-checkout-secrets-exists",
+        "description": "Secret checkout-secrets exists in namespace production",
+        "type": "resource_exists",
+        "kind": "Secret",
+        "namespace": "production",
+        "name": "checkout-secrets",
+        "remediation": "Apply Secret checkout-secrets in namespace production"
+      },
+      {
+        "id": "deploy-checkout-service-exists",
+        "description": "Deployment checkout-service exists in namespace production",
+        "type": "resource_exists",
+        "kind": "Deployment",
+        "namespace": "production",
+        "name": "checkout-service",
+        "remediation": "Apply Deployment checkout-service in namespace production"
+      },
+      {
+        "id": "deploy-checkout-replicas",
+        "description": "Deployment checkout-service has 2 replicas",
+        "type": "resource_field_equals",
+        "kind": "Deployment",
+        "namespace": "production",
+        "name": "checkout-service",
+        "fieldPath": "spec.replicas",
+        "expectedValue": 2,
+        "remediation": "Set spec.replicas: 2 on Deployment checkout-service"
+      }
+    ],
+    "solutionCommands": [
+      "mkdir -p /arch",
+      "kubectl create namespace production",
+      "cat << 'EOF' > /arch/twelve-factor-app.yaml\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: checkout-config\n  namespace: production\ndata:\n  LOG_LEVEL: \"info\"\n  CURRENCY: \"USD\"\n---\napiVersion: v1\nkind: Secret\nmetadata:\n  name: checkout-secrets\n  namespace: production\ntype: Opaque\nstringData:\n  API_KEY: \"sec-token-99\"\n---\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: checkout-service\n  namespace: production\nspec:\n  replicas: 2\n  selector:\n    matchLabels:\n      app: checkout-service\n  template:\n    metadata:\n      labels:\n        app: checkout-service\n    spec:\n      containers:\n        - name: api\n          image: nginx:1.27-alpine\nEOF",
+      "kubectl apply -f /arch/twelve-factor-app.yaml"
+    ],
+    "troubleshootingGuide": [
+      {
+        "problem": "Deployment missing or ConfigMap/Secret not found.",
+        "cause": "All 3 resources must be applied to namespace production.",
+        "solution": "Apply /arch/twelve-factor-app.yaml to namespace production."
+      }
+    ],
+    "domainId": "cloud-native-architecture",
+    "domainTitle": "Cloud-Native Architecture Patterns, 12/15-Factor Design & Custom Operators"
+  },
+  {
+    "id": "lab-arch-02-custom-operator-crd",
+    "title": "Authoring Custom Resource Definitions & Operator Custom Resources",
+    "difficulty": "Advanced",
+    "durationMinutes": 20,
+    "xpReward": 150,
+    "scenario": "Provision a cloud-native database cluster managed by a custom Operator: author a CRD manifest in /arch/database-crd.yaml defining kind DatabaseCluster in group databases.kubelabs.io, and instantiate a custom resource in /arch/prod-db-cluster.yaml named prod-db-cluster in namespace production with engine: postgres, version: '16', and replicas: 3. Apply both manifests to the cluster.",
+    "productionContext": "Custom Operators encapsulate Day-2 stateful database tasks (failover, replication, WAL archiving, schema upgrades) into native declarative Kubernetes APIs.",
+    "prerequisites": [
+      "lab-arch-01-twelve-factor-config"
+    ],
+    "objectives": [
+      "Author CRD databaseclusters.databases.kubelabs.io in /arch/database-crd.yaml.",
+      "Apply CRD to cluster.",
+      "Author Custom Resource prod-db-cluster in /arch/prod-db-cluster.yaml.",
+      "Apply DatabaseCluster prod-db-cluster to namespace production."
+    ],
+    "initialClusterState": {
+      "resources": []
+    },
+    "starterManifest": "apiVersion: apiextensions.k8s.io/v1\nkind: CustomResourceDefinition\nmetadata:\n  name: databaseclusters.databases.kubelabs.io\nspec:\n  group: databases.kubelabs.io\n  names:\n    kind: DatabaseCluster\n    plural: databaseclusters\n    singular: databasecluster\n  scope: Namespaced\n---\napiVersion: databases.kubelabs.io/v1\nkind: DatabaseCluster\nmetadata:\n  name: prod-db-cluster\n  namespace: production\nspec:\n  engine: postgres\n  version: \"16\"\n  replicas: 3\n",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Author and apply CRD",
+        "instruction": "Author /arch/database-crd.yaml and apply to cluster.",
+        "commandHint": "cat << 'EOF' > /arch/database-crd.yaml\n...\nEOF\nkubectl apply -f /arch/database-crd.yaml"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Author and apply Custom Resource",
+        "instruction": "Author /arch/prod-db-cluster.yaml and apply to namespace production.",
+        "commandHint": "cat << 'EOF' > /arch/prod-db-cluster.yaml\n...\nEOF\nkubectl apply -f /arch/prod-db-cluster.yaml"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "crd-databaseclusters-exists",
+        "description": "CustomResourceDefinition databaseclusters.databases.kubelabs.io exists",
+        "type": "resource_exists",
+        "kind": "CustomResourceDefinition",
+        "name": "databaseclusters.databases.kubelabs.io",
+        "remediation": "Apply CRD databaseclusters.databases.kubelabs.io to the cluster"
+      },
+      {
+        "id": "cr-prod-db-cluster-exists",
+        "description": "DatabaseCluster prod-db-cluster exists in namespace production",
+        "type": "resource_exists",
+        "kind": "DatabaseCluster",
+        "namespace": "production",
+        "name": "prod-db-cluster",
+        "remediation": "Apply DatabaseCluster prod-db-cluster in namespace production"
+      },
+      {
+        "id": "cr-engine-postgres",
+        "description": "DatabaseCluster engine is postgres",
+        "type": "resource_field_equals",
+        "kind": "DatabaseCluster",
+        "namespace": "production",
+        "name": "prod-db-cluster",
+        "fieldPath": "spec.engine",
+        "expectedValue": "postgres",
+        "remediation": "Set spec.engine: postgres on DatabaseCluster prod-db-cluster"
+      },
+      {
+        "id": "cr-replicas-3",
+        "description": "DatabaseCluster replicas is 3",
+        "type": "resource_field_equals",
+        "kind": "DatabaseCluster",
+        "namespace": "production",
+        "name": "prod-db-cluster",
+        "fieldPath": "spec.replicas",
+        "expectedValue": 3,
+        "remediation": "Set spec.replicas: 3 on DatabaseCluster prod-db-cluster"
+      }
+    ],
+    "solutionCommands": [
+      "mkdir -p /arch",
+      "kubectl create namespace production",
+      "cat << 'EOF' > /arch/database-crd.yaml\napiVersion: apiextensions.k8s.io/v1\nkind: CustomResourceDefinition\nmetadata:\n  name: databaseclusters.databases.kubelabs.io\nspec:\n  group: databases.kubelabs.io\n  names:\n    kind: DatabaseCluster\n    plural: databaseclusters\n    singular: databasecluster\n  scope: Namespaced\nEOF",
+      "kubectl apply -f /arch/database-crd.yaml",
+      "cat << 'EOF' > /arch/prod-db-cluster.yaml\napiVersion: databases.kubelabs.io/v1\nkind: DatabaseCluster\nmetadata:\n  name: prod-db-cluster\n  namespace: production\nspec:\n  engine: postgres\n  version: \"16\"\n  replicas: 3\nEOF",
+      "kubectl apply -f /arch/prod-db-cluster.yaml"
+    ],
+    "troubleshootingGuide": [
+      {
+        "problem": "DatabaseCluster CR rejected or CRD missing.",
+        "cause": "The CustomResourceDefinition must be applied before creating instances of DatabaseCluster.",
+        "solution": "Apply /arch/database-crd.yaml first, then apply /arch/prod-db-cluster.yaml."
+      }
+    ],
+    "domainId": "cloud-native-architecture",
+    "domainTitle": "Cloud-Native Architecture Patterns, 12/15-Factor Design & Custom Operators"
+  },
+  {
+    "id": "lab-dist-01-fencing-token-lock",
+    "title": "Distributed Mutual Exclusion with Monotonically Increasing Fencing Tokens",
+    "difficulty": "Advanced",
+    "durationMinutes": 20,
+    "xpReward": 150,
+    "scenario": "Configure a distributed mutual exclusion contract protected by monotonic fencing tokens: author ConfigMap order-distributed-lock in namespace production defining lockName: order-processing-lock, currentOwner: worker-pod-01, leaseDurationSeconds: '30', and fencingToken: '1042'. Apply to namespace production.",
+    "productionContext": "Fencing tokens ensure that if a lock owner pauses (e.g. JVM full-GC or network stall) and loses its lease, its subsequent late writes are rejected by downstream storage engines, preventing silent data corruption.",
+    "prerequisites": [
+      "lab-arch-02-custom-operator-crd"
+    ],
+    "objectives": [
+      "Create namespace production if not present.",
+      "Author ConfigMap order-distributed-lock.",
+      "Configure currentOwner to worker-pod-01.",
+      "Configure fencingToken to '1042'.",
+      "Apply ConfigMap to namespace production."
+    ],
+    "initialClusterState": {
+      "resources": []
+    },
+    "starterManifest": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: order-distributed-lock\n  namespace: production\ndata:\n  lockName: \"order-processing-lock\"\n  currentOwner: \"worker-pod-01\"\n  leaseDurationSeconds: \"30\"\n  fencingToken: \"1042\"\n",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Create production namespace",
+        "instruction": "Create namespace production if not present.",
+        "commandHint": "kubectl create namespace production"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Author distributed lock manifest",
+        "instruction": "Author manifest /dist/distributed-lock.yaml defining ConfigMap order-distributed-lock.",
+        "commandHint": "cat << 'EOF' > /dist/distributed-lock.yaml\n...\nEOF"
+      },
+      {
+        "stepNumber": 3,
+        "title": "Apply distributed lock manifest",
+        "instruction": "Apply manifest to namespace production.",
+        "commandHint": "kubectl apply -f /dist/distributed-lock.yaml"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "cm-order-lock-exists",
+        "description": "ConfigMap order-distributed-lock exists in namespace production",
+        "type": "resource_exists",
+        "kind": "ConfigMap",
+        "namespace": "production",
+        "name": "order-distributed-lock",
+        "remediation": "Apply ConfigMap order-distributed-lock in namespace production"
+      },
+      {
+        "id": "cm-lock-owner",
+        "description": "ConfigMap currentOwner is worker-pod-01",
+        "type": "resource_field_equals",
+        "kind": "ConfigMap",
+        "namespace": "production",
+        "name": "order-distributed-lock",
+        "fieldPath": "data.currentOwner",
+        "expectedValue": "worker-pod-01",
+        "remediation": "Set data.currentOwner: worker-pod-01 on ConfigMap order-distributed-lock"
+      },
+      {
+        "id": "cm-fencing-token",
+        "description": "ConfigMap fencingToken is '1042'",
+        "type": "resource_field_equals",
+        "kind": "ConfigMap",
+        "namespace": "production",
+        "name": "order-distributed-lock",
+        "fieldPath": "data.fencingToken",
+        "expectedValue": "1042",
+        "remediation": "Set data.fencingToken: '1042' on ConfigMap order-distributed-lock"
+      }
+    ],
+    "solutionCommands": [
+      "mkdir -p /dist",
+      "kubectl create namespace production",
+      "cat << 'EOF' > /dist/distributed-lock.yaml\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: order-distributed-lock\n  namespace: production\ndata:\n  lockName: \"order-processing-lock\"\n  currentOwner: \"worker-pod-01\"\n  leaseDurationSeconds: \"30\"\n  fencingToken: \"1042\"\nEOF",
+      "kubectl apply -f /dist/distributed-lock.yaml"
+    ],
+    "troubleshootingGuide": [
+      {
+        "problem": "ConfigMap missing or fencing token mismatch.",
+        "cause": "The ConfigMap must define data.currentOwner as worker-pod-01 and data.fencingToken as '1042'.",
+        "solution": "Apply /dist/distributed-lock.yaml to namespace production."
+      }
+    ],
+    "domainId": "distributed-systems",
+    "domainTitle": "Distributed Systems Theory, Raft Quorum, Fencing Tokens & Saga Transactions"
+  },
+  {
+    "id": "lab-dist-02-saga-orchestration",
+    "title": "Architecting Saga Distributed Transactions with Compensating Rollbacks",
+    "difficulty": "Advanced",
+    "durationMinutes": 20,
+    "xpReward": 150,
+    "scenario": "Implement a resilient Saga distributed transaction workflow with automated compensating rollbacks: author ConfigMap payment-order-saga-definition in namespace production defining sagaId: saga-ecommerce-v1, status: Active, and a JSON specification in sagaDefinition declaring forward steps (AuthorizePayment, ReserveInventory, ShipOrder) and compensating actions (RefundPayment, ReleaseInventory). Apply to namespace production.",
+    "productionContext": "Sagas replace fragile blocking Two-Phase Commit (2PC) protocols across microservices, using compensating transactions to guarantee eventual consistency across network boundaries.",
+    "prerequisites": [
+      "lab-dist-01-fencing-token-lock"
+    ],
+    "objectives": [
+      "Author ConfigMap payment-order-saga-definition in /dist/saga-orchestration.yaml.",
+      "Configure data.sagaId to saga-ecommerce-v1.",
+      "Configure data.status to Active.",
+      "Apply ConfigMap to namespace production."
+    ],
+    "initialClusterState": {
+      "resources": []
+    },
+    "starterManifest": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: payment-order-saga-definition\n  namespace: production\ndata:\n  sagaId: \"saga-ecommerce-v1\"\n  status: \"Active\"\n  sagaDefinition: \"{\\\"steps\\\":[\\\"AuthorizePayment\\\",\\\"ReserveInventory\\\",\\\"ShipOrder\\\"],\\\"compensations\\\":[\\\"RefundPayment\\\",\\\"ReleaseInventory\\\"]}\"\n",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Author Saga orchestration manifest",
+        "instruction": "Author manifest /dist/saga-orchestration.yaml defining ConfigMap payment-order-saga-definition.",
+        "commandHint": "cat << 'EOF' > /dist/saga-orchestration.yaml\n...\nEOF"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Apply Saga orchestration manifest",
+        "instruction": "Apply manifest to namespace production.",
+        "commandHint": "kubectl apply -f /dist/saga-orchestration.yaml"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "cm-saga-definition-exists",
+        "description": "ConfigMap payment-order-saga-definition exists in namespace production",
+        "type": "resource_exists",
+        "kind": "ConfigMap",
+        "namespace": "production",
+        "name": "payment-order-saga-definition",
+        "remediation": "Apply ConfigMap payment-order-saga-definition in namespace production"
+      },
+      {
+        "id": "cm-saga-id",
+        "description": "ConfigMap sagaId is saga-ecommerce-v1",
+        "type": "resource_field_equals",
+        "kind": "ConfigMap",
+        "namespace": "production",
+        "name": "payment-order-saga-definition",
+        "fieldPath": "data.sagaId",
+        "expectedValue": "saga-ecommerce-v1",
+        "remediation": "Set data.sagaId: saga-ecommerce-v1 on ConfigMap payment-order-saga-definition"
+      },
+      {
+        "id": "cm-saga-status",
+        "description": "ConfigMap status is Active",
+        "type": "resource_field_equals",
+        "kind": "ConfigMap",
+        "namespace": "production",
+        "name": "payment-order-saga-definition",
+        "fieldPath": "data.status",
+        "expectedValue": "Active",
+        "remediation": "Set data.status: Active on ConfigMap payment-order-saga-definition"
+      }
+    ],
+    "solutionCommands": [
+      "mkdir -p /dist",
+      "kubectl create namespace production",
+      "cat << 'EOF' > /dist/saga-orchestration.yaml\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: payment-order-saga-definition\n  namespace: production\ndata:\n  sagaId: \"saga-ecommerce-v1\"\n  status: \"Active\"\n  sagaDefinition: \"{\\\"steps\\\":[\\\"AuthorizePayment\\\",\\\"ReserveInventory\\\",\\\"ShipOrder\\\"],\\\"compensations\\\":[\\\"RefundPayment\\\",\\\"ReleaseInventory\\\"]}\"\nEOF",
+      "kubectl apply -f /dist/saga-orchestration.yaml"
+    ],
+    "troubleshootingGuide": [
+      {
+        "problem": "Saga definition ConfigMap missing or fields incorrect.",
+        "cause": "ConfigMap must contain data.sagaId as saga-ecommerce-v1 and data.status as Active in namespace production.",
+        "solution": "Apply /dist/saga-orchestration.yaml to namespace production."
+      }
+    ],
+    "domainId": "distributed-systems",
+    "domainTitle": "Distributed Systems Theory, Raft Quorum, Fencing Tokens & Saga Transactions"
+  },
+  {
+    "id": "lab-micro-01-strangler-fig-routing",
+    "title": "Progressive Monolith Decomposition via Strangler Fig Ingress Routing",
+    "difficulty": "Advanced",
+    "durationMinutes": 20,
+    "xpReward": 150,
+    "scenario": "Execute a progressive Strangler Fig monolith migration: author an Ingress manifest in /micro/strangler-fig-ingress.yaml named monolith-strangler-ingress in namespace production routing path /api/v1/orders to service orders-service on port 8080, while directing default catch-all traffic (/) to service legacy-monolith on port 80. Apply to namespace production.",
+    "productionContext": "Strangler Fig routing allows platform engineers to migrate mission-critical APIs to autonomous microservices incrementally, avoiding high-risk big-bang rewrites.",
+    "prerequisites": [
+      "lab-dist-02-saga-orchestration"
+    ],
+    "objectives": [
+      "Create namespace production if not present.",
+      "Author Ingress manifest monolith-strangler-ingress.",
+      "Configure path /api/v1/orders targeting service orders-service on port 8080.",
+      "Configure path / targeting service legacy-monolith on port 80.",
+      "Apply Ingress to namespace production."
+    ],
+    "initialClusterState": {
+      "resources": []
+    },
+    "starterManifest": "apiVersion: networking.k8s.io/v1\nkind: Ingress\nmetadata:\n  name: monolith-strangler-ingress\n  namespace: production\nspec:\n  rules:\n    - http:\n        paths:\n          - path: /api/v1/orders\n            pathType: Prefix\n            backend:\n              service:\n                name: orders-service\n                port:\n                  number: 8080\n          - path: /\n            pathType: Prefix\n            backend:\n              service:\n                name: legacy-monolith\n                port:\n                  number: 80\n",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Create production namespace",
+        "instruction": "Create namespace production if not present.",
+        "commandHint": "kubectl create namespace production"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Author Strangler Fig Ingress manifest",
+        "instruction": "Author manifest /micro/strangler-fig-ingress.yaml routing /api/v1/orders to orders-service and / to legacy-monolith.",
+        "commandHint": "cat << 'EOF' > /micro/strangler-fig-ingress.yaml\n...\nEOF"
+      },
+      {
+        "stepNumber": 3,
+        "title": "Apply Ingress manifest",
+        "instruction": "Apply the Ingress manifest to namespace production.",
+        "commandHint": "kubectl apply -f /micro/strangler-fig-ingress.yaml"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "ingress-strangler-exists",
+        "description": "Ingress monolith-strangler-ingress exists in namespace production",
+        "type": "resource_exists",
+        "kind": "Ingress",
+        "namespace": "production",
+        "name": "monolith-strangler-ingress",
+        "remediation": "Apply Ingress monolith-strangler-ingress in namespace production"
+      },
+      {
+        "id": "ingress-orders-path",
+        "description": "Ingress routes path /api/v1/orders",
+        "type": "resource_field_equals",
+        "kind": "Ingress",
+        "namespace": "production",
+        "name": "monolith-strangler-ingress",
+        "fieldPath": "spec.rules[0].http.paths[0].path",
+        "expectedValue": "/api/v1/orders",
+        "remediation": "Configure path: /api/v1/orders in Ingress monolith-strangler-ingress"
+      },
+      {
+        "id": "ingress-orders-svc",
+        "description": "Ingress /api/v1/orders routes to service orders-service",
+        "type": "resource_field_equals",
+        "kind": "Ingress",
+        "namespace": "production",
+        "name": "monolith-strangler-ingress",
+        "fieldPath": "spec.rules[0].http.paths[0].backend.service.name",
+        "expectedValue": "orders-service",
+        "remediation": "Configure backend service name: orders-service for /api/v1/orders"
+      }
+    ],
+    "solutionCommands": [
+      "mkdir -p /micro",
+      "kubectl create namespace production",
+      "cat << 'EOF' > /micro/strangler-fig-ingress.yaml\napiVersion: networking.k8s.io/v1\nkind: Ingress\nmetadata:\n  name: monolith-strangler-ingress\n  namespace: production\nspec:\n  rules:\n    - http:\n        paths:\n          - path: /api/v1/orders\n            pathType: Prefix\n            backend:\n              service:\n                name: orders-service\n                port:\n                  number: 8080\n          - path: /\n            pathType: Prefix\n            backend:\n              service:\n                name: legacy-monolith\n                port:\n                  number: 80\nEOF",
+      "kubectl apply -f /micro/strangler-fig-ingress.yaml"
+    ],
+    "troubleshootingGuide": [
+      {
+        "problem": "Ingress validation fails or routes not matched.",
+        "cause": "The first path must match /api/v1/orders targeting service orders-service on port 8080.",
+        "solution": "Apply /micro/strangler-fig-ingress.yaml to namespace production."
+      }
+    ],
+    "domainId": "microservices-architecture",
+    "domainTitle": "Microservices Architecture, Strangler Fig, Event Streaming & Resilient Patterns"
+  },
+  {
+    "id": "lab-micro-02-transactional-outbox",
+    "title": "Implementing Transactional Outbox Contracts & Bulkhead Isolation",
+    "difficulty": "Advanced",
+    "durationMinutes": 20,
+    "xpReward": 150,
+    "scenario": "Implement a resilient event-driven architecture using Transactional Outbox and Bulkhead isolation: author ConfigMap outbox-event-contract in namespace production defining eventType: OrderCreated, topic: orders.events.v1, and payloadSchema: JSON, and author Deployment orders-service in namespace production with replicas: 3, memory request 256Mi, and memory limit 512Mi. Apply both manifests to namespace production.",
+    "productionContext": "Decoupling outbound events via transactional outbox prevents message loss, while dedicated pod replicas and memory boundaries prevent cascade failures during traffic spikes.",
+    "prerequisites": [
+      "lab-micro-01-strangler-fig-routing"
+    ],
+    "objectives": [
+      "Create namespace production if not present.",
+      "Author ConfigMap outbox-event-contract.",
+      "Author Deployment orders-service with 3 replicas.",
+      "Apply all manifests to namespace production."
+    ],
+    "initialClusterState": {
+      "resources": []
+    },
+    "starterManifest": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: outbox-event-contract\n  namespace: production\ndata:\n  eventType: \"OrderCreated\"\n  topic: \"orders.events.v1\"\n  payloadSchema: \"JSON\"\n---\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: orders-service\n  namespace: production\nspec:\n  replicas: 3\n  selector:\n    matchLabels:\n      app: orders-service\n  template:\n    metadata:\n      labels:\n        app: orders-service\n    spec:\n      containers:\n        - name: api\n          image: nginx:1.27-alpine\n          resources:\n            requests:\n              memory: \"256Mi\"\n            limits:\n              memory: \"512Mi\"\n",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Create production namespace",
+        "instruction": "Create namespace production if not present.",
+        "commandHint": "kubectl create namespace production"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Author outbox and bulkhead manifest",
+        "instruction": "Author manifest /micro/outbox-and-orders.yaml defining ConfigMap and Deployment.",
+        "commandHint": "cat << 'EOF' > /micro/outbox-and-orders.yaml\n...\nEOF"
+      },
+      {
+        "stepNumber": 3,
+        "title": "Apply manifest",
+        "instruction": "Apply manifest to namespace production.",
+        "commandHint": "kubectl apply -f /micro/outbox-and-orders.yaml"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "cm-outbox-contract-exists",
+        "description": "ConfigMap outbox-event-contract exists in namespace production",
+        "type": "resource_exists",
+        "kind": "ConfigMap",
+        "namespace": "production",
+        "name": "outbox-event-contract",
+        "remediation": "Apply ConfigMap outbox-event-contract in namespace production"
+      },
+      {
+        "id": "cm-outbox-event-type",
+        "description": "ConfigMap eventType is OrderCreated",
+        "type": "resource_field_equals",
+        "kind": "ConfigMap",
+        "namespace": "production",
+        "name": "outbox-event-contract",
+        "fieldPath": "data.eventType",
+        "expectedValue": "OrderCreated",
+        "remediation": "Set data.eventType: OrderCreated on ConfigMap outbox-event-contract"
+      },
+      {
+        "id": "deploy-orders-service-exists",
+        "description": "Deployment orders-service exists in namespace production",
+        "type": "resource_exists",
+        "kind": "Deployment",
+        "namespace": "production",
+        "name": "orders-service",
+        "remediation": "Apply Deployment orders-service in namespace production"
+      },
+      {
+        "id": "deploy-orders-replicas",
+        "description": "Deployment orders-service has 3 replicas",
+        "type": "resource_field_equals",
+        "kind": "Deployment",
+        "namespace": "production",
+        "name": "orders-service",
+        "fieldPath": "spec.replicas",
+        "expectedValue": 3,
+        "remediation": "Set spec.replicas: 3 on Deployment orders-service"
+      }
+    ],
+    "solutionCommands": [
+      "mkdir -p /micro",
+      "kubectl create namespace production",
+      "cat << 'EOF' > /micro/outbox-and-orders.yaml\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: outbox-event-contract\n  namespace: production\ndata:\n  eventType: \"OrderCreated\"\n  topic: \"orders.events.v1\"\n  payloadSchema: \"JSON\"\n---\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: orders-service\n  namespace: production\nspec:\n  replicas: 3\n  selector:\n    matchLabels:\n      app: orders-service\n  template:\n    metadata:\n      labels:\n        app: orders-service\n    spec:\n      containers:\n        - name: api\n          image: nginx:1.27-alpine\n          resources:\n            requests:\n              memory: \"256Mi\"\n            limits:\n              memory: \"512Mi\"\nEOF",
+      "kubectl apply -f /micro/outbox-and-orders.yaml"
+    ],
+    "troubleshootingGuide": [
+      {
+        "problem": "Deployment or ConfigMap missing in namespace production.",
+        "cause": "Both resources must be applied to namespace production.",
+        "solution": "Apply /micro/outbox-and-orders.yaml to namespace production."
+      }
+    ],
+    "domainId": "microservices-architecture",
+    "domainTitle": "Microservices Architecture, Strangler Fig, Event Streaming & Resilient Patterns"
+  },
+  {
+    "id": "lab-sys-01-capacity-estimation-plan",
+    "title": "Quantitative Capacity & Bandwidth Estimation Specification",
+    "difficulty": "Advanced",
+    "durationMinutes": 20,
+    "xpReward": 150,
+    "scenario": "Formalize an enterprise capacity plan for a high-volume financial transactions tier: author a capacity estimation specification in /sysdesign/capacity-plan-spec.yaml defining ConfigMap capacity-plan-spec in namespace production with targetPeakQPS: '50000', dailyActiveUsers: '10000000', readWriteRatio: '4:1', and fiveYearStorageTB: '120'. Apply to namespace production.",
+    "productionContext": "Accurate quantitative capacity planning prevents disastrous infrastructure out-of-memory crashes, egress bandwidth saturation, and unexpected cloud compute overages during high-traffic events.",
+    "prerequisites": [
+      "lab-micro-02-transactional-outbox"
+    ],
+    "objectives": [
+      "Create namespace production if not present.",
+      "Author ConfigMap capacity-plan-spec.",
+      "Configure targetPeakQPS to '50000'.",
+      "Configure fiveYearStorageTB to '120'.",
+      "Apply ConfigMap to namespace production."
+    ],
+    "initialClusterState": {
+      "resources": []
+    },
+    "starterManifest": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: capacity-plan-spec\n  namespace: production\ndata:\n  targetPeakQPS: \"50000\"\n  dailyActiveUsers: \"10000000\"\n  readWriteRatio: \"4:1\"\n  fiveYearStorageTB: \"120\"\n",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Create production namespace",
+        "instruction": "Create namespace production if not present.",
+        "commandHint": "kubectl create namespace production"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Author capacity plan specification",
+        "instruction": "Author manifest /sysdesign/capacity-plan-spec.yaml defining ConfigMap capacity-plan-spec.",
+        "commandHint": "cat << 'EOF' > /sysdesign/capacity-plan-spec.yaml\n...\nEOF"
+      },
+      {
+        "stepNumber": 3,
+        "title": "Apply capacity plan manifest",
+        "instruction": "Apply manifest to namespace production.",
+        "commandHint": "kubectl apply -f /sysdesign/capacity-plan-spec.yaml"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "cm-capacity-plan-exists",
+        "description": "ConfigMap capacity-plan-spec exists in namespace production",
+        "type": "resource_exists",
+        "kind": "ConfigMap",
+        "namespace": "production",
+        "name": "capacity-plan-spec",
+        "remediation": "Apply ConfigMap capacity-plan-spec in namespace production"
+      },
+      {
+        "id": "cm-target-peak-qps",
+        "description": "ConfigMap targetPeakQPS is '50000'",
+        "type": "resource_field_equals",
+        "kind": "ConfigMap",
+        "namespace": "production",
+        "name": "capacity-plan-spec",
+        "fieldPath": "data.targetPeakQPS",
+        "expectedValue": "50000",
+        "remediation": "Set data.targetPeakQPS: '50000' on ConfigMap capacity-plan-spec"
+      },
+      {
+        "id": "cm-storage-tb",
+        "description": "ConfigMap fiveYearStorageTB is '120'",
+        "type": "resource_field_equals",
+        "kind": "ConfigMap",
+        "namespace": "production",
+        "name": "capacity-plan-spec",
+        "fieldPath": "data.fiveYearStorageTB",
+        "expectedValue": "120",
+        "remediation": "Set data.fiveYearStorageTB: '120' on ConfigMap capacity-plan-spec"
+      }
+    ],
+    "solutionCommands": [
+      "mkdir -p /sysdesign",
+      "kubectl create namespace production",
+      "cat << 'EOF' > /sysdesign/capacity-plan-spec.yaml\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: capacity-plan-spec\n  namespace: production\ndata:\n  targetPeakQPS: \"50000\"\n  dailyActiveUsers: \"10000000\"\n  readWriteRatio: \"4:1\"\n  fiveYearStorageTB: \"120\"\nEOF",
+      "kubectl apply -f /sysdesign/capacity-plan-spec.yaml"
+    ],
+    "troubleshootingGuide": [
+      {
+        "problem": "ConfigMap missing or data fields incorrect.",
+        "cause": "ConfigMap must contain targetPeakQPS as '50000' and fiveYearStorageTB as '120'.",
+        "solution": "Apply /sysdesign/capacity-plan-spec.yaml to namespace production."
+      }
+    ],
+    "domainId": "system-design",
+    "domainTitle": "System Design, Capacity Estimation, Sharding & Distributed Rate Limiting"
+  },
+  {
+    "id": "lab-sys-02-token-bucket-ratelimit",
+    "title": "Distributed Token Bucket Rate Limiter & Gateway Deployment",
+    "difficulty": "Advanced",
+    "durationMinutes": 20,
+    "xpReward": 150,
+    "scenario": "Implement a distributed Token Bucket rate limiter contract and gateway tier: author ConfigMap ratelimit-token-bucket in namespace production defining algorithm: TokenBucket, capacity: '10000', refillRatePerSec: '2000', and backendCache: redis-cluster, and deploy Deployment payment-gateway in namespace production with 3 replicas. Apply all manifests to namespace production.",
+    "productionContext": "Distributed rate limiting prevents malicious traffic spikes from overwhelming payment databases, guaranteeing fair compute allocation across client tenants.",
+    "prerequisites": [
+      "lab-sys-01-capacity-estimation-plan"
+    ],
+    "objectives": [
+      "Create namespace production if not present.",
+      "Author ConfigMap ratelimit-token-bucket.",
+      "Author Deployment payment-gateway with 3 replicas.",
+      "Apply all manifests to namespace production."
+    ],
+    "initialClusterState": {
+      "resources": []
+    },
+    "starterManifest": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: ratelimit-token-bucket\n  namespace: production\ndata:\n  algorithm: \"TokenBucket\"\n  capacity: \"10000\"\n  refillRatePerSec: \"2000\"\n  backendCache: \"redis-cluster\"\n---\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: payment-gateway\n  namespace: production\nspec:\n  replicas: 3\n  selector:\n    matchLabels:\n      app: payment-gateway\n  template:\n    metadata:\n      labels:\n        app: payment-gateway\n    spec:\n      containers:\n        - name: gateway\n          image: nginx:1.27-alpine\n",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Create production namespace",
+        "instruction": "Create namespace production if not present.",
+        "commandHint": "kubectl create namespace production"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Author rate limiter and gateway manifest",
+        "instruction": "Author manifest /sysdesign/cache-and-ratelimit.yaml defining ConfigMap and Deployment.",
+        "commandHint": "cat << 'EOF' > /sysdesign/cache-and-ratelimit.yaml\n...\nEOF"
+      },
+      {
+        "stepNumber": 3,
+        "title": "Apply manifest",
+        "instruction": "Apply manifest to namespace production.",
+        "commandHint": "kubectl apply -f /sysdesign/cache-and-ratelimit.yaml"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "cm-ratelimit-exists",
+        "description": "ConfigMap ratelimit-token-bucket exists in namespace production",
+        "type": "resource_exists",
+        "kind": "ConfigMap",
+        "namespace": "production",
+        "name": "ratelimit-token-bucket",
+        "remediation": "Apply ConfigMap ratelimit-token-bucket in namespace production"
+      },
+      {
+        "id": "cm-ratelimit-algo",
+        "description": "ConfigMap algorithm is TokenBucket",
+        "type": "resource_field_equals",
+        "kind": "ConfigMap",
+        "namespace": "production",
+        "name": "ratelimit-token-bucket",
+        "fieldPath": "data.algorithm",
+        "expectedValue": "TokenBucket",
+        "remediation": "Set data.algorithm: TokenBucket on ConfigMap ratelimit-token-bucket"
+      },
+      {
+        "id": "cm-ratelimit-capacity",
+        "description": "ConfigMap capacity is '10000'",
+        "type": "resource_field_equals",
+        "kind": "ConfigMap",
+        "namespace": "production",
+        "name": "ratelimit-token-bucket",
+        "fieldPath": "data.capacity",
+        "expectedValue": "10000",
+        "remediation": "Set data.capacity: '10000' on ConfigMap ratelimit-token-bucket"
+      },
+      {
+        "id": "deploy-gateway-exists",
+        "description": "Deployment payment-gateway exists in namespace production",
+        "type": "resource_exists",
+        "kind": "Deployment",
+        "namespace": "production",
+        "name": "payment-gateway",
+        "remediation": "Apply Deployment payment-gateway in namespace production"
+      },
+      {
+        "id": "deploy-gateway-replicas",
+        "description": "Deployment payment-gateway has 3 replicas",
+        "type": "resource_field_equals",
+        "kind": "Deployment",
+        "namespace": "production",
+        "name": "payment-gateway",
+        "fieldPath": "spec.replicas",
+        "expectedValue": 3,
+        "remediation": "Set spec.replicas: 3 on Deployment payment-gateway"
+      }
+    ],
+    "solutionCommands": [
+      "mkdir -p /sysdesign",
+      "kubectl create namespace production",
+      "cat << 'EOF' > /sysdesign/cache-and-ratelimit.yaml\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: ratelimit-token-bucket\n  namespace: production\ndata:\n  algorithm: \"TokenBucket\"\n  capacity: \"10000\"\n  refillRatePerSec: \"2000\"\n  backendCache: \"redis-cluster\"\n---\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: payment-gateway\n  namespace: production\nspec:\n  replicas: 3\n  selector:\n    matchLabels:\n      app: payment-gateway\n  template:\n    metadata:\n      labels:\n        app: payment-gateway\n    spec:\n      containers:\n        - name: gateway\n          image: nginx:1.27-alpine\nEOF",
+      "kubectl apply -f /sysdesign/cache-and-ratelimit.yaml"
+    ],
+    "troubleshootingGuide": [
+      {
+        "problem": "Deployment or ConfigMap missing in namespace production.",
+        "cause": "Both resources must be applied to namespace production.",
+        "solution": "Apply /sysdesign/cache-and-ratelimit.yaml to namespace production."
+      }
+    ],
+    "domainId": "system-design",
+    "domainTitle": "System Design, Capacity Estimation, Sharding & Distributed Rate Limiting"
+  },
+  {
+    "id": "lab-plat-01-backstage-catalog",
+    "title": "Backstage Software Catalog Component & Service Ownership Metadata",
+    "difficulty": "Advanced",
+    "durationMinutes": 20,
+    "xpReward": 150,
+    "scenario": "Standardize service ownership and architecture metadata in the developer portal: author a Backstage component manifest in /idp/backstage-catalog.yaml defining ConfigMap backstage-catalog-manifest in namespace production with componentName: payment-gateway, componentType: service, lifecycle: production, and owner: team-fintech. Apply to namespace production.",
+    "productionContext": "Centralized software catalog manifests eliminate orphaned microservices, accelerate incident response by displaying on-call ownership, and automate dependency graph tracking.",
+    "prerequisites": [
+      "lab-sys-02-token-bucket-ratelimit"
+    ],
+    "objectives": [
+      "Create namespace production if not present.",
+      "Author ConfigMap backstage-catalog-manifest.",
+      "Configure componentName to payment-gateway.",
+      "Configure owner to team-fintech.",
+      "Apply ConfigMap to namespace production."
+    ],
+    "initialClusterState": {
+      "resources": []
+    },
+    "starterManifest": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: backstage-catalog-manifest\n  namespace: production\ndata:\n  componentName: \"payment-gateway\"\n  componentType: \"service\"\n  lifecycle: \"production\"\n  owner: \"team-fintech\"\n  catalogInfoYaml: \"apiVersion: backstage.io/v1alpha1\\nkind: Component\\nmetadata:\\n  name: payment-gateway\\nspec:\\n  type: service\\n  lifecycle: production\\n  owner: team-fintech\\n\"\n",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Create production namespace",
+        "instruction": "Create namespace production if not present.",
+        "commandHint": "kubectl create namespace production"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Author Backstage catalog manifest",
+        "instruction": "Author manifest /idp/backstage-catalog.yaml defining ConfigMap backstage-catalog-manifest.",
+        "commandHint": "cat << 'EOF' > /idp/backstage-catalog.yaml\n...\nEOF"
+      },
+      {
+        "stepNumber": 3,
+        "title": "Apply catalog manifest",
+        "instruction": "Apply manifest to namespace production.",
+        "commandHint": "kubectl apply -f /idp/backstage-catalog.yaml"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "cm-backstage-exists",
+        "description": "ConfigMap backstage-catalog-manifest exists in namespace production",
+        "type": "resource_exists",
+        "kind": "ConfigMap",
+        "namespace": "production",
+        "name": "backstage-catalog-manifest",
+        "remediation": "Apply ConfigMap backstage-catalog-manifest in namespace production"
+      },
+      {
+        "id": "cm-backstage-name",
+        "description": "ConfigMap componentName is payment-gateway",
+        "type": "resource_field_equals",
+        "kind": "ConfigMap",
+        "namespace": "production",
+        "name": "backstage-catalog-manifest",
+        "fieldPath": "data.componentName",
+        "expectedValue": "payment-gateway",
+        "remediation": "Set data.componentName: payment-gateway on ConfigMap backstage-catalog-manifest"
+      },
+      {
+        "id": "cm-backstage-owner",
+        "description": "ConfigMap owner is team-fintech",
+        "type": "resource_field_equals",
+        "kind": "ConfigMap",
+        "namespace": "production",
+        "name": "backstage-catalog-manifest",
+        "fieldPath": "data.owner",
+        "expectedValue": "team-fintech",
+        "remediation": "Set data.owner: team-fintech on ConfigMap backstage-catalog-manifest"
+      }
+    ],
+    "solutionCommands": [
+      "mkdir -p /idp",
+      "kubectl create namespace production",
+      "cat << 'EOF' > /idp/backstage-catalog.yaml\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: backstage-catalog-manifest\n  namespace: production\ndata:\n  componentName: \"payment-gateway\"\n  componentType: \"service\"\n  lifecycle: \"production\"\n  owner: \"team-fintech\"\n  catalogInfoYaml: \"apiVersion: backstage.io/v1alpha1\\nkind: Component\\nmetadata:\\n  name: payment-gateway\\nspec:\\n  type: service\\n  lifecycle: production\\n  owner: team-fintech\\n\"\nEOF",
+      "kubectl apply -f /idp/backstage-catalog.yaml"
+    ],
+    "troubleshootingGuide": [
+      {
+        "problem": "ConfigMap missing or metadata fields incorrect.",
+        "cause": "ConfigMap must define data.componentName as payment-gateway and data.owner as team-fintech.",
+        "solution": "Apply /idp/backstage-catalog.yaml to namespace production."
+      }
+    ],
+    "domainId": "platform-engineering",
+    "domainTitle": "Platform Engineering, Internal Developer Platforms (IDP) & Developer Portals"
+  },
+  {
+    "id": "lab-plat-02-self-service-sandbox",
+    "title": "Self-Service Developer Tenant Sandbox with ResourceQuotas & LimitRanges",
+    "difficulty": "Advanced",
+    "durationMinutes": 20,
+    "xpReward": 150,
+    "scenario": "Provision an isolated, self-service developer tenant sandbox for team-alpha: author a manifest in /idp/tenant-sandbox.yaml provisioning namespace sandbox-team-alpha, ResourceQuota sandbox-compute-quota capping requests.cpu to '4000m', requests.memory to '8Gi', and limits.memory to '16Gi', and LimitRange sandbox-limit-range setting default container memory limit to '1Gi'. Apply all manifests to the cluster.",
+    "productionContext": "Automated tenant sandboxes with quota enforcement give product teams total deployment freedom without risking shared cluster stability or exceeding cloud cloud computing budgets.",
+    "prerequisites": [
+      "lab-plat-01-backstage-catalog"
+    ],
+    "objectives": [
+      "Author manifest /idp/tenant-sandbox.yaml.",
+      "Create namespace sandbox-team-alpha.",
+      "Configure ResourceQuota sandbox-compute-quota with CPU and memory caps.",
+      "Configure LimitRange sandbox-limit-range with default memory limit of 1Gi.",
+      "Apply all manifests to the cluster."
+    ],
+    "initialClusterState": {
+      "resources": []
+    },
+    "starterManifest": "apiVersion: v1\nkind: Namespace\nmetadata:\n  name: sandbox-team-alpha\n  labels:\n    platform.kubelabs.io/tier: sandbox\n    platform.kubelabs.io/tenant: team-alpha\n---\napiVersion: v1\nkind: ResourceQuota\nmetadata:\n  name: sandbox-compute-quota\n  namespace: sandbox-team-alpha\nspec:\n  hard:\n    requests.cpu: \"4000m\"\n    requests.memory: \"8Gi\"\n    limits.memory: \"16Gi\"\n---\napiVersion: v1\nkind: LimitRange\nmetadata:\n  name: sandbox-limit-range\n  namespace: sandbox-team-alpha\nspec:\n  limits:\n    - type: Container\n      default:\n        memory: \"1Gi\"\n",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Author tenant sandbox manifest",
+        "instruction": "Author manifest /idp/tenant-sandbox.yaml defining Namespace, ResourceQuota, and LimitRange.",
+        "commandHint": "cat << 'EOF' > /idp/tenant-sandbox.yaml\n...\nEOF"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Apply tenant sandbox manifest",
+        "instruction": "Apply manifest to the cluster.",
+        "commandHint": "kubectl apply -f /idp/tenant-sandbox.yaml"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "ns-sandbox-exists",
+        "description": "Namespace sandbox-team-alpha exists",
+        "type": "resource_exists",
+        "kind": "Namespace",
+        "name": "sandbox-team-alpha",
+        "remediation": "Create Namespace sandbox-team-alpha"
+      },
+      {
+        "id": "quota-sandbox-exists",
+        "description": "ResourceQuota sandbox-compute-quota exists in namespace sandbox-team-alpha",
+        "type": "resource_exists",
+        "kind": "ResourceQuota",
+        "namespace": "sandbox-team-alpha",
+        "name": "sandbox-compute-quota",
+        "remediation": "Apply ResourceQuota sandbox-compute-quota in namespace sandbox-team-alpha"
+      },
+      {
+        "id": "quota-requests-cpu",
+        "description": "ResourceQuota requests.cpu is '4000m'",
+        "type": "resource_field_equals",
+        "kind": "ResourceQuota",
+        "namespace": "sandbox-team-alpha",
+        "name": "sandbox-compute-quota",
+        "fieldPath": "spec.hard.requests.cpu",
+        "expectedValue": "4000m",
+        "remediation": "Set spec.hard.requests.cpu: '4000m' on ResourceQuota sandbox-compute-quota"
+      },
+      {
+        "id": "quota-limits-mem",
+        "description": "ResourceQuota limits.memory is '16Gi'",
+        "type": "resource_field_equals",
+        "kind": "ResourceQuota",
+        "namespace": "sandbox-team-alpha",
+        "name": "sandbox-compute-quota",
+        "fieldPath": "spec.hard.limits.memory",
+        "expectedValue": "16Gi",
+        "remediation": "Set spec.hard.limits.memory: '16Gi' on ResourceQuota sandbox-compute-quota"
+      },
+      {
+        "id": "limitrange-sandbox-exists",
+        "description": "LimitRange sandbox-limit-range exists in namespace sandbox-team-alpha",
+        "type": "resource_exists",
+        "kind": "LimitRange",
+        "namespace": "sandbox-team-alpha",
+        "name": "sandbox-limit-range",
+        "remediation": "Apply LimitRange sandbox-limit-range in namespace sandbox-team-alpha"
+      }
+    ],
+    "solutionCommands": [
+      "mkdir -p /idp",
+      "cat << 'EOF' > /idp/tenant-sandbox.yaml\napiVersion: v1\nkind: Namespace\nmetadata:\n  name: sandbox-team-alpha\n  labels:\n    platform.kubelabs.io/tier: sandbox\n    platform.kubelabs.io/tenant: team-alpha\n---\napiVersion: v1\nkind: ResourceQuota\nmetadata:\n  name: sandbox-compute-quota\n  namespace: sandbox-team-alpha\nspec:\n  hard:\n    requests.cpu: \"4000m\"\n    requests.memory: \"8Gi\"\n    limits.memory: \"16Gi\"\n---\napiVersion: v1\nkind: LimitRange\nmetadata:\n  name: sandbox-limit-range\n  namespace: sandbox-team-alpha\nspec:\n  limits:\n    - type: Container\n      default:\n        memory: \"1Gi\"\nEOF",
+      "kubectl apply -f /idp/tenant-sandbox.yaml"
+    ],
+    "troubleshootingGuide": [
+      {
+        "problem": "ResourceQuota or LimitRange missing or quotas not matching.",
+        "cause": "Manifest must create namespace sandbox-team-alpha, ResourceQuota with requests.cpu: 4000m, and LimitRange.",
+        "solution": "Apply /idp/tenant-sandbox.yaml to the cluster."
+      }
+    ],
+    "domainId": "platform-engineering",
+    "domainTitle": "Platform Engineering, Internal Developer Platforms (IDP) & Developer Portals"
+  },
+  {
+    "id": "lab-seceng-01-spiffe-identity-federation",
+    "title": "Zero-Trust SPIFFE/SPIRE Workload Identity & AWS IRSA ServiceAccount Federation",
+    "difficulty": "Advanced",
+    "durationMinutes": 20,
+    "xpReward": 150,
+    "scenario": "Configure zero-trust cryptographic workload identity for the payment service. Author a SPIFFE/SPIRE workload identity ConfigMap in /security/spiffe-workload-identity.yaml named spiffe-workload-identity in namespace production with data keys: trustDomain: 'prod.kubelabs.io', spiffeId: 'spiffe://prod.kubelabs.io/ns/production/sa/payment-service-sa', and svidTtlMinutes: '60'. In addition, author an AWS IRSA ServiceAccount payment-service-sa in namespace production annotated with eks.amazonaws.com/role-arn: 'arn:aws:iam::123456789012:role/payment-workload-role'. Apply both manifests to namespace production.",
+    "productionContext": "Zero-trust architecture mandates that workloads establish mutual TLS and access cloud resources using ephemeral, cryptographically verifiable identities rather than persistent bearer tokens or long-lived static AWS secret keys.",
+    "prerequisites": [
+      "lab-plat-01-backstage-catalog"
+    ],
+    "objectives": [
+      "Create namespace production if not present.",
+      "Author manifest /security/spiffe-workload-identity.yaml defining ConfigMap spiffe-workload-identity and ServiceAccount payment-service-sa.",
+      "Configure ConfigMap data keys trustDomain, spiffeId, and svidTtlMinutes.",
+      "Annotate ServiceAccount with eks.amazonaws.com/role-arn.",
+      "Apply manifests to namespace production."
+    ],
+    "initialClusterState": {
+      "resources": []
+    },
+    "starterManifest": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: spiffe-workload-identity\n  namespace: production\ndata:\n  trustDomain: \"prod.kubelabs.io\"\n  spiffeId: \"spiffe://prod.kubelabs.io/ns/production/sa/payment-service-sa\"\n  svidTtlMinutes: \"60\"\n---\napiVersion: v1\nkind: ServiceAccount\nmetadata:\n  name: payment-service-sa\n  namespace: production\n  annotations:\n    eks.amazonaws.com/role-arn: \"arn:aws:iam::123456789012:role/payment-workload-role\"\n",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Create production namespace",
+        "instruction": "Create namespace production if not present.",
+        "commandHint": "kubectl create namespace production"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Author SPIFFE and IRSA manifest",
+        "instruction": "Author manifest /security/spiffe-workload-identity.yaml defining ConfigMap spiffe-workload-identity and ServiceAccount payment-service-sa.",
+        "commandHint": "cat << 'EOF' > /security/spiffe-workload-identity.yaml\n...\nEOF"
+      },
+      {
+        "stepNumber": 3,
+        "title": "Apply manifest to production",
+        "instruction": "Apply the manifest to namespace production.",
+        "commandHint": "kubectl apply -f /security/spiffe-workload-identity.yaml"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "cm-spiffe-exists",
+        "description": "ConfigMap spiffe-workload-identity exists in namespace production",
+        "type": "resource_exists",
+        "kind": "ConfigMap",
+        "namespace": "production",
+        "name": "spiffe-workload-identity",
+        "remediation": "Apply ConfigMap spiffe-workload-identity in namespace production"
+      },
+      {
+        "id": "cm-spiffe-trust-domain",
+        "description": "ConfigMap data.trustDomain is prod.kubelabs.io",
+        "type": "resource_field_equals",
+        "kind": "ConfigMap",
+        "namespace": "production",
+        "name": "spiffe-workload-identity",
+        "fieldPath": "data.trustDomain",
+        "expectedValue": "prod.kubelabs.io",
+        "remediation": "Set trustDomain: \"prod.kubelabs.io\" in ConfigMap spiffe-workload-identity"
+      },
+      {
+        "id": "cm-spiffe-id",
+        "description": "ConfigMap data.spiffeId is spiffe://prod.kubelabs.io/ns/production/sa/payment-service-sa",
+        "type": "resource_field_equals",
+        "kind": "ConfigMap",
+        "namespace": "production",
+        "name": "spiffe-workload-identity",
+        "fieldPath": "data.spiffeId",
+        "expectedValue": "spiffe://prod.kubelabs.io/ns/production/sa/payment-service-sa",
+        "remediation": "Set spiffeId: \"spiffe://prod.kubelabs.io/ns/production/sa/payment-service-sa\" in ConfigMap spiffe-workload-identity"
+      },
+      {
+        "id": "sa-irsa-exists",
+        "description": "ServiceAccount payment-service-sa exists in namespace production",
+        "type": "resource_exists",
+        "kind": "ServiceAccount",
+        "namespace": "production",
+        "name": "payment-service-sa",
+        "remediation": "Apply ServiceAccount payment-service-sa in namespace production"
+      },
+      {
+        "id": "sa-irsa-role-arn",
+        "description": "ServiceAccount payment-service-sa is annotated with eks.amazonaws.com/role-arn",
+        "type": "resource_field_equals",
+        "kind": "ServiceAccount",
+        "namespace": "production",
+        "name": "payment-service-sa",
+        "fieldPath": "metadata.annotations['eks.amazonaws.com/role-arn']",
+        "expectedValue": "arn:aws:iam::123456789012:role/payment-workload-role",
+        "remediation": "Annotate ServiceAccount payment-service-sa with eks.amazonaws.com/role-arn: \"arn:aws:iam::123456789012:role/payment-workload-role\""
+      }
+    ],
+    "solutionCommands": [
+      "kubectl create namespace production",
+      "cat << 'EOF' > /security/spiffe-workload-identity.yaml\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: spiffe-workload-identity\n  namespace: production\ndata:\n  trustDomain: \"prod.kubelabs.io\"\n  spiffeId: \"spiffe://prod.kubelabs.io/ns/production/sa/payment-service-sa\"\n  svidTtlMinutes: \"60\"\n---\napiVersion: v1\nkind: ServiceAccount\nmetadata:\n  name: payment-service-sa\n  namespace: production\n  annotations:\n    eks.amazonaws.com/role-arn: \"arn:aws:iam::123456789012:role/payment-workload-role\"\nEOF",
+      "kubectl apply -f /security/spiffe-workload-identity.yaml"
+    ],
+    "troubleshootingGuide": [
+      {
+        "problem": "ConfigMap or ServiceAccount missing or fields mismatch.",
+        "cause": "ConfigMap must declare trustDomain and spiffeId, and ServiceAccount must have role-arn annotation.",
+        "solution": "Apply /security/spiffe-workload-identity.yaml to namespace production."
+      }
+    ],
+    "domainId": "security-engineering",
+    "domainTitle": "Security Engineering, Zero-Trust Architecture & SPIFFE/SPIRE Workload Identity"
+  },
+  {
+    "id": "lab-seceng-02-tetragon-ebpf-policy",
+    "title": "Kernel-Level eBPF Runtime Security Policy with Cilium Tetragon",
+    "difficulty": "Advanced",
+    "durationMinutes": 25,
+    "xpReward": 175,
+    "scenario": "Enforce real-time kernel-level runtime protection against reverse shells. Author manifest /security/tetragon-policy.yaml containing a Cilium TracingPolicy named block-unauthorized-binaries in namespace production. Configure spec.kprobes with call: sys_execve, syscall: true, and an action: Sigkill on matching binaries /bin/netcat and /usr/bin/nc. Next, deploy a Deployment named secure-vault-client in namespace production running 2 replicas with image vault-client:v1.0. Apply both manifests to namespace production.",
+    "productionContext": "eBPF Tetragon operates inside Linux kernel tracepoints and kprobes, providing sub-millisecond in-kernel process termination (Sigkill) on unauthorized execution attempts without depending on slow userspace log scrapers.",
+    "prerequisites": [
+      "lab-seceng-01-spiffe-identity-federation"
+    ],
+    "objectives": [
+      "Create namespace production if not present.",
+      "Author manifest /security/tetragon-policy.yaml defining TracingPolicy block-unauthorized-binaries and Deployment secure-vault-client.",
+      "Configure TracingPolicy to intercept sys_execve with Sigkill.",
+      "Deploy secure-vault-client with 2 replicas in namespace production.",
+      "Apply manifests to namespace production."
+    ],
+    "initialClusterState": {
+      "resources": []
+    },
+    "starterManifest": "apiVersion: cilium.io/v1alpha1\nkind: TracingPolicy\nmetadata:\n  name: block-unauthorized-binaries\n  namespace: production\nspec:\n  kprobes:\n    - call: \"sys_execve\"\n      syscall: true\n      args:\n        - index: 0\n          type: \"string\"\n      selectors:\n        - matchArgs:\n            - index: 0\n              operator: \"In\"\n              values:\n                - \"/bin/netcat\"\n                - \"/usr/bin/nc\"\n          matchActions:\n            - action: \"Sigkill\"\n---\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: secure-vault-client\n  namespace: production\nspec:\n  replicas: 2\n  selector:\n    matchLabels:\n      app: secure-vault-client\n  template:\n    metadata:\n      labels:\n        app: secure-vault-client\n    spec:\n      containers:\n        - name: client\n          image: vault-client:v1.0\n",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Create production namespace",
+        "instruction": "Create namespace production if not present.",
+        "commandHint": "kubectl create namespace production"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Author Tetragon TracingPolicy and Deployment",
+        "instruction": "Author manifest /security/tetragon-policy.yaml defining TracingPolicy block-unauthorized-binaries and Deployment secure-vault-client.",
+        "commandHint": "cat << 'EOF' > /security/tetragon-policy.yaml\n...\nEOF"
+      },
+      {
+        "stepNumber": 3,
+        "title": "Apply manifest to production",
+        "instruction": "Apply manifest to namespace production.",
+        "commandHint": "kubectl apply -f /security/tetragon-policy.yaml"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "tp-tetragon-exists",
+        "description": "TracingPolicy block-unauthorized-binaries exists in namespace production",
+        "type": "resource_exists",
+        "kind": "TracingPolicy",
+        "namespace": "production",
+        "name": "block-unauthorized-binaries",
+        "remediation": "Apply TracingPolicy block-unauthorized-binaries in namespace production"
+      },
+      {
+        "id": "tp-kprobe-call",
+        "description": "TracingPolicy intercepts syscall sys_execve",
+        "type": "resource_field_equals",
+        "kind": "TracingPolicy",
+        "namespace": "production",
+        "name": "block-unauthorized-binaries",
+        "fieldPath": "spec.kprobes[0].call",
+        "expectedValue": "sys_execve",
+        "remediation": "Set spec.kprobes[0].call to \"sys_execve\" in TracingPolicy block-unauthorized-binaries"
+      },
+      {
+        "id": "deploy-vault-exists",
+        "description": "Deployment secure-vault-client exists in namespace production",
+        "type": "resource_exists",
+        "kind": "Deployment",
+        "namespace": "production",
+        "name": "secure-vault-client",
+        "remediation": "Deploy secure-vault-client in namespace production"
+      },
+      {
+        "id": "deploy-vault-replicas",
+        "description": "Deployment secure-vault-client has 2 replicas",
+        "type": "resource_field_equals",
+        "kind": "Deployment",
+        "namespace": "production",
+        "name": "secure-vault-client",
+        "fieldPath": "spec.replicas",
+        "expectedValue": 2,
+        "remediation": "Scale Deployment secure-vault-client to 2 replicas"
+      }
+    ],
+    "solutionCommands": [
+      "kubectl create namespace production",
+      "cat << 'EOF' > /security/tetragon-policy.yaml\napiVersion: cilium.io/v1alpha1\nkind: TracingPolicy\nmetadata:\n  name: block-unauthorized-binaries\n  namespace: production\nspec:\n  kprobes:\n    - call: \"sys_execve\"\n      syscall: true\n      args:\n        - index: 0\n          type: \"string\"\n      selectors:\n        - matchArgs:\n            - index: 0\n              operator: \"In\"\n              values:\n                - \"/bin/netcat\"\n                - \"/usr/bin/nc\"\n          matchActions:\n            - action: \"Sigkill\"\n---\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: secure-vault-client\n  namespace: production\nspec:\n  replicas: 2\n  selector:\n    matchLabels:\n      app: secure-vault-client\n  template:\n    metadata:\n      labels:\n        app: secure-vault-client\n    spec:\n      containers:\n        - name: client\n          image: vault-client:v1.0\nEOF",
+      "kubectl apply -f /security/tetragon-policy.yaml"
+    ],
+    "troubleshootingGuide": [
+      {
+        "problem": "TracingPolicy or Deployment missing or configuration incorrect.",
+        "cause": "TracingPolicy must target sys_execve with Sigkill, and Deployment must run 2 replicas.",
+        "solution": "Apply /security/tetragon-policy.yaml to namespace production."
+      }
+    ],
+    "domainId": "security-engineering",
+    "domainTitle": "Security Engineering, Zero-Trust Architecture & SPIFFE/SPIRE Workload Identity"
+  },
+  {
+    "id": "lab-cap-01-cqrs-event-sourcing",
+    "title": "CQRS Event Store Specification & Materialized Read Projection",
+    "difficulty": "Advanced",
+    "durationMinutes": 20,
+    "xpReward": 150,
+    "scenario": "Separate high-frequency write operations from query workloads. Author manifest /arch/cqrs-event-stream.yaml in namespace production defining ConfigMap cqrs-event-stream-spec with data keys: streamName: 'order-events-stream', partitionKey: 'orderId', retentionDays: '30', and projectionStore: 'order-summary-read-view'. In addition, author Deployment order-command-handler running 2 replicas in namespace production with image order-command-service:v1.0. Apply both manifests to namespace production.",
+    "productionContext": "High-throughput transactional systems prevent relational table lock escalations by streaming immutable state transitions to decoupled materialized read views.",
+    "prerequisites": [
+      "lab-sys-02-token-bucket-ratelimit"
+    ],
+    "objectives": [
+      "Create namespace production if not present.",
+      "Author manifest /arch/cqrs-event-stream.yaml defining ConfigMap cqrs-event-stream-spec.",
+      "Configure ConfigMap data keys: streamName, partitionKey, retentionDays, and projectionStore.",
+      "Author Deployment order-command-handler with 2 replicas in namespace production.",
+      "Apply manifest to namespace production."
+    ],
+    "initialClusterState": {
+      "resources": []
+    },
+    "starterManifest": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: cqrs-event-stream-spec\n  namespace: production\ndata:\n  streamName: \"order-events-stream\"\n  partitionKey: \"orderId\"\n  retentionDays: \"30\"\n  projectionStore: \"order-summary-read-view\"\n---\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: order-command-handler\n  namespace: production\nspec:\n  replicas: 2\n  selector:\n    matchLabels:\n      app: order-command-handler\n  template:\n    metadata:\n      labels:\n        app: order-command-handler\n    spec:\n      containers:\n        - name: handler\n          image: order-command-service:v1.0\n",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Create production namespace",
+        "instruction": "Create namespace production if not present.",
+        "commandHint": "kubectl create namespace production"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Author CQRS and Event Sourcing manifest",
+        "instruction": "Author manifest /arch/cqrs-event-stream.yaml defining ConfigMap cqrs-event-stream-spec and Deployment order-command-handler.",
+        "commandHint": "cat << 'EOF' > /arch/cqrs-event-stream.yaml\n...\nEOF"
+      },
+      {
+        "stepNumber": 3,
+        "title": "Apply manifest to production",
+        "instruction": "Apply manifest to namespace production.",
+        "commandHint": "kubectl apply -f /arch/cqrs-event-stream.yaml"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "cm-cqrs-exists",
+        "description": "ConfigMap cqrs-event-stream-spec exists in namespace production",
+        "type": "resource_exists",
+        "kind": "ConfigMap",
+        "namespace": "production",
+        "name": "cqrs-event-stream-spec",
+        "remediation": "Apply ConfigMap cqrs-event-stream-spec in namespace production"
+      },
+      {
+        "id": "cm-cqrs-stream",
+        "description": "ConfigMap streamName is order-events-stream",
+        "type": "resource_field_equals",
+        "kind": "ConfigMap",
+        "namespace": "production",
+        "name": "cqrs-event-stream-spec",
+        "fieldPath": "data.streamName",
+        "expectedValue": "order-events-stream",
+        "remediation": "Set streamName: \"order-events-stream\" in ConfigMap cqrs-event-stream-spec"
+      },
+      {
+        "id": "cm-cqrs-projection",
+        "description": "ConfigMap projectionStore is order-summary-read-view",
+        "type": "resource_field_equals",
+        "kind": "ConfigMap",
+        "namespace": "production",
+        "name": "cqrs-event-stream-spec",
+        "fieldPath": "data.projectionStore",
+        "expectedValue": "order-summary-read-view",
+        "remediation": "Set projectionStore: \"order-summary-read-view\" in ConfigMap cqrs-event-stream-spec"
+      },
+      {
+        "id": "deploy-cqrs-exists",
+        "description": "Deployment order-command-handler exists in namespace production",
+        "type": "resource_exists",
+        "kind": "Deployment",
+        "namespace": "production",
+        "name": "order-command-handler",
+        "remediation": "Deploy order-command-handler in namespace production"
+      },
+      {
+        "id": "deploy-cqrs-replicas",
+        "description": "Deployment order-command-handler has 2 replicas",
+        "type": "resource_field_equals",
+        "kind": "Deployment",
+        "namespace": "production",
+        "name": "order-command-handler",
+        "fieldPath": "spec.replicas",
+        "expectedValue": 2,
+        "remediation": "Set spec.replicas to 2 in Deployment order-command-handler"
+      }
+    ],
+    "solutionCommands": [
+      "kubectl create namespace production",
+      "cat << 'EOF' > /arch/cqrs-event-stream.yaml\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: cqrs-event-stream-spec\n  namespace: production\ndata:\n  streamName: \"order-events-stream\"\n  partitionKey: \"orderId\"\n  retentionDays: \"30\"\n  projectionStore: \"order-summary-read-view\"\n---\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: order-command-handler\n  namespace: production\nspec:\n  replicas: 2\n  selector:\n    matchLabels:\n      app: order-command-handler\n  template:\n    metadata:\n      labels:\n        app: order-command-handler\n    spec:\n      containers:\n        - name: handler\n          image: order-command-service:v1.0\nEOF",
+      "kubectl apply -f /arch/cqrs-event-stream.yaml"
+    ],
+    "troubleshootingGuide": [
+      {
+        "problem": "ConfigMap or Deployment missing or fields do not match.",
+        "cause": "ConfigMap must specify streamName and projectionStore, and Deployment must declare 2 replicas.",
+        "solution": "Apply /arch/cqrs-event-stream.yaml to namespace production."
+      }
+    ],
+    "domainId": "cloud-architecture-patterns",
+    "domainTitle": "Cloud Architecture Patterns, CQRS, Event Sourcing & Resilient Systems"
+  },
+  {
+    "id": "lab-cap-02-queue-load-leveling-backoff",
+    "title": "Queue-Based Load Leveling & Exponential Backoff Jitter Policy",
+    "difficulty": "Advanced",
+    "durationMinutes": 20,
+    "xpReward": 150,
+    "scenario": "Protect database bottlenecks against unpredictable bursts. Author manifest /arch/queue-load-leveling.yaml in namespace production defining ConfigMap queue-load-leveling-policy with data keys: queueType: 'priority-fifo', maxConcurrency: '10', and retryPolicy: 'exponential-backoff-full-jitter'. Next, deploy Deployment load-leveling-worker with 3 replicas in namespace production running image queue-worker:v2.0 with resource requests cpu: '200m' and memory: '256Mi'. Apply both manifests to namespace production.",
+    "productionContext": "Queue load leveling prevents downstream service degradation during flash crowds, while exponential backoff with jitter prevents thundering herd retry storms.",
+    "prerequisites": [
+      "lab-cap-01-cqrs-event-sourcing"
+    ],
+    "objectives": [
+      "Create namespace production if not present.",
+      "Author manifest /arch/queue-load-leveling.yaml defining ConfigMap queue-load-leveling-policy and Deployment load-leveling-worker.",
+      "Configure ConfigMap with queueType priority-fifo and retryPolicy exponential-backoff-full-jitter.",
+      "Configure Deployment load-leveling-worker with 3 replicas and resource requests.",
+      "Apply manifest to namespace production."
+    ],
+    "initialClusterState": {
+      "resources": []
+    },
+    "starterManifest": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: queue-load-leveling-policy\n  namespace: production\ndata:\n  queueType: \"priority-fifo\"\n  maxConcurrency: \"10\"\n  retryPolicy: \"exponential-backoff-full-jitter\"\n---\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: load-leveling-worker\n  namespace: production\nspec:\n  replicas: 3\n  selector:\n    matchLabels:\n      app: load-leveling-worker\n  template:\n    metadata:\n      labels:\n        app: load-leveling-worker\n    spec:\n      containers:\n        - name: worker\n          image: queue-worker:v2.0\n          resources:\n            requests:\n              cpu: \"200m\"\n              memory: \"256Mi\"\n",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Create production namespace",
+        "instruction": "Create namespace production if not present.",
+        "commandHint": "kubectl create namespace production"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Author queue load leveling policy",
+        "instruction": "Author manifest /arch/queue-load-leveling.yaml defining ConfigMap queue-load-leveling-policy and Deployment load-leveling-worker.",
+        "commandHint": "cat << 'EOF' > /arch/queue-load-leveling.yaml\n...\nEOF"
+      },
+      {
+        "stepNumber": 3,
+        "title": "Apply manifest to production",
+        "instruction": "Apply manifest to namespace production.",
+        "commandHint": "kubectl apply -f /arch/queue-load-leveling.yaml"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "cm-queue-exists",
+        "description": "ConfigMap queue-load-leveling-policy exists in namespace production",
+        "type": "resource_exists",
+        "kind": "ConfigMap",
+        "namespace": "production",
+        "name": "queue-load-leveling-policy",
+        "remediation": "Apply ConfigMap queue-load-leveling-policy in namespace production"
+      },
+      {
+        "id": "cm-queue-policy",
+        "description": "ConfigMap retryPolicy is exponential-backoff-full-jitter",
+        "type": "resource_field_equals",
+        "kind": "ConfigMap",
+        "namespace": "production",
+        "name": "queue-load-leveling-policy",
+        "fieldPath": "data.retryPolicy",
+        "expectedValue": "exponential-backoff-full-jitter",
+        "remediation": "Set retryPolicy: \"exponential-backoff-full-jitter\" in ConfigMap queue-load-leveling-policy"
+      },
+      {
+        "id": "deploy-worker-exists",
+        "description": "Deployment load-leveling-worker exists in namespace production",
+        "type": "resource_exists",
+        "kind": "Deployment",
+        "namespace": "production",
+        "name": "load-leveling-worker",
+        "remediation": "Deploy load-leveling-worker in namespace production"
+      },
+      {
+        "id": "deploy-worker-replicas",
+        "description": "Deployment load-leveling-worker has 3 replicas",
+        "type": "resource_field_equals",
+        "kind": "Deployment",
+        "namespace": "production",
+        "name": "load-leveling-worker",
+        "fieldPath": "spec.replicas",
+        "expectedValue": 3,
+        "remediation": "Scale Deployment load-leveling-worker to 3 replicas"
+      },
+      {
+        "id": "deploy-worker-mem-req",
+        "description": "Deployment load-leveling-worker specifies memory request 256Mi",
+        "type": "resource_field_equals",
+        "kind": "Deployment",
+        "namespace": "production",
+        "name": "load-leveling-worker",
+        "fieldPath": "spec.template.spec.containers[0].resources.requests.memory",
+        "expectedValue": "256Mi",
+        "remediation": "Set container resources.requests.memory to \"256Mi\" in Deployment load-leveling-worker"
+      }
+    ],
+    "solutionCommands": [
+      "kubectl create namespace production",
+      "cat << 'EOF' > /arch/queue-load-leveling.yaml\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: queue-load-leveling-policy\n  namespace: production\ndata:\n  queueType: \"priority-fifo\"\n  maxConcurrency: \"10\"\n  retryPolicy: \"exponential-backoff-full-jitter\"\n---\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: load-leveling-worker\n  namespace: production\nspec:\n  replicas: 3\n  selector:\n    matchLabels:\n      app: load-leveling-worker\n  template:\n    metadata:\n      labels:\n        app: load-leveling-worker\n    spec:\n      containers:\n        - name: worker\n          image: queue-worker:v2.0\n          resources:\n            requests:\n              cpu: \"200m\"\n              memory: \"256Mi\"\nEOF",
+      "kubectl apply -f /arch/queue-load-leveling.yaml"
+    ],
+    "troubleshootingGuide": [
+      {
+        "problem": "ConfigMap or Deployment missing or memory request mismatch.",
+        "cause": "ConfigMap must specify retryPolicy and Deployment must run 3 replicas with 256Mi memory request.",
+        "solution": "Apply /arch/queue-load-leveling.yaml to namespace production."
+      }
+    ],
+    "domainId": "cloud-architecture-patterns",
+    "domainTitle": "Cloud Architecture Patterns, CQRS, Event Sourcing & Resilient Systems"
+  },
+  {
+    "id": "lab-ea-01-c4-model-enterprise-blueprint",
+    "title": "C4 Enterprise Architecture Blueprint & System Context Specification",
+    "difficulty": "Advanced",
+    "durationMinutes": 20,
+    "xpReward": 150,
+    "scenario": "Formalize enterprise architecture boundaries for the core financial platform. Author manifest /enterprise/c4-system-context.yaml defining namespace enterprise-governance. Inside enterprise-governance, create ConfigMap c4-system-context-spec with data keys: systemName: 'core-banking-platform', boundaryType: 'enterprise', c4Level: 'Container', and primaryPersonas: 'retail-customer,compliance-officer'. Additionally, create ServiceAccount enterprise-architect-sa in namespace enterprise-governance. Apply the manifest.",
+    "productionContext": "C4 context specifications establish explicit organizational domain boundaries, ensuring that microservice expansions comply with corporate security perimeters and architectural standards.",
+    "prerequisites": [
+      "lab-cap-01-cqrs-event-sourcing"
+    ],
+    "objectives": [
+      "Create namespace enterprise-governance if not present.",
+      "Author manifest /enterprise/c4-system-context.yaml defining ConfigMap c4-system-context-spec and ServiceAccount enterprise-architect-sa.",
+      "Configure ConfigMap data keys systemName, boundaryType, c4Level, and primaryPersonas.",
+      "Apply the manifest to the cluster."
+    ],
+    "initialClusterState": {
+      "resources": []
+    },
+    "starterManifest": "apiVersion: v1\nkind: Namespace\nmetadata:\n  name: enterprise-governance\n---\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: c4-system-context-spec\n  namespace: enterprise-governance\ndata:\n  systemName: \"core-banking-platform\"\n  boundaryType: \"enterprise\"\n  c4Level: \"Container\"\n  primaryPersonas: \"retail-customer,compliance-officer\"\n---\napiVersion: v1\nkind: ServiceAccount\nmetadata:\n  name: enterprise-architect-sa\n  namespace: enterprise-governance\n",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Create enterprise-governance namespace",
+        "instruction": "Create namespace enterprise-governance if not present.",
+        "commandHint": "kubectl create namespace enterprise-governance"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Author C4 architecture blueprint manifest",
+        "instruction": "Author manifest /enterprise/c4-system-context.yaml defining ConfigMap c4-system-context-spec and ServiceAccount enterprise-architect-sa.",
+        "commandHint": "cat << 'EOF' > /enterprise/c4-system-context.yaml\n...\nEOF"
+      },
+      {
+        "stepNumber": 3,
+        "title": "Apply manifest to cluster",
+        "instruction": "Apply manifest to namespace enterprise-governance.",
+        "commandHint": "kubectl apply -f /enterprise/c4-system-context.yaml"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "ns-ea-exists",
+        "description": "Namespace enterprise-governance exists",
+        "type": "resource_exists",
+        "kind": "Namespace",
+        "name": "enterprise-governance",
+        "remediation": "Create namespace enterprise-governance"
+      },
+      {
+        "id": "cm-c4-exists",
+        "description": "ConfigMap c4-system-context-spec exists in namespace enterprise-governance",
+        "type": "resource_exists",
+        "kind": "ConfigMap",
+        "namespace": "enterprise-governance",
+        "name": "c4-system-context-spec",
+        "remediation": "Apply ConfigMap c4-system-context-spec in namespace enterprise-governance"
+      },
+      {
+        "id": "cm-c4-level",
+        "description": "ConfigMap c4Level is Container",
+        "type": "resource_field_equals",
+        "kind": "ConfigMap",
+        "namespace": "enterprise-governance",
+        "name": "c4-system-context-spec",
+        "fieldPath": "data.c4Level",
+        "expectedValue": "Container",
+        "remediation": "Set c4Level: \"Container\" in ConfigMap c4-system-context-spec"
+      },
+      {
+        "id": "cm-c4-system",
+        "description": "ConfigMap systemName is core-banking-platform",
+        "type": "resource_field_equals",
+        "kind": "ConfigMap",
+        "namespace": "enterprise-governance",
+        "name": "c4-system-context-spec",
+        "fieldPath": "data.systemName",
+        "expectedValue": "core-banking-platform",
+        "remediation": "Set systemName: \"core-banking-platform\" in ConfigMap c4-system-context-spec"
+      },
+      {
+        "id": "sa-ea-exists",
+        "description": "ServiceAccount enterprise-architect-sa exists in namespace enterprise-governance",
+        "type": "resource_exists",
+        "kind": "ServiceAccount",
+        "namespace": "enterprise-governance",
+        "name": "enterprise-architect-sa",
+        "remediation": "Apply ServiceAccount enterprise-architect-sa in namespace enterprise-governance"
+      }
+    ],
+    "solutionCommands": [
+      "kubectl create namespace enterprise-governance",
+      "cat << 'EOF' > /enterprise/c4-system-context.yaml\napiVersion: v1\nkind: Namespace\nmetadata:\n  name: enterprise-governance\n---\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: c4-system-context-spec\n  namespace: enterprise-governance\ndata:\n  systemName: \"core-banking-platform\"\n  boundaryType: \"enterprise\"\n  c4Level: \"Container\"\n  primaryPersonas: \"retail-customer,compliance-officer\"\n---\napiVersion: v1\nkind: ServiceAccount\nmetadata:\n  name: enterprise-architect-sa\n  namespace: enterprise-governance\nEOF",
+      "kubectl apply -f /enterprise/c4-system-context.yaml"
+    ],
+    "troubleshootingGuide": [
+      {
+        "problem": "ConfigMap or ServiceAccount missing or fields do not match.",
+        "cause": "ConfigMap must specify c4Level and systemName in namespace enterprise-governance.",
+        "solution": "Apply /enterprise/c4-system-context.yaml to namespace enterprise-governance."
+      }
+    ],
+    "domainId": "enterprise-architecture",
+    "domainTitle": "Enterprise Architecture, C4 Modeling, Landing Zones & FinOps Governance"
+  },
+  {
+    "id": "lab-ea-02-landing-zone-finops-guardrails",
+    "title": "Landing Zone Governance & FinOps Cost-Allocation Guardrails",
+    "difficulty": "Advanced",
+    "durationMinutes": 20,
+    "xpReward": 150,
+    "scenario": "Establish cloud landing zone governance and cost optimization. Author manifest /enterprise/landing-zone-finops.yaml defining ConfigMap landing-zone-finops-spec in namespace enterprise-governance with data keys: scpEnforcement: 'deny-unapproved-regions', costCenter: 'cc-fintech-9401', and finopsTier: 'tier-1-mission-critical'. In addition, author ResourceQuota enterprise-governance-quota in namespace enterprise-governance with hard requests.cpu: '8000m' and requests.memory: '16Gi'. Apply both manifests.",
+    "productionContext": "Automated landing zone governance prevents compliance violations by blocking unapproved regions, while FinOps tagging and quotas guarantee multi-tenant cost accountability.",
+    "prerequisites": [
+      "lab-ea-01-c4-model-enterprise-blueprint"
+    ],
+    "objectives": [
+      "Create namespace enterprise-governance if not present.",
+      "Author manifest /enterprise/landing-zone-finops.yaml defining ConfigMap landing-zone-finops-spec and ResourceQuota enterprise-governance-quota.",
+      "Configure ConfigMap data keys scpEnforcement, costCenter, and finopsTier.",
+      "Configure ResourceQuota with hard requests.cpu: 8000m and requests.memory: 16Gi.",
+      "Apply manifest to namespace enterprise-governance."
+    ],
+    "initialClusterState": {
+      "resources": []
+    },
+    "starterManifest": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: landing-zone-finops-spec\n  namespace: enterprise-governance\ndata:\n  scpEnforcement: \"deny-unapproved-regions\"\n  costCenter: \"cc-fintech-9401\"\n  finopsTier: \"tier-1-mission-critical\"\n---\napiVersion: v1\nkind: ResourceQuota\nmetadata:\n  name: enterprise-governance-quota\n  namespace: enterprise-governance\nspec:\n  hard:\n    requests.cpu: \"8000m\"\n    requests.memory: \"16Gi\"\n",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Create enterprise-governance namespace",
+        "instruction": "Create namespace enterprise-governance if not present.",
+        "commandHint": "kubectl create namespace enterprise-governance"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Author landing zone and FinOps guardrails manifest",
+        "instruction": "Author manifest /enterprise/landing-zone-finops.yaml defining ConfigMap landing-zone-finops-spec and ResourceQuota enterprise-governance-quota.",
+        "commandHint": "cat << 'EOF' > /enterprise/landing-zone-finops.yaml\n...\nEOF"
+      },
+      {
+        "stepNumber": 3,
+        "title": "Apply manifest to enterprise-governance",
+        "instruction": "Apply manifest to namespace enterprise-governance.",
+        "commandHint": "kubectl apply -f /enterprise/landing-zone-finops.yaml"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "cm-finops-exists",
+        "description": "ConfigMap landing-zone-finops-spec exists in namespace enterprise-governance",
+        "type": "resource_exists",
+        "kind": "ConfigMap",
+        "namespace": "enterprise-governance",
+        "name": "landing-zone-finops-spec",
+        "remediation": "Apply ConfigMap landing-zone-finops-spec in namespace enterprise-governance"
+      },
+      {
+        "id": "cm-finops-scp",
+        "description": "ConfigMap scpEnforcement is deny-unapproved-regions",
+        "type": "resource_field_equals",
+        "kind": "ConfigMap",
+        "namespace": "enterprise-governance",
+        "name": "landing-zone-finops-spec",
+        "fieldPath": "data.scpEnforcement",
+        "expectedValue": "deny-unapproved-regions",
+        "remediation": "Set scpEnforcement: \"deny-unapproved-regions\" in ConfigMap landing-zone-finops-spec"
+      },
+      {
+        "id": "cm-finops-tier",
+        "description": "ConfigMap finopsTier is tier-1-mission-critical",
+        "type": "resource_field_equals",
+        "kind": "ConfigMap",
+        "namespace": "enterprise-governance",
+        "name": "landing-zone-finops-spec",
+        "fieldPath": "data.finopsTier",
+        "expectedValue": "tier-1-mission-critical",
+        "remediation": "Set finopsTier: \"tier-1-mission-critical\" in ConfigMap landing-zone-finops-spec"
+      },
+      {
+        "id": "rq-finops-exists",
+        "description": "ResourceQuota enterprise-governance-quota exists in namespace enterprise-governance",
+        "type": "resource_exists",
+        "kind": "ResourceQuota",
+        "namespace": "enterprise-governance",
+        "name": "enterprise-governance-quota",
+        "remediation": "Apply ResourceQuota enterprise-governance-quota in namespace enterprise-governance"
+      },
+      {
+        "id": "rq-finops-cpu",
+        "description": "ResourceQuota specifies hard requests.cpu 8000m",
+        "type": "resource_field_equals",
+        "kind": "ResourceQuota",
+        "namespace": "enterprise-governance",
+        "name": "enterprise-governance-quota",
+        "fieldPath": "spec.hard['requests.cpu']",
+        "expectedValue": "8000m",
+        "remediation": "Set spec.hard['requests.cpu'] to \"8000m\" in ResourceQuota enterprise-governance-quota"
+      },
+      {
+        "id": "rq-finops-mem",
+        "description": "ResourceQuota specifies hard requests.memory 16Gi",
+        "type": "resource_field_equals",
+        "kind": "ResourceQuota",
+        "namespace": "enterprise-governance",
+        "name": "enterprise-governance-quota",
+        "fieldPath": "spec.hard['requests.memory']",
+        "expectedValue": "16Gi",
+        "remediation": "Set spec.hard['requests.memory'] to \"16Gi\" in ResourceQuota enterprise-governance-quota"
+      }
+    ],
+    "solutionCommands": [
+      "kubectl create namespace enterprise-governance",
+      "cat << 'EOF' > /enterprise/landing-zone-finops.yaml\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: landing-zone-finops-spec\n  namespace: enterprise-governance\ndata:\n  scpEnforcement: \"deny-unapproved-regions\"\n  costCenter: \"cc-fintech-9401\"\n  finopsTier: \"tier-1-mission-critical\"\n---\napiVersion: v1\nkind: ResourceQuota\nmetadata:\n  name: enterprise-governance-quota\n  namespace: enterprise-governance\nspec:\n  hard:\n    requests.cpu: \"8000m\"\n    requests.memory: \"16Gi\"\nEOF",
+      "kubectl apply -f /enterprise/landing-zone-finops.yaml"
+    ],
+    "troubleshootingGuide": [
+      {
+        "problem": "ResourceQuota or ConfigMap missing or quota values mismatch.",
+        "cause": "ResourceQuota must specify requests.cpu: 8000m and requests.memory: 16Gi.",
+        "solution": "Apply /enterprise/landing-zone-finops.yaml to namespace enterprise-governance."
+      }
+    ],
+    "domainId": "enterprise-architecture",
+    "domainTitle": "Enterprise Architecture, C4 Modeling, Landing Zones & FinOps Governance"
+  },
+  {
+    "id": "lab-aiops-01-k8sgpt-triage",
+    "title": "k8sgpt Autonomous Cluster Diagnostic Analyzer & RCA Configuration",
+    "difficulty": "Advanced",
+    "durationMinutes": 20,
+    "xpReward": 150,
+    "scenario": "Configure automated AI cluster diagnostics. Author manifest /aiops/k8sgpt-config.yaml in namespace monitoring defining ConfigMap k8sgpt-ai-analyzer-config with data keys: aiProvider: 'local-llm', enabledFilters: 'Pod,Service,Ingress,PersistentVolumeClaim', backendEndpoint: 'http://aiops-engine.monitoring.svc:8080/v1', and autoExplain: 'true'. In addition, execute the AI diagnostic analyzer command 'aiops analyze' to evaluate cluster state. Apply the manifest and run the diagnostic.",
+    "productionContext": "Automated AI diagnostic analyzers eliminate manual kubectl describe parsing during production outages, reducing Mean Time to Detection (MTTD) from minutes to milliseconds.",
+    "prerequisites": [
+      "lab-sys-02-token-bucket-ratelimit"
+    ],
+    "objectives": [
+      "Create namespace monitoring if not present.",
+      "Author manifest /aiops/k8sgpt-config.yaml defining ConfigMap k8sgpt-ai-analyzer-config.",
+      "Configure ConfigMap data keys aiProvider, enabledFilters, backendEndpoint, and autoExplain.",
+      "Apply manifest to namespace monitoring.",
+      "Execute command 'aiops analyze' to perform cluster analysis."
+    ],
+    "initialClusterState": {
+      "resources": []
+    },
+    "starterManifest": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: k8sgpt-ai-analyzer-config\n  namespace: monitoring\ndata:\n  aiProvider: \"local-llm\"\n  enabledFilters: \"Pod,Service,Ingress,PersistentVolumeClaim\"\n  backendEndpoint: \"http://aiops-engine.monitoring.svc:8080/v1\"\n  autoExplain: \"true\"\n",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Create monitoring namespace",
+        "instruction": "Create namespace monitoring if not present.",
+        "commandHint": "kubectl create namespace monitoring"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Author k8sgpt analyzer configuration",
+        "instruction": "Author manifest /aiops/k8sgpt-config.yaml defining ConfigMap k8sgpt-ai-analyzer-config.",
+        "commandHint": "cat << 'EOF' > /aiops/k8sgpt-config.yaml\n...\nEOF"
+      },
+      {
+        "stepNumber": 3,
+        "title": "Apply manifest to monitoring",
+        "instruction": "Apply manifest to namespace monitoring.",
+        "commandHint": "kubectl apply -f /aiops/k8sgpt-config.yaml"
+      },
+      {
+        "stepNumber": 4,
+        "title": "Execute AI-Ops cluster analysis",
+        "instruction": "Run aiops analyze to trigger the autonomous diagnostic engine.",
+        "commandHint": "aiops analyze"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "cm-k8sgpt-exists",
+        "description": "ConfigMap k8sgpt-ai-analyzer-config exists in namespace monitoring",
+        "type": "resource_exists",
+        "kind": "ConfigMap",
+        "namespace": "monitoring",
+        "name": "k8sgpt-ai-analyzer-config",
+        "remediation": "Apply ConfigMap k8sgpt-ai-analyzer-config in namespace monitoring"
+      },
+      {
+        "id": "cm-k8sgpt-provider",
+        "description": "ConfigMap aiProvider is local-llm",
+        "type": "resource_field_equals",
+        "kind": "ConfigMap",
+        "namespace": "monitoring",
+        "name": "k8sgpt-ai-analyzer-config",
+        "fieldPath": "data.aiProvider",
+        "expectedValue": "local-llm",
+        "remediation": "Set aiProvider: \"local-llm\" in ConfigMap k8sgpt-ai-analyzer-config"
+      },
+      {
+        "id": "cm-k8sgpt-explain",
+        "description": "ConfigMap autoExplain is true",
+        "type": "resource_field_equals",
+        "kind": "ConfigMap",
+        "namespace": "monitoring",
+        "name": "k8sgpt-ai-analyzer-config",
+        "fieldPath": "data.autoExplain",
+        "expectedValue": "true",
+        "remediation": "Set autoExplain: \"true\" in ConfigMap k8sgpt-ai-analyzer-config"
+      },
+      {
+        "id": "cmd-aiops-analyze",
+        "description": "Command aiops analyze executed",
+        "type": "command_executed",
+        "commandSubstring": "aiops analyze",
+        "pattern": "aiops analyze",
+        "remediation": "Execute command 'aiops analyze'"
+      }
+    ],
+    "solutionCommands": [
+      "kubectl create namespace monitoring",
+      "cat << 'EOF' > /aiops/k8sgpt-config.yaml\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: k8sgpt-ai-analyzer-config\n  namespace: monitoring\ndata:\n  aiProvider: \"local-llm\"\n  enabledFilters: \"Pod,Service,Ingress,PersistentVolumeClaim\"\n  backendEndpoint: \"http://aiops-engine.monitoring.svc:8080/v1\"\n  autoExplain: \"true\"\nEOF",
+      "kubectl apply -f /aiops/k8sgpt-config.yaml",
+      "aiops analyze"
+    ],
+    "troubleshootingGuide": [
+      {
+        "problem": "ConfigMap missing or aiops analyze command not recorded.",
+        "cause": "ConfigMap must specify aiProvider and autoExplain, and aiops analyze must be executed.",
+        "solution": "Apply /aiops/k8sgpt-config.yaml and run aiops analyze."
+      }
+    ],
+    "domainId": "aiops-autonomous",
+    "domainTitle": "Autonomous AI-Ops, Closed-Loop Remediation & GPU Inference Infrastructure"
+  },
+  {
+    "id": "lab-aiops-02-gpu-kserve-inference",
+    "title": "NVIDIA GPU Scheduling & KServe LLM InferenceService Deployment",
+    "difficulty": "Advanced",
+    "durationMinutes": 25,
+    "xpReward": 175,
+    "scenario": "Deploy an enterprise LLM serving runtime with GPU acceleration. Author manifest /aiops/kserve-inference.yaml in namespace ai-workloads defining KServe custom resource InferenceService named llm-inference-gateway. Configure spec.predictor with modelFormat: 'vllm' and resource limits requesting 1 GPU unit 'nvidia.com/gpu': '1'. Next, deploy Deployment autonomous-remediation-controller in namespace ai-workloads with 2 replicas running image aiops-controller:v2.4. Apply both manifests to namespace ai-workloads.",
+    "productionContext": "KServe InferenceServices standardize LLM model deployment and autoscaling, while dedicated autonomous remediation controllers execute closed-loop self-healing policies to maintain high model availability.",
+    "prerequisites": [
+      "lab-aiops-01-k8sgpt-triage"
+    ],
+    "objectives": [
+      "Create namespace ai-workloads if not present.",
+      "Author manifest /aiops/kserve-inference.yaml defining InferenceService llm-inference-gateway and Deployment autonomous-remediation-controller.",
+      "Configure InferenceService spec.predictor with modelFormat vllm and limits nvidia.com/gpu: 1.",
+      "Deploy Deployment autonomous-remediation-controller with 2 replicas in namespace ai-workloads.",
+      "Apply manifests to namespace ai-workloads."
+    ],
+    "initialClusterState": {
+      "resources": []
+    },
+    "starterManifest": "apiVersion: serving.kserve.io/v1beta1\nkind: InferenceService\nmetadata:\n  name: llm-inference-gateway\n  namespace: ai-workloads\nspec:\n  predictor:\n    model:\n      modelFormat:\n        name: \"vllm\"\n      resources:\n        limits:\n          nvidia.com/gpu: \"1\"\n---\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: autonomous-remediation-controller\n  namespace: ai-workloads\nspec:\n  replicas: 2\n  selector:\n    matchLabels:\n      app: autonomous-remediation-controller\n  template:\n    metadata:\n      labels:\n        app: autonomous-remediation-controller\n    spec:\n      containers:\n        - name: controller\n          image: aiops-controller:v2.4\n",
+    "steps": [
+      {
+        "stepNumber": 1,
+        "title": "Create ai-workloads namespace",
+        "instruction": "Create namespace ai-workloads if not present.",
+        "commandHint": "kubectl create namespace ai-workloads"
+      },
+      {
+        "stepNumber": 2,
+        "title": "Author KServe InferenceService and controller manifest",
+        "instruction": "Author manifest /aiops/kserve-inference.yaml defining InferenceService llm-inference-gateway and Deployment autonomous-remediation-controller.",
+        "commandHint": "cat << 'EOF' > /aiops/kserve-inference.yaml\n...\nEOF"
+      },
+      {
+        "stepNumber": 3,
+        "title": "Apply manifest to ai-workloads",
+        "instruction": "Apply manifest to namespace ai-workloads.",
+        "commandHint": "kubectl apply -f /aiops/kserve-inference.yaml"
+      }
+    ],
+    "validationRules": [
+      {
+        "id": "isvc-gpu-exists",
+        "description": "InferenceService llm-inference-gateway exists in namespace ai-workloads",
+        "type": "resource_exists",
+        "kind": "InferenceService",
+        "namespace": "ai-workloads",
+        "name": "llm-inference-gateway",
+        "remediation": "Deploy InferenceService llm-inference-gateway in namespace ai-workloads"
+      },
+      {
+        "id": "isvc-model-format",
+        "description": "InferenceService modelFormat is vllm",
+        "type": "resource_field_equals",
+        "kind": "InferenceService",
+        "namespace": "ai-workloads",
+        "name": "llm-inference-gateway",
+        "fieldPath": "spec.predictor.model.modelFormat.name",
+        "expectedValue": "vllm",
+        "remediation": "Set spec.predictor.model.modelFormat.name to \"vllm\" in InferenceService llm-inference-gateway"
+      },
+      {
+        "id": "isvc-gpu-limit",
+        "description": "InferenceService specifies resource limit nvidia.com/gpu: 1",
+        "type": "resource_field_equals",
+        "kind": "InferenceService",
+        "namespace": "ai-workloads",
+        "name": "llm-inference-gateway",
+        "fieldPath": "spec.predictor.model.resources.limits['nvidia.com/gpu']",
+        "expectedValue": "1",
+        "remediation": "Set spec.predictor.model.resources.limits['nvidia.com/gpu'] to \"1\" in InferenceService llm-inference-gateway"
+      },
+      {
+        "id": "deploy-aiops-exists",
+        "description": "Deployment autonomous-remediation-controller exists in namespace ai-workloads",
+        "type": "resource_exists",
+        "kind": "Deployment",
+        "namespace": "ai-workloads",
+        "name": "autonomous-remediation-controller",
+        "remediation": "Deploy autonomous-remediation-controller in namespace ai-workloads"
+      },
+      {
+        "id": "deploy-aiops-replicas",
+        "description": "Deployment autonomous-remediation-controller has 2 replicas",
+        "type": "resource_field_equals",
+        "kind": "Deployment",
+        "namespace": "ai-workloads",
+        "name": "autonomous-remediation-controller",
+        "fieldPath": "spec.replicas",
+        "expectedValue": 2,
+        "remediation": "Scale Deployment autonomous-remediation-controller to 2 replicas"
+      }
+    ],
+    "solutionCommands": [
+      "kubectl create namespace ai-workloads",
+      "cat << 'EOF' > /aiops/kserve-inference.yaml\napiVersion: serving.kserve.io/v1beta1\nkind: InferenceService\nmetadata:\n  name: llm-inference-gateway\n  namespace: ai-workloads\nspec:\n  predictor:\n    model:\n      modelFormat:\n        name: \"vllm\"\n      resources:\n        limits:\n          nvidia.com/gpu: \"1\"\n---\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: autonomous-remediation-controller\n  namespace: ai-workloads\nspec:\n  replicas: 2\n  selector:\n    matchLabels:\n      app: autonomous-remediation-controller\n  template:\n    metadata:\n      labels:\n        app: autonomous-remediation-controller\n    spec:\n      containers:\n        - name: controller\n          image: aiops-controller:v2.4\nEOF",
+      "kubectl apply -f /aiops/kserve-inference.yaml"
+    ],
+    "troubleshootingGuide": [
+      {
+        "problem": "InferenceService or Deployment missing or GPU resource limits mismatch.",
+        "cause": "InferenceService must specify vllm modelFormat and 1 GPU unit, and controller must run 2 replicas.",
+        "solution": "Apply /aiops/kserve-inference.yaml to namespace ai-workloads."
+      }
+    ],
+    "domainId": "aiops-autonomous",
+    "domainTitle": "Autonomous AI-Ops, Closed-Loop Remediation & GPU Inference Infrastructure"
+  }
+];
+  const tracks = [
+  {
+    "id": "track-foundations",
+    "title": "Cloud-Native Systems Foundations",
+    "role": "Cloud-Native Systems Engineer",
+    "certificationTitle": "Certified Cloud-Native Foundations Associate (CCNFA)",
+    "summary": "Master Linux kernel isolation, OCI container runtimes, and cloud-native TCP/IP, DNS, CNI & eBPF networking.",
+    "domainIds": [
+      "linux-fundamentals",
+      "containers-runtime",
+      "cloud-networking"
+    ]
+  },
+  {
+    "id": "track-k8s-admin",
+    "title": "Kubernetes, CNCF, GitOps & CI/CD Administrator",
+    "role": "Kubernetes & GitOps Administrator",
+    "certificationTitle": "Certified Kubernetes & GitOps Administrator (CKGA)",
+    "summary": "Operate production Kubernetes clusters, Helm/Kustomize packaging, Argo CD GitOps reconciliation, and cloud-native CI/CD.",
+    "domainIds": [
+      "kubernetes-core",
+      "cncf-packaging",
+      "gitops-delivery",
+      "devops-cicd",
+      "k8s-control-plane-lifecycle",
+      "gateway-api-cilium"
+    ]
+  },
+  {
+    "id": "track-devsecops",
+    "title": "DevSecOps, Zero-Trust & Service Mesh Specialist",
+    "role": "DevSecOps & Service Mesh Engineer",
+    "certificationTitle": "Certified Cloud-Native Security Specialist (CCNSS)",
+    "summary": "Harden workloads with Pod Security Standards, NetworkPolicies, Trivy/Falco, SLSA supply chain security, and Istio mTLS.",
+    "domainIds": [
+      "devsecops-security",
+      "service-mesh",
+      "policy-as-code-kyverno",
+      "zero-trust-spiffe-externalsecrets"
+    ]
+  },
+  {
+    "id": "track-sre",
+    "title": "Site Reliability, Observability & Chaos Engineering",
+    "role": "Principal Site Reliability Engineer",
+    "certificationTitle": "Certified Site Reliability & Incident Commander (CSRIC)",
+    "summary": "Instrument distributed systems with Prometheus/OpenTelemetry, enforce SLO error budgets, and lead chaos & incident recovery.",
+    "domainIds": [
+      "observability-stack",
+      "sre-incident-chaos",
+      "autoscaling-keda-karpenter",
+      "storage-csi-velero-dr"
+    ]
+  },
+  {
+    "id": "track-platform",
+    "title": "Platform Engineering, IaC & Cloud FinOps",
+    "role": "Platform Engineering Architect",
+    "certificationTitle": "Certified Platform Engineering Architect (CPEA)",
+    "summary": "Build Internal Developer Platforms with Golden Paths, Crossplane control planes, OpenTofu/Terraform automation, and OpenCost/Kepler FinOps.",
+    "domainIds": [
+      "platform-engineering",
+      "iac-opentofu-terraform",
+      "finops-green-cloud",
+      "multitenancy-vcluster-crossplane"
+    ]
+  },
+  {
+    "id": "track-multicloud-aiops",
+    "title": "Multi-Cloud (AWS/Azure/GCP), Wasm/eBPF & Autonomous AI-Ops",
+    "role": "Multi-Cloud & AI-Ops Principal Architect",
+    "certificationTitle": "Certified Multi-Cloud & AI-Ops Principal (CMCAP)",
+    "summary": "Architect federated workloads across AWS EKS, Azure AKS, and Google GKE with WebAssembly, eBPF Tetragon, GPU scheduling, and AI-Ops self-healing.",
+    "domainIds": [
+      "cloud-aws",
+      "cloud-azure-gcp",
+      "aiops-autonomous",
+      "wasm-ebpf-edge",
+      "cloud-native-aiml-kserve"
     ]
   }
 ];
 
   return {
     version: '3.0.0',
+    engineVersion: '4.0.0',
+    v4Version: '4.0.0',
     vfs,
     cluster,
     terminal,
     validator,
     incidents,
+    warRoomScenarios,
+    getWarRoomScenarios: function() { return warRoomScenarios; },
     projects,
+    performanceExams,
+    listPerformanceExams: function() { return performanceExams; },
+    getPerformanceExam: function(id) { return performanceExams.find((e) => e.id === id) || null; },
+    domains,
+    curriculum: domains,
+    tracks,
+    labs,
+    cliFormatter: {
+      formatTable,
+      formatResourceTable,
+      normalizeKind,
+      formatLabels
+    },
     aiMentor: {
       ask: function(mode, ctx) {
         return `[AI Mentor (${mode})] Diagnostic guidance for offline scenario: Inspect pod conditions and verify Service label selectors.`;

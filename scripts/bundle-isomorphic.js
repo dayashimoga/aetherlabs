@@ -42,13 +42,16 @@ for (const mod of requiredCoreModules) {
   console.log(`  ✔ src/core/${mod} (${(fs.statSync(modPath).size / 1024).toFixed(1)} KB)`);
 }
 
-// 2. Load Incidents and Capstones dynamically from core engines
-console.log('\n[2/4] Extracting curriculum, incident, and capstone catalog from src/core/...');
+// 2. Load Incidents, Capstones, Performance Exams & Curriculum dynamically from core
+console.log('\n[2/4] Extracting curriculum, incident, and capstone catalog from src/core/ & src/curriculum/...');
 const { IncidentEngine } = require('../src/core/incidentEngine');
 const { ProjectEngine } = require('../src/core/projectEngine');
+const { CertificationEngine } = require('../src/core/certificationEngine');
+const { ROLE_TRACKS } = require('../src/plugins/pluginManager');
 
 const incidentEngine = new IncidentEngine();
 const projectEngine = new ProjectEngine();
+const certEngine = new CertificationEngine();
 
 const offlineIncidents = incidentEngine.scenarios.map((s) => ({
   id: s.id,
@@ -60,15 +63,90 @@ const offlineIncidents = incidentEngine.scenarios.map((s) => ({
   fault: s.fault
 }));
 
+const warRoomScenarios = incidentEngine.getWarRoomScenarios().map((s) => ({
+  id: s.id,
+  title: s.title,
+  category: s.category,
+  severity: s.severity,
+  symptoms: s.symptoms,
+  remediationCommand: s.remediationCommand,
+  solutionCommands: s.solutionCommands,
+  fault: s.fault
+}));
+
 const offlineProjects = projectEngine.projects.map((p) => ({
   id: p.id,
   title: p.title,
   track: p.track,
-  milestones: p.milestones
+  milestones: p.milestones,
+  solutionCommands: p.solutionCommands
 }));
 
-console.log(`  ✔ Loaded ${offlineIncidents.length} production incident scenarios`);
+const offlinePerformanceExams = certEngine.listPerformanceExams().map((e) => {
+  const full = certEngine.getPerformanceExam(e.id);
+  return {
+    id: full.id,
+    code: full.code,
+    title: full.title,
+    trackId: full.trackId,
+    durationMinutes: full.durationMinutes,
+    passingScore: full.passingScore,
+    tasks: (full.tasks || []).map((t) => ({
+      id: t.id,
+      title: t.title,
+      weight: t.weight,
+      solutionCommands: t.solutionCommands
+    }))
+  };
+});
+
+// Load all 45 Curriculum Domains from src/curriculum/domains/
+const curriculumDir = path.join(rootDir, 'src', 'curriculum', 'domains');
+const domainFiles = fs.readdirSync(curriculumDir).filter((f) => f.endsWith('.json')).sort();
+const offlineDomains = [];
+const offlineLabs = [];
+
+for (const f of domainFiles) {
+  const d = JSON.parse(fs.readFileSync(path.join(curriculumDir, f), 'utf8'));
+  offlineDomains.push({
+    id: d.id,
+    title: d.title,
+    track: d.track,
+    tier: d.tier,
+    description: d.description,
+    estimatedHours: d.estimatedHours,
+    modules: (d.modules || []).map((m) => ({ id: m.id, title: m.title })),
+    labs: (d.labs || []).map((l) => ({
+      id: l.id,
+      title: l.title,
+      xpReward: l.xpReward,
+      difficulty: l.difficulty,
+      durationMinutes: l.durationMinutes,
+      objectives: l.objectives,
+      hints: l.hints,
+      starterManifest: l.starterManifest,
+      solutionCommands: l.solutionCommands,
+      validationRules: l.validationRules
+    }))
+  });
+
+  for (const lab of (d.labs || [])) {
+    offlineLabs.push({
+      ...lab,
+      domainId: d.id,
+      domainTitle: d.title,
+      track: d.track
+    });
+  }
+}
+
+const offlineTracks = ROLE_TRACKS;
+
+console.log(`  ✔ Loaded ${offlineDomains.length} curriculum domains across 6 learning tracks`);
+console.log(`  ✔ Loaded ${offlineLabs.length} interactive curriculum labs`);
+console.log(`  ✔ Loaded ${offlineIncidents.length} legacy incident scenarios (${warRoomScenarios.length} war room incidents)`);
 console.log(`  ✔ Loaded ${offlineProjects.length} enterprise capstone projects`);
+console.log(`  ✔ Loaded ${offlinePerformanceExams.length} performance certification exams`);
 
 // 3. Assemble the browser-native isomorphic UMD bundle
 console.log('\n[3/4] Compiling isomorphic UMD distribution...');
@@ -400,11 +478,12 @@ const bundleHeader = `/**
     }
 
     getResources(kind, namespace = null) {
+      const isClusterScoped = ['Node', 'Namespace', 'PersistentVolume', 'StorageClass', 'ClusterRole', 'ClusterRoleBinding', 'ClusterPolicy'].includes(kind);
       const results = [];
       for (const [k, v] of this.resources.entries()) {
         const [rKind, rNs] = k.split('/');
         if (rKind === kind) {
-          if (!namespace || namespace === 'all' || rNs === namespace) {
+          if (isClusterScoped || !namespace || namespace === 'all' || rNs === namespace) {
             results.push(v);
           }
         }
@@ -507,6 +586,180 @@ const bundleHeader = `/**
         this._isReconciling = false;
       }
     }
+  }
+
+  // ==========================================
+  // 3.5. Dynamic CLI Formatter (cliFormatter)
+  // ==========================================
+  const KIND_ALIASES = {
+    po: 'Pod', pod: 'Pod', pods: 'Pod',
+    deploy: 'Deployment', deployment: 'Deployment', deployments: 'Deployment',
+    svc: 'Service', service: 'Service', services: 'Service',
+    no: 'Node', node: 'Node', nodes: 'Node',
+    ns: 'Namespace', namespace: 'Namespace', namespaces: 'Namespace',
+    cm: 'ConfigMap', configmap: 'ConfigMap', configmaps: 'ConfigMap',
+    secret: 'Secret', secrets: 'Secret',
+    ing: 'Ingress', ingress: 'Ingress', ingresses: 'Ingress',
+    pvc: 'PersistentVolumeClaim', persistentvolumeclaim: 'PersistentVolumeClaim', persistentvolumeclaims: 'PersistentVolumeClaim',
+    pv: 'PersistentVolume', persistentvolume: 'PersistentVolume', persistentvolumes: 'PersistentVolume',
+    sts: 'StatefulSet', statefulset: 'StatefulSet', statefulsets: 'StatefulSet',
+    ds: 'DaemonSet', daemonset: 'DaemonSet', daemonsets: 'DaemonSet',
+    hpa: 'HorizontalPodAutoscaler', horizontalpodautoscaler: 'HorizontalPodAutoscaler', horizontalpodautoscalers: 'HorizontalPodAutoscaler',
+    cj: 'CronJob', cronjob: 'CronJob', cronjobs: 'CronJob',
+    job: 'Job', jobs: 'Job',
+    sa: 'ServiceAccount', serviceaccount: 'ServiceAccount', serviceaccounts: 'ServiceAccount',
+    netpol: 'NetworkPolicy', networkpolicy: 'NetworkPolicy', networkpolicies: 'NetworkPolicy',
+    quota: 'ResourceQuota', resourcequota: 'ResourceQuota', resourcequotas: 'ResourceQuota'
+  };
+
+  const CLUSTER_SCOPED_KINDS = new Set([
+    'Node', 'Namespace', 'PersistentVolume', 'StorageClass',
+    'ClusterRole', 'ClusterRoleBinding', 'CustomResourceDefinition', 'ClusterPolicy'
+  ]);
+
+  function normalizeKind(rawKind) {
+    if (!rawKind) return 'Pod';
+    const lower = String(rawKind).toLowerCase().trim();
+    if (KIND_ALIASES[lower]) return KIND_ALIASES[lower];
+    return rawKind.charAt(0).toUpperCase() + rawKind.slice(1);
+  }
+
+  function formatTable(headers, rows) {
+    if (!headers || headers.length === 0) return '';
+    if (!rows || rows.length === 0) return headers.join('  ');
+
+    const colWidths = headers.map((header, colIdx) => {
+      let max = String(header || '').length;
+      for (const row of rows) {
+        const val = row && row[colIdx] !== undefined ? String(row[colIdx]) : '';
+        if (val.length > max) max = val.length;
+      }
+      return max;
+    });
+
+    const gutter = '   ';
+    const formatLine = (row) =>
+      row
+        .map((cell, idx) => {
+          const str = String(cell !== undefined && cell !== null ? cell : '');
+          if (idx === row.length - 1) return str;
+          return str.padEnd(colWidths[idx], ' ');
+        })
+        .join(gutter);
+
+    const headerLine = formatLine(headers);
+    const dataLines = rows.map((r) => formatLine(r));
+    return [headerLine, ...dataLines].join('\\n');
+  }
+
+  function formatLabels(labels) {
+    if (!labels || typeof labels !== 'object') return '<none>';
+    const keys = Object.keys(labels).sort();
+    if (keys.length === 0) return '<none>';
+    return keys.map((k) => \`\${k}=\${labels[k]}\`).join(',');
+  }
+
+  function formatResourceTable(rawKind, resources = [], options = {}) {
+    const kind = normalizeKind(rawKind);
+    const isClusterScoped = CLUSTER_SCOPED_KINDS.has(kind);
+    const showNamespace = Boolean(options.allNamespaces && !isClusterScoped);
+    const isWide = Boolean(options.wide || options.output === 'wide');
+
+    if (!resources || resources.length === 0) {
+      if (options.allNamespaces) return 'No resources found';
+      return \`No resources found in \${options.namespace || 'default'} namespace.\`;
+    }
+
+    let headers = [];
+    let rows = [];
+
+    switch (kind) {
+      case 'Pod': {
+        headers = ['NAME', 'READY', 'STATUS', 'RESTARTS', 'AGE'];
+        if (showNamespace) headers.unshift('NAMESPACE');
+        if (isWide) headers.push('IP', 'NODE');
+        rows = resources.map((p) => {
+          const meta = p.metadata || {};
+          const status = p.status || {};
+          const row = [
+            meta.name || 'pod',
+            status.ready || '1/1',
+            status.phase || 'Running',
+            String(status.restartCount || 0),
+            '2m'
+          ];
+          if (showNamespace) row.unshift(meta.namespace || 'default');
+          if (isWide) row.push(status.podIP || '<none>', status.hostIP || 'kubelabs-worker-01');
+          return row;
+        });
+        break;
+      }
+      case 'Node': {
+        headers = ['NAME', 'STATUS', 'ROLES', 'AGE', 'VERSION'];
+        if (isWide) headers.push('INTERNAL-IP', 'OS-IMAGE', 'KERNEL-VERSION', 'CONTAINER-RUNTIME');
+        rows = resources.map((n) => {
+          const meta = n.metadata || {};
+          const isCp = meta.labels && ('node-role.kubernetes.io/control-plane' in meta.labels);
+          const row = [
+            meta.name || 'node',
+            'Ready',
+            isCp ? 'control-plane' : 'worker',
+            '2m',
+            'v1.32.0'
+          ];
+          if (isWide) {
+            row.push('192.168.10.10', 'Ubuntu 24.04 LTS', '6.8.0-45-generic', 'containerd://1.7.13');
+          }
+          return row;
+        });
+        break;
+      }
+      case 'Deployment': {
+        headers = ['NAME', 'READY', 'UP-TO-DATE', 'AVAILABLE', 'AGE'];
+        if (showNamespace) headers.unshift('NAMESPACE');
+        rows = resources.map((d) => {
+          const meta = d.metadata || {};
+          const spec = d.spec || {};
+          const rep = spec.replicas ?? 1;
+          const row = [meta.name || 'deploy', \`\${rep}/\${rep}\`, String(rep), String(rep), '2m'];
+          if (showNamespace) row.unshift(meta.namespace || 'default');
+          return row;
+        });
+        break;
+      }
+      case 'Service': {
+        headers = ['NAME', 'TYPE', 'CLUSTER-IP', 'EXTERNAL-IP', 'PORT(S)', 'AGE'];
+        if (showNamespace) headers.unshift('NAMESPACE');
+        rows = resources.map((s) => {
+          const meta = s.metadata || {};
+          const spec = s.spec || {};
+          const row = [meta.name || 'svc', spec.type || 'ClusterIP', '10.96.0.1', '<none>', '80/TCP', '2m'];
+          if (showNamespace) row.unshift(meta.namespace || 'default');
+          return row;
+        });
+        break;
+      }
+      case 'Namespace': {
+        headers = ['NAME', 'STATUS', 'AGE'];
+        rows = resources.map((ns) => {
+          const meta = ns.metadata || {};
+          return [meta.name || 'namespace', 'Active', '2m'];
+        });
+        break;
+      }
+      default: {
+        headers = ['NAME', 'AGE'];
+        if (showNamespace) headers.unshift('NAMESPACE');
+        rows = resources.map((r) => {
+          const meta = r.metadata || {};
+          const row = [meta.name || 'resource', '2m'];
+          if (showNamespace) row.unshift(meta.namespace || 'default');
+          return row;
+        });
+      }
+    }
+
+    return formatTable(headers, rows);
   }
 
   // ==========================================
@@ -645,29 +898,42 @@ const bundleHeader = `/**
       }
 
       if (verb === 'get') {
-        const kind = (target || 'pods').toLowerCase();
+        const rawKind = target || 'pods';
+        const kind = normalizeKind(rawKind);
+        let ns = 'default';
+        let allNs = false;
+        let wide = false;
         let jsonpathExpr = null;
-        for (const a of args) {
+
+        for (let i = 0; i < args.length; i++) {
+          const a = args[i];
+          if (a === '-A' || a === '--all-namespaces') allNs = true;
+          if (a === '-n' || a === '--namespace') ns = args[++i] || 'default';
+          if (a === '-o' && args[i + 1] === 'wide') wide = true;
+          if (a === '-o=wide' || a === '-owide') wide = true;
           if (a.startsWith('-o=jsonpath=') || a.startsWith('-ojsonpath=')) {
             jsonpathExpr = a.split('jsonpath=')[1];
-          } else if (a.startsWith('-o')) {
-            const nextIdx = args.indexOf(a) + 1;
-            if (args[nextIdx] && args[nextIdx].startsWith('jsonpath=')) {
-              jsonpathExpr = args[nextIdx].split('jsonpath=')[1];
-            }
+          } else if (a.startsWith('-o') && args[i + 1] && args[i + 1].startsWith('jsonpath=')) {
+            jsonpathExpr = args[++i].split('jsonpath=')[1];
           }
         }
 
-        if (kind.startsWith('deploy')) {
+        if (kind === 'Deployment') {
           const name = args[2] || 'nginx-test';
           const dep = this.cluster.getResource('Deployment', name, 'default');
           if (jsonpathExpr && dep) {
             if (jsonpathExpr.includes('replicas')) return { exitCode: 0, output: String(dep.spec?.replicas ?? 1) };
           }
-          return { exitCode: 0, output: 'NAME         READY   UP-TO-DATE   AVAILABLE\\nnginx-test   2/2     2            2' };
+          if (name === 'nginx-test' && (!args[2] || args[2] === 'nginx-test')) {
+            return { exitCode: 0, output: 'NAME         READY   UP-TO-DATE   AVAILABLE\\nnginx-test   2/2     2            2' };
+          }
         }
 
-        return { exitCode: 0, output: 'NAME   STATUS   AGE\\npod-1  Running  2m' };
+        const isClusterScoped = CLUSTER_SCOPED_KINDS.has(kind);
+        const queryNs = isClusterScoped ? null : (allNs ? null : ns);
+        const resources = this.cluster.getResources(kind, queryNs);
+        const formatted = formatResourceTable(kind, resources, { allNamespaces: allNs, wide, namespace: ns });
+        return { exitCode: 0, output: formatted };
       }
 
       if (verb === 'set' && target === 'selector') {
@@ -840,16 +1106,38 @@ const bundleHeader = `/**
   const validator = new BrowserValidator(cluster, vfs);
 
   const incidents = ${JSON.stringify(offlineIncidents, null, 2)};
+  const warRoomScenarios = ${JSON.stringify(warRoomScenarios, null, 2)};
   const projects = ${JSON.stringify(offlineProjects, null, 2)};
+  const performanceExams = ${JSON.stringify(offlinePerformanceExams, null, 2)};
+  const domains = ${JSON.stringify(offlineDomains, null, 2)};
+  const labs = ${JSON.stringify(offlineLabs, null, 2)};
+  const tracks = ${JSON.stringify(offlineTracks, null, 2)};
 
   return {
     version: '3.0.0',
+    engineVersion: '4.0.0',
+    v4Version: '4.0.0',
     vfs,
     cluster,
     terminal,
     validator,
     incidents,
+    warRoomScenarios,
+    getWarRoomScenarios: function() { return warRoomScenarios; },
     projects,
+    performanceExams,
+    listPerformanceExams: function() { return performanceExams; },
+    getPerformanceExam: function(id) { return performanceExams.find((e) => e.id === id) || null; },
+    domains,
+    curriculum: domains,
+    tracks,
+    labs,
+    cliFormatter: {
+      formatTable,
+      formatResourceTable,
+      normalizeKind,
+      formatLabels
+    },
     aiMentor: {
       ask: function(mode, ctx) {
         return \`[AI Mentor (\${mode})] Diagnostic guidance for offline scenario: Inspect pod conditions and verify Service label selectors.\`;
