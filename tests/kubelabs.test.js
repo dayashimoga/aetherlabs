@@ -320,6 +320,12 @@ test('8. HTTP Server, Observability Probes, Rate Limiter & Public Key API Integr
     const auditRes = await fetch(`${baseUrl}/api/agents/audit`);
     assert.equal(auditRes.status, 200);
     const auditJson = await auditRes.json();
+    if (!auditJson.passed) {
+      const failed = (auditJson.agents || [])
+        .filter((a) => a.status !== 'PASS')
+        .map((a) => `${a.id}: ${(a.checks || []).filter((c) => !c.passed).map((c) => c.name).join('; ')}`);
+      assert.fail(`11-Agent Audit failed: ${failed.join(' | ')}`);
+    }
     assert.equal(auditJson.passed, true);
   } finally {
     await new Promise((resolve) => app.server.close(resolve));
