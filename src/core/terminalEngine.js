@@ -1326,21 +1326,44 @@ class TerminalEngine {
     if (sub === 'describe') {
       return this.kubectlDescribe(subArgs, flags);
     }
+    if (sub === 'kustomize') {
+      if (this.multiCli) {
+        const kRes = this.multiCli.handleKustomize({ argv: ['kustomize', 'build', ...(subArgs.length > 0 ? subArgs : ['.'])], cwd: this.cwd, vfs: this.vfs });
+        return {
+          exitCode: kRes.code !== undefined ? kRes.code : 0,
+          output: (kRes.stdout || kRes.stderr || '').replace(/\n$/, '')
+        };
+      }
+    }
     if (sub === 'apply') {
       let manifestText = options.manifestText || '';
       const fIdx = (args || []).indexOf('-f');
       if (fIdx > -1 && args[fIdx + 1] && args[fIdx + 1] !== '-') {
-        const filePath = args[fIdx + 1];
+        const filePath = this.vfs ? this.vfs.normalizePath(args[fIdx + 1], this.cwd) : args[fIdx + 1];
         if (this.vfs && this.vfs.exists(filePath)) {
           manifestText = this.vfs.readFile(filePath);
+        }
+      }
+      let kIdx = (args || []).indexOf('-k');
+      if (kIdx === -1) kIdx = (args || []).indexOf('--kustomize');
+      if (kIdx > -1 && args[kIdx + 1]) {
+        const rawKustDir = args[kIdx + 1];
+        const kustDir = this.vfs ? this.vfs.normalizePath(rawKustDir, this.cwd) : rawKustDir;
+        if (this.multiCli) {
+          const kRes = this.multiCli.handleKustomize({ argv: ['kustomize', 'build', kustDir], cwd: this.cwd, vfs: this.vfs });
+          if (kRes.code === 0 && kRes.stdout) {
+            manifestText = kRes.stdout;
+          } else if (kRes.stderr) {
+            return { exitCode: 1, output: kRes.stderr.trim() };
+          }
         }
       }
       if (manifestText && manifestText.trim()) {
         const applied = this.cluster.applyManifest(manifestText);
         return {
           exitCode: 0,
-          output: applied
-            .map((a) => `${a.resource.kind.toLowerCase()}/${a.resource.metadata.name} ${a.action}`)
+          output: (applied || [])
+            .map((a) => `${(a.resource ? a.resource.kind : a.kind || 'resource').toLowerCase()}/${(a.resource ? a.resource.metadata.name : a.name || 'item')} ${a.action || 'configured'}`)
             .join('\n')
         };
       }

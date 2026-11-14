@@ -733,6 +733,7 @@
     'docker-containers': '🐳',
     'container-runtime-cri': '📦',
     'helm-packaging': '📦',
+    'kustomize-manifests': '🧩',
     'containers-runtime': '🐳',
     'cloud-networking': '🌐',
     'cncf-packaging': '📦',

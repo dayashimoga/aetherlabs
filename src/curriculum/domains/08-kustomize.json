@@ -1,0 +1,262 @@
+{
+  "id": "kustomize-manifests",
+  "title": "Kustomize Declarative Configuration Management",
+  "category": "Containers & Packaging",
+  "trackId": "track-k8s-admin",
+  "version": "1.0.0",
+  "difficulty": "Intermediate",
+  "estimatedHours": 6,
+  "summary": "Master template-free Kubernetes configuration management using Kustomize, base and multi-environment overlays, strategic merge patches, JSON 6902 patches, and configMapGenerator hash suffixes.",
+  "prerequisites": [
+    "helm-packaging",
+    "docker-containers"
+  ],
+  "learningObjectives": [
+    "Design clean Base and Multi-Environment Overlay directory structures to maintain DRY Kubernetes manifests.",
+    "Apply Strategic Merge Patches and JSON 6902 Patches to customize replicas, resources, and environment variables across environments.",
+    "Leverage configMapGenerator and secretGenerator with content-hashed suffixes to drive automated zero-downtime rolling updates."
+  ],
+  "curriculumModules": [
+    {
+      "id": "mod-kust-01",
+      "title": "Kustomize Philosophy, Base & Overlay Composition",
+      "conceptSummary": "Kustomize introduces template-free configuration customization natively integrated into kubectl (-k). The base layer contains pure, valid Kubernetes manifests representing standard infrastructure. Overlays reference the base (resources: [../../base]) and apply environment-specific transforms such as namePrefix, namespace, commonLabels, and replica overrides.",
+      "productionArchitecturePattern": "Maintain a canonical base/ directory per microservice with overlays/staging/ and overlays/production/ managed via GitOps repositories to eliminate template syntax errors and YAML drift.",
+      "keyCommands": [
+        "kustomize build overlays/production",
+        "kubectl apply -k overlays/production",
+        "kubectl kustomize overlays/staging"
+      ]
+    },
+    {
+      "id": "mod-kust-02",
+      "title": "Strategic Merge Patches & JSON 6902 Transformations",
+      "conceptSummary": "Kustomize offers two patching mechanisms: Strategic Merge Patches (SMP), which merge partial YAML snippets using Kubernetes schema merge keys, and RFC 6902 JSON Patches, which perform explicit operations (add, replace, remove) targeted at specific JSONPointer paths (/spec/replicas).",
+      "productionArchitecturePattern": "Use Strategic Merge Patches for clean additions of environment variables or resource limits, and use JSON 6902 patches when targeting specific items in unkeyed arrays.",
+      "keyCommands": [
+        "kustomize edit set namespace production",
+        "kustomize edit set image api=app:v2.0",
+        "kustomize build overlays/production"
+      ]
+    },
+    {
+      "id": "mod-kust-03",
+      "title": "ConfigMap / Secret Generators & Rollout Synchronization",
+      "conceptSummary": "configMapGenerator and secretGenerator generate resources from files or literals and append a deterministic 10-character content hash to their names. When configuration changes, the hash changes, updating the PodTemplateSpec and triggering an automatic Kubernetes rolling update without manual pod deletion.",
+      "productionArchitecturePattern": "Never deploy static ConfigMap names without versioning; leverage Kustomize generators to guarantee that configuration updates trigger immediate, zero-downtime rollouts.",
+      "keyCommands": [
+        "kustomize build .",
+        "kubectl apply -k .",
+        "kubectl get configmaps -l app.kubernetes.io/name"
+      ]
+    }
+  ],
+  "labs": [
+    {
+      "id": "lab-kust-01-overlays-patching",
+      "title": "Multi-Environment Overlay Architecture & Strategic Merge Patches",
+      "difficulty": "Intermediate",
+      "durationMinutes": 20,
+      "xpReward": 150,
+      "scenario": "A payments microservice needs separate configurations for staging and production without template duplication. Create a base directory with deployment and service manifests, construct a production overlay that applies namePrefix, namespace 'production', commonLabels, and a strategic merge patch setting replicas to 3, and deploy using kubectl apply -k.",
+      "productionContext": "Kustomize overlays allow platform teams to promote workloads across dev, staging, and production clusters with strict GitOps traceability and zero template engine overhead.",
+      "prerequisites": [
+        "lab-helm-01-chart-templating"
+      ],
+      "objectives": [
+        "Create base Kubernetes manifests and base kustomization.yaml",
+        "Construct production overlay with namespace, namePrefix, and replica patch",
+        "Render composite manifests using kustomize build overlays/production",
+        "Deploy the production overlay with kubectl apply -k overlays/production"
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Scaffold Base Infrastructure",
+          "instruction": "Create directory `base/` with `deployment.yaml` and `kustomization.yaml`.",
+          "commandHint": "mkdir -p base && echo -e \"apiVersion: apps/v1\\nkind: Deployment\\nmetadata:\\n  name: payments-api\\nspec:\\n  replicas: 1\\n  selector:\\n    matchLabels:\\n      app: payments-api\\n  template:\\n    metadata:\\n      labels:\\n        app: payments-api\\n    spec:\\n      containers:\\n      - name: api\\n        image: nginx:1.27-alpine\" > base/deployment.yaml && echo -e \"resources:\\n- deployment.yaml\" > base/kustomization.yaml"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Create Production Overlay with Strategic Patch",
+          "instruction": "Create `overlays/production/` with a patch scaling replicas to 3 and setting namespace to `production`.",
+          "commandHint": "mkdir -p overlays/production && echo -e \"resources:\\n- ../../base\\nnamespace: production\\nnamePrefix: prod-\\ncommonLabels:\\n  env: production\\npatchesStrategicMerge:\\n- patch-replicas.yaml\" > overlays/production/kustomization.yaml && echo -e \"apiVersion: apps/v1\\nkind: Deployment\\nmetadata:\\n  name: payments-api\\nspec:\\n  replicas: 3\" > overlays/production/patch-replicas.yaml"
+        },
+        {
+          "stepNumber": 3,
+          "title": "Build and Inspect Rendered Output",
+          "instruction": "Render the composite production manifests using `kustomize build overlays/production`.",
+          "commandHint": "kustomize build overlays/production"
+        },
+        {
+          "stepNumber": 4,
+          "title": "Apply Overlay to Cluster",
+          "instruction": "Deploy the rendered production workload using `kubectl apply -k overlays/production`.",
+          "commandHint": "kubectl apply -k overlays/production"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "val-kust-build-01",
+          "description": "Rendered production overlay manifests via kustomize build",
+          "type": "command_executed",
+          "commandSubstring": "kustomize build overlays/production",
+          "remediation": "Run 'kustomize build overlays/production' to verify output YAML."
+        },
+        {
+          "id": "val-kust-apply-02",
+          "description": "Applied production overlay to cluster via kubectl apply -k",
+          "type": "command_executed",
+          "commandSubstring": "kubectl apply -k overlays/production",
+          "remediation": "Run 'kubectl apply -k overlays/production' to deploy manifests."
+        },
+        {
+          "id": "val-kust-dep-exists",
+          "description": "Deployed prod-payments-api Deployment in production namespace",
+          "type": "resource_exists",
+          "kind": "Deployment",
+          "name": "prod-payments-api",
+          "namespace": "production",
+          "remediation": "Ensure prod-payments-api Deployment exists in production namespace."
+        },
+        {
+          "id": "val-kust-replicas-03",
+          "description": "Verified production strategic merge patch scaled replicas to 3",
+          "type": "resource_field_equals",
+          "kind": "Deployment",
+          "name": "prod-payments-api",
+          "namespace": "production",
+          "fieldPath": "spec.replicas",
+          "expectedValue": 3,
+          "remediation": "Ensure patch-replicas.yaml sets spec.replicas to 3."
+        }
+      ],
+      "solutionCommands": [
+        "mkdir -p base && echo -e \"apiVersion: apps/v1\\nkind: Deployment\\nmetadata:\\n  name: payments-api\\nspec:\\n  replicas: 1\\n  selector:\\n    matchLabels:\\n      app: payments-api\\n  template:\\n    metadata:\\n      labels:\\n        app: payments-api\\n    spec:\\n      containers:\\n      - name: api\\n        image: nginx:1.27-alpine\" > base/deployment.yaml && echo -e \"resources:\\n- deployment.yaml\" > base/kustomization.yaml",
+        "mkdir -p overlays/production && echo -e \"resources:\\n- ../../base\\nnamespace: production\\nnamePrefix: prod-\\ncommonLabels:\\n  env: production\\npatchesStrategicMerge:\\n- patch-replicas.yaml\" > overlays/production/kustomization.yaml && echo -e \"apiVersion: apps/v1\\nkind: Deployment\\nmetadata:\\n  name: payments-api\\nspec:\\n  replicas: 3\" > overlays/production/patch-replicas.yaml",
+        "kustomize build overlays/production",
+        "kubectl apply -k overlays/production"
+      ],
+      "troubleshootingGuide": "Ensure base/ and overlays/production/ are created with patch-replicas.yaml scaling replicas to 3, and deploy with kubectl apply -k overlays/production."
+    },
+    {
+      "id": "lab-kust-02-generators-jsonpatch",
+      "title": "ConfigMap Generators, Secret Generators & Rollout Synchronization",
+      "difficulty": "Intermediate",
+      "durationMinutes": 20,
+      "xpReward": 150,
+      "scenario": "To prevent stale configuration bugs, application configuration must be injected via Kustomize configMapGenerator and secretGenerator. Create a kustomization file defining configMapGenerator for 'api-config' with environment variables and secretGenerator for 'api-secrets', build with kustomize, and apply with kubectl apply -k.",
+      "productionContext": "Generated ConfigMaps with SHA-256 hash suffixes prevent race conditions during updates and guarantee that pods always bind to the exact configuration version they were deployed with.",
+      "prerequisites": [
+        "lab-kust-01-overlays-patching"
+      ],
+      "objectives": [
+        "Create kustomization with configMapGenerator and secretGenerator",
+        "Inspect generated content-hash resource names with kustomize build",
+        "Apply generators to cluster using kubectl apply -k .",
+        "Verify ConfigMap with content-hash suffix is created in cluster"
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Configure ConfigMap and Secret Generators",
+          "instruction": "Create `kustomization.yaml` defining `configMapGenerator` and `secretGenerator` with literals.",
+          "commandHint": "echo -e \"apiVersion: kustomize.config.k8s.io/v1beta1\\nkind: Kustomization\\nconfigMapGenerator:\\n- name: api-config\\n  literals:\\n  - ENV=production\\n  - LOG_LEVEL=info\\nsecretGenerator:\\n- name: api-secrets\\n  literals:\\n  - DB_PASSWORD=SuperSecretPass123!\" > kustomization.yaml"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Render Generated Manifests with Content Hashes",
+          "instruction": "Verify that `api-config` and `api-secrets` receive unique 10-character hash suffixes using `kustomize build .`.",
+          "commandHint": "kustomize build ."
+        },
+        {
+          "stepNumber": 3,
+          "title": "Deploy Generated Resources",
+          "instruction": "Apply the generated configuration to the cluster with `kubectl apply -k .`.",
+          "commandHint": "kubectl apply -k ."
+        },
+        {
+          "stepNumber": 4,
+          "title": "Inspect ConfigMap in Cluster",
+          "instruction": "Verify the generated ConfigMap exists using `kubectl get configmap api-config-7m8f9b2c4k`.",
+          "commandHint": "kubectl get configmap api-config-7m8f9b2c4k"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "val-kust-build-gen",
+          "description": "Rendered content-hashed ConfigMap and Secret via kustomize build",
+          "type": "command_executed",
+          "commandSubstring": "kustomize build",
+          "remediation": "Run 'kustomize build .' to generate hashed manifests."
+        },
+        {
+          "id": "val-kust-apply-gen",
+          "description": "Applied generated resources to cluster via kubectl apply -k",
+          "type": "command_executed",
+          "commandSubstring": "kubectl apply -k",
+          "remediation": "Run 'kubectl apply -k .' to create the generated resources."
+        },
+        {
+          "id": "val-kust-cm-exists",
+          "description": "Verified content-hashed ConfigMap api-config-7m8f9b2c4k exists in cluster",
+          "type": "resource_exists",
+          "kind": "ConfigMap",
+          "name": "api-config-7m8f9b2c4k",
+          "namespace": "default",
+          "remediation": "Ensure configMapGenerator creates api-config-7m8f9b2c4k."
+        },
+        {
+          "id": "val-kust-sec-exists",
+          "description": "Verified content-hashed Secret api-secrets-4d9a1b2e3f exists in cluster",
+          "type": "resource_exists",
+          "kind": "Secret",
+          "name": "api-secrets-4d9a1b2e3f",
+          "namespace": "default",
+          "remediation": "Ensure secretGenerator creates api-secrets-4d9a1b2e3f."
+        }
+      ],
+      "solutionCommands": [
+        "echo -e \"apiVersion: kustomize.config.k8s.io/v1beta1\\nkind: Kustomization\\nconfigMapGenerator:\\n- name: api-config\\n  literals:\\n  - ENV=production\\n  - LOG_LEVEL=info\\nsecretGenerator:\\n- name: api-secrets\\n  literals:\\n  - DB_PASSWORD=SuperSecretPass123!\" > kustomization.yaml",
+        "kustomize build .",
+        "kubectl apply -k .",
+        "kubectl get configmap api-config-7m8f9b2c4k"
+      ],
+      "troubleshootingGuide": "Ensure you configure configMapGenerator and secretGenerator, render with kustomize build ., and deploy with kubectl apply -k .."
+    }
+  ],
+  "assessmentQuestions": [
+    {
+      "id": "q-kust-01",
+      "question": "How does Kustomize configMapGenerator solve the problem of pods failing to reload modified ConfigMap contents?",
+      "options": [
+        "(Recommended) It appends a content hash suffix to the ConfigMap name and updates referencing Pod templates, triggering an automatic Kubernetes rolling restart upon configuration changes.",
+        "It establishes an in-memory gRPC watcher that hot-reloads running application memory.",
+        "It forces the kubelet daemon to execute a hard node reboot.",
+        "It automatically writes configuration updates directly into the host /etc/kubernetes/manifests folder."
+      ],
+      "correctIndex": 0,
+      "explanation": "Because Kubernetes Deployments only trigger a rolling update when the PodTemplateSpec changes, appending a deterministic content-hash suffix to generated ConfigMaps (e.g. app-config-7m8f9b2c4k) guarantees that any change in data changes the Pod spec name, triggering an atomic zero-downtime rollout."
+    },
+    {
+      "id": "q-kust-02",
+      "question": "In Kustomize overlay composition, what is the key difference between a Strategic Merge Patch and a JSON 6902 patch?",
+      "options": [
+        "(Recommended) Strategic Merge Patches use standard Kubernetes YAML schema keys to merge maps and lists, whereas JSON 6902 patches specify exact operations (add, replace, remove) targeted by JSONPointer paths.",
+        "JSON 6902 patches can only be applied to Secrets, while Strategic Merge Patches only work on Services.",
+        "Strategic Merge Patches require an external Helm Tiller server to execute.",
+        "JSON 6902 patches recompile the entire Linux kernel inside the target container."
+      ],
+      "correctIndex": 0,
+      "explanation": "Strategic Merge Patching relies on Kubernetes API schema semantics (like patchStrategy and patchMergeKey on lists) to merge partial YAML manifests. In contrast, RFC 6902 JSON Patching provides imperative array-based operations (add, remove, replace, move, copy, test) targeting precise JSONPointer paths."
+    }
+  ]
+}

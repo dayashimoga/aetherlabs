@@ -759,6 +759,7 @@ class MultiCliDispatcher {
     let outputFormat = null;
     let selector = null;
     let filename = null;
+    let kustomizeDir = null;
     let replicas = null;
     let dryRun = false;
     let force = false;
@@ -784,6 +785,10 @@ class MultiCliDispatcher {
         filename = argv[++i];
       } else if (a.startsWith('-f=')) {
         filename = a.slice(3);
+      } else if (a === '-k' || a === '--kustomize') {
+        kustomizeDir = argv[++i];
+      } else if (a.startsWith('-k=')) {
+        kustomizeDir = a.slice(3);
       } else if (a.startsWith('--replicas=')) {
         replicas = parseInt(a.split('=')[1], 10);
       } else if (a === '--replicas') {
@@ -803,7 +808,9 @@ class MultiCliDispatcher {
       case 'describe':
         return this._kubectlDescribe({ restArgs, namespace });
       case 'apply':
-        return this._kubectlApply({ filename, stdin, vfs, cwd, dryRun });
+        return this._kubectlApply({ filename, kustomizeDir, stdin, vfs, cwd, dryRun });
+      case 'kustomize':
+        return this.handleKustomize({ argv: ['kustomize', 'build', ...(restArgs.length > 0 ? restArgs : ['.'])], cwd, vfs });
       case 'replace':
         return this._kubectlReplace({ restArgs, namespace, filename, stdin, vfs, cwd, force });
       case 'create':
@@ -1244,9 +1251,13 @@ class MultiCliDispatcher {
     return { stdout: out + '\n', stderr: '', code: 0 };
   }
 
-  _kubectlApply({ filename, stdin, vfs, cwd, dryRun }) {
+  _kubectlApply({ filename, kustomizeDir, stdin, vfs, cwd, dryRun }) {
     let manifestContent = '';
-    if (filename === '-' || (!filename && stdin)) {
+    if (kustomizeDir) {
+      const kRes = this.handleKustomize({ argv: ['kustomize', 'build', kustomizeDir], cwd, vfs });
+      if (kRes.code !== 0) return kRes;
+      manifestContent = kRes.stdout;
+    } else if (filename === '-' || (!filename && stdin)) {
       manifestContent = stdin;
     } else if (filename) {
       if (!vfs) return { stdout: '', stderr: `Error: VFS not accessible to read ${filename}\n`, code: 1 };
@@ -3114,14 +3125,34 @@ spec:
 
       for (const resPath of resources) {
         const resFullPath = resPath.startsWith('/') ? resPath : `${absDir}/${resPath}`.replace(/\/+/g, '/');
+        let docs = [];
         if (fs.exists(resFullPath)) {
-          const resRaw = fs.readFile(resFullPath);
-          let docs = [];
-          try {
-            docs = yamlParser.parseAllYaml ? yamlParser.parseAllYaml(resRaw) : [yamlParser.parseYaml(resRaw)];
-          } catch {
-            docs = [];
+          let isDirKust = false;
+          for (const cand of ['kustomization.yaml', 'kustomization.yml', 'Kustomization']) {
+            if (fs.exists(`${resFullPath}/${cand}`)) {
+              isDirKust = true;
+              break;
+            }
           }
+          if (isDirKust) {
+            const subBuild = this.handleKustomize({ argv: ['kustomize', 'build', resFullPath], cwd, vfs: fs });
+            if (subBuild.code === 0 && subBuild.stdout) {
+              try {
+                const subDocs = yamlParser.parseAllYaml ? yamlParser.parseAllYaml(subBuild.stdout) : [yamlParser.parseYaml(subBuild.stdout)];
+                for (const sd of subDocs) {
+                  if (sd && typeof sd === 'object') docs.push(sd);
+                }
+              } catch {}
+            }
+          } else {
+            const resRaw = fs.readFile(resFullPath);
+            try {
+              docs = yamlParser.parseAllYaml ? yamlParser.parseAllYaml(resRaw) : [yamlParser.parseYaml(resRaw)];
+            } catch {
+              docs = [];
+            }
+          }
+
           for (const doc of docs) {
             if (!doc || typeof doc !== 'object') continue;
             // Apply namespace
@@ -3169,6 +3200,104 @@ spec:
             }
             outputDocs.push(doc);
           }
+        }
+      }
+
+      // Process strategic merge patches
+      const patches = parsedKust.patchesStrategicMerge || parsedKust.patches || [];
+      for (const p of patches) {
+        let patchDoc = null;
+        if (typeof p === 'string') {
+          const pPath = p.startsWith('/') ? p : `${absDir}/${p}`.replace(/\/+/g, '/');
+          if (fs.exists(pPath)) {
+            try {
+              patchDoc = yamlParser.parseYaml(fs.readFile(pPath));
+            } catch {}
+          }
+        } else if (typeof p === 'object' && p.patch) {
+          try {
+            patchDoc = yamlParser.parseYaml(p.patch);
+          } catch {}
+        } else if (typeof p === 'object' && p.path) {
+          const pPath = p.path.startsWith('/') ? p.path : `${absDir}/${p.path}`.replace(/\/+/g, '/');
+          if (fs.exists(pPath)) {
+            try {
+              patchDoc = yamlParser.parseYaml(fs.readFile(pPath));
+            } catch {}
+          }
+        }
+
+        if (patchDoc && patchDoc.kind && patchDoc.metadata?.name) {
+          const target = outputDocs.find((d) => d.kind === patchDoc.kind && d.metadata?.name?.endsWith(patchDoc.metadata.name));
+          if (target) {
+            if (patchDoc.spec?.replicas !== undefined) {
+              target.spec = target.spec || {};
+              target.spec.replicas = patchDoc.spec.replicas;
+            }
+            if (patchDoc.spec?.template?.spec?.containers) {
+              target.spec.template = target.spec.template || {};
+              target.spec.template.spec = target.spec.template.spec || {};
+              target.spec.template.spec.containers = target.spec.template.spec.containers || [];
+              for (const pc of patchDoc.spec.template.spec.containers) {
+                const tc = target.spec.template.spec.containers.find((c) => c.name === pc.name) || target.spec.template.spec.containers[0];
+                if (tc) {
+                  if (pc.resources) tc.resources = pc.resources;
+                  if (pc.env) tc.env = [...(tc.env || []), ...pc.env];
+                }
+              }
+            }
+          }
+        }
+      }
+
+      // Process configMapGenerator
+      if (Array.isArray(parsedKust.configMapGenerator)) {
+        for (const gen of parsedKust.configMapGenerator) {
+          const data = {};
+          if (Array.isArray(gen.literals)) {
+            for (const lit of gen.literals) {
+              const [k, ...v] = lit.split('=');
+              if (k) data[k] = v.join('=');
+            }
+          }
+          const hash = '7m8f9b2c4k';
+          const cmName = `${parsedKust.namePrefix || ''}${gen.name}-${hash}${parsedKust.nameSuffix || ''}`;
+          outputDocs.push({
+            apiVersion: 'v1',
+            kind: 'ConfigMap',
+            metadata: {
+              name: cmName,
+              namespace: parsedKust.namespace || 'default',
+              labels: parsedKust.commonLabels || {}
+            },
+            data
+          });
+        }
+      }
+
+      // Process secretGenerator
+      if (Array.isArray(parsedKust.secretGenerator)) {
+        for (const gen of parsedKust.secretGenerator) {
+          const data = {};
+          if (Array.isArray(gen.literals)) {
+            for (const lit of gen.literals) {
+              const [k, ...v] = lit.split('=');
+              if (k) data[k] = Buffer.from(v.join('=')).toString('base64');
+            }
+          }
+          const hash = '4d9a1b2e3f';
+          const secName = `${parsedKust.namePrefix || ''}${gen.name}-${hash}${parsedKust.nameSuffix || ''}`;
+          outputDocs.push({
+            apiVersion: 'v1',
+            kind: 'Secret',
+            type: 'Opaque',
+            metadata: {
+              name: secName,
+              namespace: parsedKust.namespace || 'default',
+              labels: parsedKust.commonLabels || {}
+            },
+            data
+          });
         }
       }
 
@@ -6806,17 +6935,29 @@ spec:
 
   handleEcho({ argv = [] }) {
     let noNewline = false;
+    let interpretEscapes = false;
     const parts = [];
 
-    for (let i = 1; i < argv.length; i++) {
-      if (argv[i] === '-n' && i === 1) {
-        noNewline = true;
+    let startIndex = 1;
+    while (startIndex < argv.length && argv[startIndex].startsWith('-') && argv[startIndex].length > 1) {
+      const flag = argv[startIndex];
+      if (/^-[neE]+$/.test(flag)) {
+        if (flag.includes('n')) noNewline = true;
+        if (flag.includes('e')) interpretEscapes = true;
+        startIndex++;
       } else {
-        parts.push(argv[i].replace(/^['"]|['"]$/g, ''));
+        break;
       }
     }
 
-    const out = parts.join(' ');
+    for (let i = startIndex; i < argv.length; i++) {
+      parts.push(argv[i].replace(/^['"]|['"]$/g, ''));
+    }
+
+    let out = parts.join(' ');
+    if (interpretEscapes) {
+      out = out.replace(/\\n/g, '\n').replace(/\\t/g, '\t');
+    }
     return { stdout: noNewline ? out : out + '\n', stderr: '', code: 0 };
   }
 
