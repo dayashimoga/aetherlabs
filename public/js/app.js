@@ -729,6 +729,7 @@
     'linux-fundamentals': '🐧',
     'linux-admin': '⚙️',
     'networking-fundamentals': '🌐',
+    'git-fundamentals': '🐙',
     'containers-runtime': '🐳',
     'cloud-networking': '🌐',
     'cncf-packaging': '📦',

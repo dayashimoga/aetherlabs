@@ -119,6 +119,20 @@ class GitEngine {
         return this.handleTag(subArgs, { vfs, cwd });
       case 'rebase':
         return this.handleRebase(subArgs, { vfs, cwd });
+      case 'cherry-pick':
+        return this.handleCherryPick(subArgs, { vfs, cwd });
+      case 'bisect':
+        return this.handleBisect(subArgs, { vfs, cwd });
+      case 'reflog':
+        return this.handleReflog(subArgs, { vfs, cwd });
+      case 'hash-object':
+        return this.handleHashObject(subArgs, { vfs, cwd });
+      case 'cat-file':
+        return this.handleCatFile(subArgs, { vfs, cwd });
+      case 'rev-parse':
+        return this.handleRevParse(subArgs, { vfs, cwd });
+      case 'config':
+        return this.handleConfig(subArgs, { vfs, cwd });
       case 'remote':
         return this.handleRemote(subArgs, { vfs, cwd });
       case 'show':
@@ -172,6 +186,13 @@ class GitEngine {
       tags: new Map(), // tagName -> commitHash
       remotes: new Map(), // name -> url
       index: new Map(), // relativePath -> { content, hash, staged: true }
+      objects: new Map(), // hash -> { type, content }
+      reflog: [], // [{ hash, shortHash, action }]
+      bisect: null,
+      config: new Map([
+        ['user.name', 'Learner'],
+        ['user.email', 'learner@kubelabs.local']
+      ]),
       headCommit: null
     };
     this.repos.set(rootPath, repo);
@@ -560,6 +581,16 @@ resources:
     }
     repo.branches.get(branch).push(commit);
     repo.headCommit = commit;
+    if (repo.objects) {
+      repo.objects.set(commitHash, { type: 'commit', content: commit });
+      repo.objects.set(commit.tree, { type: 'tree', content: commitFiles });
+    }
+    if (!repo.reflog) repo.reflog = [];
+    repo.reflog.unshift({
+      hash: commitHash,
+      shortHash,
+      action: `commit: ${message}`
+    });
 
     const rootTag = !parentCommit ? ' (root-commit)' : '';
     const fileCount = stagedEntries.length;
@@ -712,7 +743,14 @@ resources:
       }
       const currentCommits = repo.branches.get(repo.currentBranch) || [];
       repo.branches.set(branchName, [...currentCommits]);
+      const oldBranch = repo.currentBranch;
       repo.currentBranch = branchName;
+      if (!repo.reflog) repo.reflog = [];
+      repo.reflog.unshift({
+        hash: repo.headCommit ? repo.headCommit.hash : '0000000',
+        shortHash: repo.headCommit ? repo.headCommit.shortHash : '0000000',
+        action: `checkout: moving from ${oldBranch} to ${branchName}`
+      });
       return {
         stdout: `Switched to a new branch '${branchName}'\n`,
         stderr: '',
@@ -721,6 +759,7 @@ resources:
     }
 
     if (repo.branches.has(branchName)) {
+      const oldBranch = repo.currentBranch;
       repo.currentBranch = branchName;
       const commits = repo.branches.get(branchName);
       repo.headCommit = commits && commits.length > 0 ? commits[commits.length - 1] : null;
@@ -731,6 +770,13 @@ resources:
           vfs.writeFile(vfs.normalizePath(fname, root), content);
         }
       }
+
+      if (!repo.reflog) repo.reflog = [];
+      repo.reflog.unshift({
+        hash: repo.headCommit ? repo.headCommit.hash : '0000000',
+        shortHash: repo.headCommit ? repo.headCommit.shortHash : '0000000',
+        action: `checkout: moving from ${oldBranch} to ${branchName}`
+      });
 
       return {
         stdout: `Switched to branch '${branchName}'\n`,
@@ -868,13 +914,18 @@ resources:
       return { stdout: '', stderr: 'fatal: not a git repository (or any of the parent directories): .git\n', code: 128 };
     }
 
-    const targetBranch = args.find((a) => !a.startsWith('-'));
-    if (!targetBranch) {
-      return { stdout: '', stderr: 'fatal: branch name required for rebase\n', code: 1 };
-    }
+    const repo = this._getOrCreateRepo(root, vfs);
+    const targetBranch = args.find((a) => !a.startsWith('-')) || 'main';
+
+    if (!repo.reflog) repo.reflog = [];
+    repo.reflog.unshift({
+      hash: repo.headCommit ? repo.headCommit.hash : '0000000',
+      shortHash: repo.headCommit ? repo.headCommit.shortHash : '0000000',
+      action: `rebase (finish): returning to refs/heads/${repo.currentBranch}`
+    });
 
     return {
-      stdout: `Successfully rebased and updated refs/heads/${this._getOrCreateRepo(root, vfs).currentBranch}.\n`,
+      stdout: `Successfully rebased and updated refs/heads/${repo.currentBranch}.\n`,
       stderr: '',
       code: 0
     };
@@ -977,6 +1028,350 @@ resources:
     }
 
     return { stdout: '', stderr: '', code: 0 };
+  }
+
+  // -------------------------------------------------------------------------
+  // 17. GIT HASH-OBJECT
+  // -------------------------------------------------------------------------
+
+  handleHashObject(args, { vfs, cwd }) {
+    const writeFlag = args.includes('-w');
+    const targetFile = args.find((a) => !a.startsWith('-'));
+    let content = '';
+
+    if (targetFile && vfs) {
+      const fullPath = vfs.normalizePath(targetFile, cwd);
+      try {
+        content = vfs.readFile(fullPath);
+      } catch (err) {
+        return { stdout: '', stderr: `fatal: Cannot open '${targetFile}': ${err.message}\n`, code: 128 };
+      }
+    } else if (targetFile) {
+      content = 'sample blob content';
+    }
+
+    const header = `blob ${Buffer.byteLength ? Buffer.byteLength(content) : content.length}\0`;
+    const hash = sha1(header + content);
+
+    const root = this._findGitRoot(cwd, vfs);
+    if (root) {
+      const repo = this._getOrCreateRepo(root, vfs);
+      repo.objects.set(hash, { type: 'blob', content });
+      if (writeFlag && vfs) {
+        const objDir = vfs.normalizePath(`.git/objects/${hash.slice(0, 2)}`, root);
+        try {
+          vfs.mkdir(objDir, { recursive: true });
+          vfs.writeFile(vfs.normalizePath(hash.slice(2), objDir), content);
+        } catch {
+          // ignore
+        }
+      }
+    }
+
+    return { stdout: `${hash}\n`, stderr: '', code: 0 };
+  }
+
+  // -------------------------------------------------------------------------
+  // 18. GIT CAT-FILE
+  // -------------------------------------------------------------------------
+
+  handleCatFile(args, { vfs, cwd }) {
+    const root = this._findGitRoot(cwd, vfs);
+    if (!root) {
+      return { stdout: '', stderr: 'fatal: not a git repository (or any of the parent directories): .git\n', code: 128 };
+    }
+    const repo = this._getOrCreateRepo(root, vfs);
+
+    const typeFlag = args.includes('-t');
+    const sizeFlag = args.includes('-s');
+    const target = args.find((a) => !a.startsWith('-'));
+
+    if (!target) {
+      return { stdout: '', stderr: 'fatal: git cat-file: missing object identifier\n', code: 128 };
+    }
+
+    let objType = 'blob';
+    let content = '';
+
+    if (target === 'HEAD') {
+      const commit = repo.headCommit;
+      if (!commit) {
+        return { stdout: '', stderr: 'fatal: Not a valid object name HEAD\n', code: 128 };
+      }
+      objType = 'commit';
+      const treeLine = `tree ${commit.tree}`;
+      const parentLine = commit.parent ? `parent ${commit.parent}\n` : '';
+      const authorLine = `author ${commit.author} ${Math.floor(Date.now() / 1000)} +0000`;
+      const committerLine = `committer ${commit.author} ${Math.floor(Date.now() / 1000)} +0000`;
+      content = `${treeLine}\n${parentLine}${authorLine}\n${committerLine}\n\n${commit.message}\n`;
+    } else if (repo.branches.has(target)) {
+      const commits = repo.branches.get(target);
+      const commit = commits[commits.length - 1];
+      objType = 'commit';
+      content = `tree ${commit.tree}\nauthor ${commit.author}\n\n${commit.message}\n`;
+    } else {
+      let found = false;
+      for (const [h, o] of repo.objects.entries()) {
+        if (h === target || h.startsWith(target)) {
+          found = true;
+          objType = o.type;
+          content = typeof o.content === 'string' ? o.content : JSON.stringify(o.content);
+          break;
+        }
+      }
+      if (!found) {
+        for (const commits of repo.branches.values()) {
+          const c = commits.find((com) => com.hash === target || com.hash.startsWith(target));
+          if (c) {
+            found = true;
+            objType = 'commit';
+            content = `tree ${c.tree}\nauthor ${c.author}\n\n${c.message}\n`;
+            break;
+          }
+        }
+      }
+      if (!found) {
+        objType = 'blob';
+        content = 'apiVersion: v1\nkind: Pod\n';
+      }
+    }
+
+    if (typeFlag) {
+      return { stdout: `${objType}\n`, stderr: '', code: 0 };
+    }
+    if (sizeFlag) {
+      return { stdout: `${content.length}\n`, stderr: '', code: 0 };
+    }
+    return { stdout: content.endsWith('\n') ? content : content + '\n', stderr: '', code: 0 };
+  }
+
+  // -------------------------------------------------------------------------
+  // 19. GIT REV-PARSE
+  // -------------------------------------------------------------------------
+
+  handleRevParse(args, { vfs, cwd }) {
+    const root = this._findGitRoot(cwd, vfs);
+    if (!root) {
+      return { stdout: '', stderr: 'fatal: not a git repository (or any of the parent directories): .git\n', code: 128 };
+    }
+    const repo = this._getOrCreateRepo(root, vfs);
+
+    if (args.includes('--git-dir')) {
+      return { stdout: '.git\n', stderr: '', code: 0 };
+    }
+    if (args.includes('--show-toplevel')) {
+      return { stdout: `${root}\n`, stderr: '', code: 0 };
+    }
+
+    const shortFlag = args.includes('--short');
+    const target = args.find((a) => !a.startsWith('-')) || 'HEAD';
+
+    if (target === 'HEAD') {
+      if (!repo.headCommit) {
+        return { stdout: '', stderr: 'fatal: ambiguous argument \'HEAD\': unknown revision\n', code: 128 };
+      }
+      const val = shortFlag ? repo.headCommit.shortHash : repo.headCommit.hash;
+      return { stdout: `${val}\n`, stderr: '', code: 0 };
+    }
+
+    if (repo.branches.has(target)) {
+      const commits = repo.branches.get(target);
+      const last = commits && commits.length > 0 ? commits[commits.length - 1] : null;
+      if (last) {
+        const val = shortFlag ? last.shortHash : last.hash;
+        return { stdout: `${val}\n`, stderr: '', code: 0 };
+      }
+    }
+
+    return { stdout: `${target}\n`, stderr: '', code: 0 };
+  }
+
+  // -------------------------------------------------------------------------
+  // 20. GIT REFLOG
+  // -------------------------------------------------------------------------
+
+  handleReflog(args, { vfs, cwd }) {
+    const root = this._findGitRoot(cwd, vfs);
+    if (!root) {
+      return { stdout: '', stderr: 'fatal: not a git repository (or any of the parent directories): .git\n', code: 128 };
+    }
+    const repo = this._getOrCreateRepo(root, vfs);
+    const reflog = repo.reflog || [];
+
+    if (reflog.length === 0) {
+      if (repo.headCommit) {
+        return {
+          stdout: `${repo.headCommit.shortHash} HEAD@{0}: commit: ${repo.headCommit.message}\n`,
+          stderr: '',
+          code: 0
+        };
+      }
+      return { stdout: '', stderr: '', code: 0 };
+    }
+
+    const lines = reflog.map((entry, idx) => `${entry.shortHash} HEAD@{${idx}}: ${entry.action}`);
+    return { stdout: lines.join('\n') + '\n', stderr: '', code: 0 };
+  }
+
+  // -------------------------------------------------------------------------
+  // 21. GIT CHERRY-PICK
+  // -------------------------------------------------------------------------
+
+  handleCherryPick(args, { vfs, cwd }) {
+    const root = this._findGitRoot(cwd, vfs);
+    if (!root) {
+      return { stdout: '', stderr: 'fatal: not a git repository (or any of the parent directories): .git\n', code: 128 };
+    }
+    const repo = this._getOrCreateRepo(root, vfs);
+    const branch = repo.currentBranch;
+
+    const targetRef = args.find((a) => !a.startsWith('-'));
+    if (!targetRef) {
+      return { stdout: '', stderr: 'usage: git cherry-pick <commit>...\n', code: 1 };
+    }
+
+    let srcCommit = null;
+    if (targetRef === 'HEAD') {
+      srcCommit = repo.headCommit;
+    } else if (repo.branches.has(targetRef)) {
+      const bCommits = repo.branches.get(targetRef);
+      srcCommit = bCommits && bCommits.length > 0 ? bCommits[bCommits.length - 1] : null;
+    } else {
+      for (const commits of repo.branches.values()) {
+        const found = commits.find((c) => c.hash === targetRef || c.shortHash === targetRef);
+        if (found) {
+          srcCommit = found;
+          break;
+        }
+      }
+    }
+
+    if (!srcCommit) {
+      srcCommit = {
+        hash: sha1(`cherry-pick-${targetRef}`),
+        shortHash: targetRef.slice(0, 7),
+        message: `cherry-pick ${targetRef}`,
+        files: { 'patch.yaml': 'patch: applied\n' }
+      };
+    }
+
+    const parentHash = repo.headCommit ? repo.headCommit.hash : null;
+    const newFiles = { ...(repo.headCommit?.files || {}), ...(srcCommit.files || {}) };
+    const newHash = sha1(`${parentHash}-${srcCommit.message}-cherry-${Date.now()}`);
+    const shortHash = newHash.slice(0, 7);
+
+    const newCommit = {
+      hash: newHash,
+      shortHash,
+      parent: parentHash,
+      tree: sha1(JSON.stringify(newFiles)),
+      author: this.defaultAuthor,
+      date: new Date().toUTCString(),
+      message: srcCommit.message,
+      files: newFiles
+    };
+
+    if (!repo.branches.has(branch)) repo.branches.set(branch, []);
+    repo.branches.get(branch).push(newCommit);
+    repo.headCommit = newCommit;
+    repo.objects.set(newHash, { type: 'commit', content: newCommit });
+
+    if (vfs) {
+      for (const [f, c] of Object.entries(srcCommit.files || {})) {
+        vfs.writeFile(vfs.normalizePath(f, root), c);
+      }
+    }
+
+    if (!repo.reflog) repo.reflog = [];
+    repo.reflog.unshift({
+      hash: newHash,
+      shortHash,
+      action: `cherry-pick: ${srcCommit.message}`
+    });
+
+    return {
+      stdout: `[${branch} ${shortHash}] ${srcCommit.message}\n 1 file changed, 1 insertion(+)\n`,
+      stderr: '',
+      code: 0
+    };
+  }
+
+  // -------------------------------------------------------------------------
+  // 22. GIT BISECT
+  // -------------------------------------------------------------------------
+
+  handleBisect(args, { vfs, cwd }) {
+    const root = this._findGitRoot(cwd, vfs);
+    if (!root) {
+      return { stdout: '', stderr: 'fatal: not a git repository (or any of the parent directories): .git\n', code: 128 };
+    }
+    const repo = this._getOrCreateRepo(root, vfs);
+    const sub = args[0] || 'status';
+
+    if (sub === 'start') {
+      repo.bisect = { active: true, bad: null, good: null, step: 0 };
+      return { stdout: 'status: waiting for both good and bad commits\n', stderr: '', code: 0 };
+    }
+
+    if (sub === 'bad') {
+      if (!repo.bisect) repo.bisect = { active: true, bad: null, good: null, step: 0 };
+      repo.bisect.bad = args[1] || (repo.headCommit ? repo.headCommit.shortHash : 'HEAD');
+      repo.bisect.step++;
+      return {
+        stdout: `Bisecting: 0 revisions left to test after this (roughly 1 step)\n[${repo.bisect.bad}] Current bisect revision\n`,
+        stderr: '',
+        code: 0
+      };
+    }
+
+    if (sub === 'good') {
+      if (!repo.bisect) repo.bisect = { active: true, bad: null, good: null, step: 0 };
+      repo.bisect.good = args[1] || (repo.headCommit ? repo.headCommit.shortHash : 'HEAD');
+      return {
+        stdout: 'Bisecting: 0 revisions left to test after this (roughly 0 steps)\n',
+        stderr: '',
+        code: 0
+      };
+    }
+
+    if (sub === 'reset') {
+      repo.bisect = null;
+      return {
+        stdout: `Previous HEAD position was ${repo.headCommit ? repo.headCommit.shortHash : '0f50f9a'}\nSwitched to branch '${repo.currentBranch}'\n`,
+        stderr: '',
+        code: 0
+      };
+    }
+
+    return { stdout: 'Bisect session active\n', stderr: '', code: 0 };
+  }
+
+  // -------------------------------------------------------------------------
+  // 23. GIT CONFIG
+  // -------------------------------------------------------------------------
+
+  handleConfig(args, { vfs, cwd }) {
+    const root = this._findGitRoot(cwd, vfs);
+    const repo = root ? this._getOrCreateRepo(root, vfs) : null;
+    const cleanArgs = args.filter((a) => a !== '--global' && a !== '--local' && a !== '--system');
+
+    if (cleanArgs.length === 1) {
+      const key = cleanArgs[0];
+      const val = (repo && repo.config?.get(key)) || (key === 'user.name' ? 'Learner' : key === 'user.email' ? 'learner@kubelabs.local' : '');
+      return { stdout: val ? `${val}\n` : '', stderr: '', code: 0 };
+    }
+
+    if (cleanArgs.length >= 2) {
+      const key = cleanArgs[0];
+      const val = cleanArgs.slice(1).join(' ').replace(/^["']|["']$/g, '');
+      if (repo) {
+        if (!repo.config) repo.config = new Map();
+        repo.config.set(key, val);
+      }
+      return { stdout: '', stderr: '', code: 0 };
+    }
+
+    return { stdout: 'user.name=Learner\nuser.email=learner@kubelabs.local\n', stderr: '', code: 0 };
   }
 }
 

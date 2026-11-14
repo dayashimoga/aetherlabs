@@ -1056,10 +1056,11 @@ class TerminalEngine {
       const res = this.execute(mainCmd, options);
       if (this.vfs) {
         try {
+          const targetPath = this.vfs.normalizePath(targetFile, this.cwd);
           if (op === '>>') {
-            this.vfs.appendFile(targetFile, (res.output || '') + '\n');
+            this.vfs.appendFile(targetPath, (res.output || '') + '\n');
           } else {
-            this.vfs.writeFile(targetFile, (res.output || '') + '\n');
+            this.vfs.writeFile(targetPath, (res.output || '') + '\n');
           }
         } catch (e) {
           return { exitCode: 1, output: `sh: ${e.message}`, command: trimmed };

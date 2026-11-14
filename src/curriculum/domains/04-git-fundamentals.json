@@ -1,0 +1,256 @@
+{
+  "id": "git-fundamentals",
+  "title": "Git Internals, Content-Addressable Storage, DAG & History Rewriting",
+  "category": "Foundations",
+  "trackId": "track-foundations",
+  "version": "4.0.0",
+  "difficulty": "Beginner",
+  "estimatedHours": 6,
+  "summary": "Master Git internals from content-addressable object databases (blobs, trees, commits, tags) to branch merging, cherry-picking, interactive rebasing, bisect debugging, reflog recovery, and GPG commit verification.",
+  "prerequisites": [
+    "linux-fundamentals"
+  ],
+  "learningObjectives": [
+    "Inspect Git's content-addressable object store using low-level plumbing commands (hash-object, cat-file, rev-parse).",
+    "Perform clean branch isolation, fast-forward and 3-way merges, and selective cherry-picking across release lines.",
+    "Reword, squash, and reorder commit histories using interactive rebase while auditing changes through git reflog.",
+    "Isolate regression-introducing commits using binary search bisect and sign commits with cryptographic GPG keys."
+  ],
+  "curriculumModules": [
+    {
+      "id": "mod-git-01",
+      "title": "Content-Addressable Object Database & Plumbing Commands",
+      "conceptSummary": "Git is fundamentally a content-addressable key-value store with a Directed Acyclic Graph (DAG) built on top. Objects (blobs, trees, commits, annotated tags) are compressed and addressed strictly by their SHA-1 checksum.",
+      "productionArchitecturePattern": "GitOps engines like ArgoCD and Flux compute tree hashes and commit SHAs to detect configuration drift between cluster desired state and version control repositories.",
+      "keyCommands": [
+        "git init gitops-repo",
+        "git hash-object -w pod.yaml",
+        "git cat-file -t <hash>",
+        "git cat-file -p <hash>",
+        "git rev-parse HEAD"
+      ]
+    },
+    {
+      "id": "mod-git-02",
+      "title": "Branching Strategies, Cherry-Pick, Rebase, Bisect & Reflog",
+      "conceptSummary": "Branches are lightweight 41-byte movable pointers to commits. Rebasing linearizes release history, cherry-picking ports standalone security patches, and git reflog provides a lossless safety net for HEAD pointer recovery.",
+      "productionArchitecturePattern": "Production GitOps pipelines mandate linear commit histories through trunk-based development, automated rebase merges, and signed commits verified via GPG/Cosign before cluster deployment.",
+      "keyCommands": [
+        "git branch feature/auth",
+        "git checkout feature/auth",
+        "git cherry-pick <commit>",
+        "git rebase main",
+        "git bisect start",
+        "git reflog"
+      ]
+    }
+  ],
+  "labs": [
+    {
+      "id": "lab-git-01-internals",
+      "title": "Git Plumbing: Object Database, Hashing & Tree Inspection",
+      "difficulty": "Beginner",
+      "durationMinutes": 25,
+      "xpReward": 150,
+      "scenario": "You are auditing a GitOps repository's internal integrity. You must initialize a git repository in /home/learner/gitops-repo, hash raw Kubernetes manifests into the object database using git hash-object -w, inspect object types and content using git cat-file, stage and commit the files, and verify commit references with git rev-parse.",
+      "productionContext": "Understanding Git plumbing commands allows platform engineers to debug corrupt GitOps state stores, repair broken refs, and optimize repository packfile performance.",
+      "prerequisites": [],
+      "objectives": [
+        "Initialize an empty Git repository named gitops-repo in /home/learner",
+        "Create a pod manifest and write it to the Git object database using git hash-object -w",
+        "Stage and commit the manifest to the main branch",
+        "Inspect commit tree and metadata using git cat-file and git rev-parse"
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Initialize Git Repository",
+          "instruction": "Navigate to `/home/learner` and initialize a new git repository in `gitops-repo`.",
+          "commandHint": "cd /home/learner && git init gitops-repo"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Create and Hash Manifest Object",
+          "instruction": "Create `pod.yaml` inside `gitops-repo` and write it directly into the object store with `git hash-object -w pod.yaml`.",
+          "commandHint": "cd /home/learner/gitops-repo && echo \"apiVersion: v1\" > pod.yaml && git hash-object -w pod.yaml"
+        },
+        {
+          "stepNumber": 3,
+          "title": "Stage and Commit Manifest",
+          "instruction": "Stage `pod.yaml` and record a commit with message `feat: initial pod manifest`.",
+          "commandHint": "git add pod.yaml && git commit -m \"feat: initial pod manifest\""
+        },
+        {
+          "stepNumber": 4,
+          "title": "Inspect Commit Object and References",
+          "instruction": "Verify the HEAD commit hash with `git rev-parse HEAD` and inspect the commit object with `git cat-file -p HEAD`.",
+          "commandHint": "git rev-parse HEAD && git cat-file -p HEAD"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "val-git-init-01",
+          "description": "Initialized empty Git repository for GitOps workloads",
+          "type": "command_executed",
+          "commandSubstring": "git init gitops-repo",
+          "remediation": "Run 'git init gitops-repo' to create the repository directory and object database."
+        },
+        {
+          "id": "val-git-hash-02",
+          "description": "Hashed raw manifest into Git object database with git hash-object -w",
+          "type": "command_executed",
+          "commandSubstring": "git hash-object -w pod.yaml",
+          "remediation": "Run 'git hash-object -w pod.yaml' to compute the SHA-1 object hash and store it in .git/objects/."
+        },
+        {
+          "id": "val-git-commit-03",
+          "description": "Staged and committed manifest to main branch",
+          "type": "command_executed",
+          "commandSubstring": "git commit -m",
+          "remediation": "Run 'git add pod.yaml && git commit -m \"feat: initial pod manifest\"' to commit the manifest."
+        },
+        {
+          "id": "val-git-cat-04",
+          "description": "Inspected object database structure using git cat-file -p",
+          "type": "command_executed",
+          "commandSubstring": "git cat-file -p HEAD",
+          "remediation": "Run 'git cat-file -p HEAD' to inspect the tree and metadata of the commit object."
+        }
+      ],
+      "solutionCommands": [
+        "cd /home/learner && git init gitops-repo",
+        "cd /home/learner/gitops-repo && echo \"apiVersion: v1\" > pod.yaml",
+        "git hash-object -w pod.yaml",
+        "git add pod.yaml",
+        "git commit -m \"feat: initial pod manifest\"",
+        "git rev-parse HEAD",
+        "git cat-file -p HEAD"
+      ],
+      "troubleshootingGuide": "Ensure you initialize gitops-repo, hash pod.yaml with -w, commit changes, and inspect HEAD with git cat-file -p."
+    },
+    {
+      "id": "lab-git-02-rebase-reflog-cherrypick",
+      "title": "Git Advanced Workflows: Cherry-Pick, Rebase, Bisect & Reflog Recovery",
+      "difficulty": "Beginner",
+      "durationMinutes": 25,
+      "xpReward": 150,
+      "scenario": "A critical security fix was committed to feature/auth that must be cherry-picked to main. Next, feature branches must be rebased onto main to maintain a clean linear GitOps history, regression commits must be traced using git bisect, and history movements must be audited using git reflog.",
+      "productionContext": "Advanced Git fluency is mandatory for GitOps platform teams handling hotfixes across production clusters, resolving merge conflicts, and maintaining audited change logs.",
+      "prerequisites": [
+        "lab-git-01-internals"
+      ],
+      "objectives": [
+        "Create branch feature/auth and commit an authentication fix",
+        "Cherry-pick the fix commit onto the main branch",
+        "Rebase feature branch changes onto main for linear history",
+        "Inspect HEAD movement history with git reflog and run git bisect session"
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Create Feature Branch and Commit Fix",
+          "instruction": "Initialize or navigate to `/home/learner/gitops-repo`, create branch `feature/auth`, switch to it, add `auth.yaml`, and commit with message `fix(sec): patch auth bypass`.",
+          "commandHint": "cd /home/learner && git init gitops-repo && cd gitops-repo && git branch feature/auth && git checkout feature/auth && echo \"security: hardened\" > auth.yaml && git add auth.yaml && git commit -m \"fix(sec): patch auth bypass\""
+        },
+        {
+          "stepNumber": 2,
+          "title": "Cherry-Pick Fix onto Main",
+          "instruction": "Switch back to `main` and cherry-pick the latest commit from `feature/auth`.",
+          "commandHint": "git checkout main && git cherry-pick feature/auth"
+        },
+        {
+          "stepNumber": 3,
+          "title": "Rebase onto Main",
+          "instruction": "Rebase changes onto `main` to preserve a linear history.",
+          "commandHint": "git rebase main"
+        },
+        {
+          "stepNumber": 4,
+          "title": "Audit History with Reflog and Bisect",
+          "instruction": "Inspect HEAD movements with `git reflog` and initialize a `git bisect` session.",
+          "commandHint": "git reflog && git bisect start && git bisect bad && git bisect reset"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "val-git-branch-01",
+          "description": "Created feature branch feature/auth for hotfix development",
+          "type": "command_executed",
+          "commandSubstring": "git branch feature/auth",
+          "remediation": "Run 'git branch feature/auth' to create the isolated development branch."
+        },
+        {
+          "id": "val-git-cherry-02",
+          "description": "Cherry-picked security commit onto main branch",
+          "type": "command_executed",
+          "commandSubstring": "git cherry-pick feature/auth",
+          "remediation": "Run 'git checkout main && git cherry-pick feature/auth' to graft the commit onto main."
+        },
+        {
+          "id": "val-git-rebase-03",
+          "description": "Rebased branch onto main to ensure linear GitOps history",
+          "type": "command_executed",
+          "commandSubstring": "git rebase main",
+          "remediation": "Run 'git rebase main' to replay commits onto current main branch."
+        },
+        {
+          "id": "val-git-reflog-04",
+          "description": "Audited HEAD reference movements using git reflog",
+          "type": "command_executed",
+          "commandSubstring": "git reflog",
+          "remediation": "Run 'git reflog' to inspect previous HEAD pointer history."
+        }
+      ],
+      "solutionCommands": [
+        "cd /home/learner && git init gitops-repo && cd gitops-repo",
+        "git branch feature/auth",
+        "git checkout feature/auth",
+        "echo \"security: hardened\" > auth.yaml",
+        "git add auth.yaml",
+        "git commit -m \"fix(sec): patch auth bypass\"",
+        "git checkout main",
+        "git cherry-pick feature/auth",
+        "git rebase main",
+        "git reflog",
+        "git bisect start",
+        "git bisect bad",
+        "git bisect reset"
+      ],
+      "troubleshootingGuide": "Ensure you create feature/auth, commit to it, cherry-pick to main, rebase main, and check git reflog."
+    }
+  ],
+  "assessmentQuestions": [
+    {
+      "id": "q-git-fund-01",
+      "question": "What four core immutable object types form the foundation of Git's content-addressable database in .git/objects/?",
+      "options": [
+        "blobs, trees, commits, and annotated tags",
+        "files, folders, branches, and remotes",
+        "nodes, pods, services, and ingresses",
+        "patches, diffs, indexes, and heads"
+      ],
+      "correctIndex": 0,
+      "explanation": "Git's internal object database contains four core object types: blobs (file contents), trees (directory structures with modes and filenames), commits (commit metadata with tree and parent pointers), and annotated tags (cryptographic or annotated pointers)."
+    },
+    {
+      "id": "q-git-fund-02",
+      "question": "How does `git reflog` differ from `git log` during incident recovery?",
+      "options": [
+        "`git reflog` records all local HEAD movements (including resets, rebases, and deleted commits), whereas `git log` only traverses reachable commit ancestors in the current DAG",
+        "`git reflog` requires network access to the remote server, while `git log` is strictly local",
+        "`git reflog` compresses git packfiles, whereas `git log` parses commit messages",
+        "`git reflog` only tracks changes made by the root user"
+      ],
+      "correctIndex": 0,
+      "explanation": "Git reflog (reference log) records every time HEAD changes position locally (commits, checkouts, resets, cherry-picks), enabling recovery of orphaned commits even after destructive commands like `git reset --hard`."
+    }
+  ]
+}
