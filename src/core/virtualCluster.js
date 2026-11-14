@@ -1356,6 +1356,32 @@ class VirtualCluster {
         endpoints,
         endpointCount: endpoints.length
       };
+
+      if (selectorKeys.length > 0) {
+        let epResource = this.getResource('Endpoints', svc.metadata.name, ns);
+        if (!epResource) {
+          epResource = {
+            apiVersion: 'v1',
+            kind: 'Endpoints',
+            metadata: {
+              name: svc.metadata.name,
+              namespace: ns,
+              labels: { ...(svc.metadata.labels || {}) }
+            },
+            subsets: []
+          };
+          this.state.resources.push(epResource);
+        }
+        epResource.subsets = [
+          {
+            addresses: matchingPods.map((p) => ({
+              ip: p.status.podIP,
+              targetRef: { kind: 'Pod', name: p.metadata.name, namespace: ns }
+            })),
+            ports: ports.map((p) => ({ port: p.port, name: p.name || 'http' }))
+          }
+        ];
+      }
     }
   }
 

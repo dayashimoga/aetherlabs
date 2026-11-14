@@ -1,0 +1,320 @@
+{
+  "id": "k8s-networking",
+  "title": "Kubernetes Networking: CNI, Services, Ingress & Gateway API",
+  "category": "Kubernetes & CNCF",
+  "trackId": "track-k8s-admin",
+  "version": "1.0.0",
+  "difficulty": "Intermediate",
+  "estimatedHours": 8,
+  "summary": "Master cloud-native Kubernetes networking: CNI packet encapsulation, ClusterIP, NodePort, LoadBalancer and Headless Services, CoreDNS discovery, NetworkPolicies, and Gateway API routing.",
+  "prerequisites": [
+    "kubernetes-core-v4",
+    "networking-fundamentals"
+  ],
+  "learningObjectives": [
+    "Design and configure Kubernetes service discovery mechanisms with ClusterIP, Headless Services, and CoreDNS SRV records.",
+    "Enforce zero-trust network perimeter isolation utilizing namespace-wide default-deny NetworkPolicies and fine-grained pod selector ingress rules.",
+    "Implement modern cloud-native ingress architecture utilizing Gateway API resources (GatewayClass, Gateway, HTTPRoute) alongside traditional Ingress controllers."
+  ],
+  "curriculumModules": [
+    {
+      "id": "mod-k8snet-01",
+      "title": "CNI Network Model & Pod-to-Pod Communication",
+      "conceptSummary": "The Container Network Interface (CNI) enforces that every Pod receives a unique, routable IP address across nodes without NAT. Overlay networks (VXLAN, Geneve) and routed networks (BGP, Calico, Cilium eBPF) manage encapsulation and wire-speed routing.",
+      "productionArchitecturePattern": "Deploy eBPF-based CNI (Cilium) to bypass iptables overhead at scale (10,000+ services) and enable kernel-level Socket-level load balancing (kube-proxy replacement).",
+      "keyCommands": [
+        "kubectl get nodes -o wide",
+        "kubectl get pods -n kube-system -l k8s-app=kube-dns",
+        "kubectl describe service <name>"
+      ]
+    },
+    {
+      "id": "mod-k8snet-02",
+      "title": "Service Discovery, Kube-Proxy & CoreDNS Internals",
+      "conceptSummary": "Kubernetes Services provide stable virtual IPs (ClusterIP) abstracting dynamic pod endpoints. Headless services (clusterIP: None) return direct pod A/AAAA and SRV records via CoreDNS for stateful peer discovery.",
+      "productionArchitecturePattern": "Tune CoreDNS cache plugins, autoscaling (DNS horizontal autoscaler), and configure ndots:2 in pod dnsConfig to eliminate excessive search domain lookup penalties.",
+      "keyCommands": [
+        "kubectl get svc",
+        "kubectl get endpoints",
+        "kubectl get endpointslices",
+        "kubectl get configmap coredns -n kube-system"
+      ]
+    },
+    {
+      "id": "mod-k8snet-03",
+      "title": "Zero-Trust NetworkPolicies & Modern Gateway API",
+      "conceptSummary": "NetworkPolicies operate as distributed packet filters at Layer 3/4. The modern Gateway API succeeds Ingress with role-oriented abstractions (GatewayClass for infra, Gateway for cluster ops, HTTPRoute for app developers).",
+      "productionArchitecturePattern": "Enforce a default-deny ingress and egress NetworkPolicy across all production namespaces as a baseline, whitelisting only explicit DNS (UDP 53) and verified inter-service dependencies.",
+      "keyCommands": [
+        "kubectl get networkpolicies",
+        "kubectl get gateways",
+        "kubectl get httproutes"
+      ]
+    }
+  ],
+  "labs": [
+    {
+      "id": "lab-k8snet-01-cni-services-dns",
+      "title": "Service Discovery Architecture: ClusterIP, Headless & CoreDNS Endpoints",
+      "difficulty": "Intermediate",
+      "durationMinutes": 20,
+      "xpReward": 150,
+      "scenario": "Provision a distributed cache cluster in namespace net-discovery: deploy a 2-replica cache-api deployment, expose it via a standard ClusterIP Service on port 6379, configure a headless Service cache-headless for direct pod discovery, and verify endpoint slice readiness.",
+      "productionContext": "Stateful and distributed microservices require both virtual IP load-balanced endpoints (ClusterIP) for client queries and headless DNS SRV discovery for peer clustering.",
+      "prerequisites": [
+        "lab-k8s-01-ha-deployments"
+      ],
+      "objectives": [
+        "Create namespace net-discovery for network workloads",
+        "Deploy cache-api with 2 replicas using image redis:7-alpine",
+        "Expose cache-api via ClusterIP Service on port 6379",
+        "Configure headless Service cache-headless with clusterIP None",
+        "Verify service endpoints are populated with healthy pod IPs"
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Create Discovery Namespace",
+          "instruction": "Create namespace `net-discovery` using `kubectl create namespace net-discovery`.",
+          "commandHint": "kubectl create namespace net-discovery"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Deploy Multi-Replica Cache",
+          "instruction": "Deploy `cache-api` with 2 replicas in `net-discovery`.",
+          "commandHint": "kubectl create deployment cache-api --image=redis:7-alpine -n net-discovery --replicas=2"
+        },
+        {
+          "stepNumber": 3,
+          "title": "Expose Workload via ClusterIP Service",
+          "instruction": "Expose `cache-api` on port 6379.",
+          "commandHint": "kubectl expose deployment cache-api --port=6379 --target-port=6379 -n net-discovery"
+        },
+        {
+          "stepNumber": 4,
+          "title": "Author Headless Service Manifest",
+          "instruction": "Create `/home/learner/cache-headless.yaml` with `clusterIP: None`.",
+          "commandHint": "echo -e \"...\" > /home/learner/cache-headless.yaml && kubectl apply -f /home/learner/cache-headless.yaml"
+        },
+        {
+          "stepNumber": 5,
+          "title": "Inspect Service Endpoints",
+          "instruction": "Verify that `cache-api` endpoints are populated with ready pod IPs.",
+          "commandHint": "kubectl get endpoints cache-api -n net-discovery"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "val-net-ns-discovery",
+          "description": "Created net-discovery namespace for network workloads",
+          "type": "resource_exists",
+          "kind": "Namespace",
+          "name": "net-discovery",
+          "remediation": "Run 'kubectl create namespace net-discovery'."
+        },
+        {
+          "id": "val-net-dep-cache",
+          "description": "Deployed cache-api Deployment in net-discovery namespace",
+          "type": "resource_exists",
+          "kind": "Deployment",
+          "name": "cache-api",
+          "namespace": "net-discovery",
+          "remediation": "Run 'kubectl create deployment cache-api --image=redis:7-alpine -n net-discovery --replicas=2'."
+        },
+        {
+          "id": "val-net-svc-cache",
+          "description": "Exposed cache-api via ClusterIP Service",
+          "type": "resource_exists",
+          "kind": "Service",
+          "name": "cache-api",
+          "namespace": "net-discovery",
+          "remediation": "Run 'kubectl expose deployment cache-api --port=6379 --target-port=6379 -n net-discovery'."
+        },
+        {
+          "id": "val-net-ep-ready",
+          "description": "Verified Service cache-api has at least 2 ready endpoints",
+          "type": "service_has_endpoints",
+          "name": "cache-api",
+          "namespace": "net-discovery",
+          "expectedValue": 2,
+          "remediation": "Ensure both cache-api pods are Running and matching Service selector."
+        },
+        {
+          "id": "val-net-svc-headless",
+          "description": "Configured headless Service cache-headless with clusterIP None",
+          "type": "resource_field_equals",
+          "kind": "Service",
+          "name": "cache-headless",
+          "namespace": "net-discovery",
+          "fieldPath": "spec.clusterIP",
+          "expectedValue": "None",
+          "remediation": "Apply Service cache-headless with spec.clusterIP: None."
+        }
+      ],
+      "solutionCommands": [
+        "kubectl create namespace net-discovery",
+        "kubectl create deployment cache-api --image=redis:7-alpine -n net-discovery --replicas=2",
+        "kubectl expose deployment cache-api --port=6379 --target-port=6379 -n net-discovery",
+        "echo -e \"apiVersion: v1\\nkind: Service\\nmetadata:\\n  name: cache-headless\\n  namespace: net-discovery\\nspec:\\n  clusterIP: None\\n  selector:\\n    app: cache-api\\n  ports:\\n  - port: 6379\\n    targetPort: 6379\" > /home/learner/cache-headless.yaml",
+        "kubectl apply -f /home/learner/cache-headless.yaml",
+        "kubectl get endpoints cache-api -n net-discovery"
+      ],
+      "troubleshootingGuide": "Verify namespace net-discovery exists, cache-api deployment has 2 replicas, standard Service cache-api has endpoints, and cache-headless has clusterIP None."
+    },
+    {
+      "id": "lab-k8snet-02-networkpolicy-gateway",
+      "title": "Zero-Trust NetworkPolicies & Modern Gateway API Route Filtering",
+      "difficulty": "Intermediate",
+      "durationMinutes": 20,
+      "xpReward": 175,
+      "scenario": "Harden namespace net-policy with a default-deny ingress NetworkPolicy, permit authorized ingress traffic on port 80 to checkout-api pods, and configure a modern Gateway API HTTPRoute routing /checkout traffic through edge-gateway.",
+      "productionContext": "Zero-trust compliance mandates denying all lateral East-West traffic by default, while modern North-South ingress utilizes declarative Gateway API HTTPRoutes instead of legacy Ingress annotations.",
+      "prerequisites": [
+        "lab-k8snet-01-cni-services-dns"
+      ],
+      "objectives": [
+        "Create namespace net-policy for secured workloads",
+        "Deploy checkout-api with 2 replicas in net-policy",
+        "Apply default-deny ingress NetworkPolicy default-deny-ingress",
+        "Apply allow-checkout-ingress NetworkPolicy permitting port 80 traffic",
+        "Deploy Gateway API HTTPRoute checkout-route routing /checkout prefix"
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Create Policy Namespace",
+          "instruction": "Create namespace `net-policy` using `kubectl create namespace net-policy`.",
+          "commandHint": "kubectl create namespace net-policy"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Deploy Target Workload",
+          "instruction": "Deploy `checkout-api` with 2 replicas in `net-policy`.",
+          "commandHint": "kubectl create deployment checkout-api --image=nginx:1.27-alpine -n net-policy --replicas=2"
+        },
+        {
+          "stepNumber": 3,
+          "title": "Enforce Default-Deny Ingress",
+          "instruction": "Create `/home/learner/default-deny.yaml` with default-deny ingress policy and apply it.",
+          "commandHint": "echo -e \"...\" > /home/learner/default-deny.yaml && kubectl apply -f /home/learner/default-deny.yaml"
+        },
+        {
+          "stepNumber": 4,
+          "title": "Whitelist Authorized Ingress Port",
+          "instruction": "Create `/home/learner/allow-checkout.yaml` allowing TCP port 80 to `checkout-api` pods.",
+          "commandHint": "echo -e \"...\" > /home/learner/allow-checkout.yaml && kubectl apply -f /home/learner/allow-checkout.yaml"
+        },
+        {
+          "stepNumber": 5,
+          "title": "Configure Gateway API Route",
+          "instruction": "Create `/home/learner/checkout-route.yaml` routing `/checkout` prefix and apply it.",
+          "commandHint": "echo -e \"...\" > /home/learner/checkout-route.yaml && kubectl apply -f /home/learner/checkout-route.yaml"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "val-net-ns-policy",
+          "description": "Created net-policy namespace for policy workloads",
+          "type": "resource_exists",
+          "kind": "Namespace",
+          "name": "net-policy",
+          "remediation": "Run 'kubectl create namespace net-policy'."
+        },
+        {
+          "id": "val-net-dep-checkout",
+          "description": "Deployed checkout-api in net-policy namespace",
+          "type": "resource_exists",
+          "kind": "Deployment",
+          "name": "checkout-api",
+          "namespace": "net-policy",
+          "remediation": "Run 'kubectl create deployment checkout-api --image=nginx:1.27-alpine -n net-policy --replicas=2'."
+        },
+        {
+          "id": "val-net-np-deny",
+          "description": "Configured default-deny ingress NetworkPolicy",
+          "type": "resource_exists",
+          "kind": "NetworkPolicy",
+          "name": "default-deny-ingress",
+          "namespace": "net-policy",
+          "remediation": "Apply NetworkPolicy default-deny-ingress in namespace net-policy."
+        },
+        {
+          "id": "val-net-np-allow",
+          "description": "Whitelisted port 80 ingress on checkout-api pods",
+          "type": "resource_field_contains",
+          "kind": "NetworkPolicy",
+          "name": "allow-checkout-ingress",
+          "namespace": "net-policy",
+          "fieldPath": "spec.ingress",
+          "expectedValue": "80",
+          "remediation": "Configure NetworkPolicy allow-checkout-ingress with ingress port 80."
+        },
+        {
+          "id": "val-net-route-exists",
+          "description": "Created modern Gateway API HTTPRoute checkout-route",
+          "type": "resource_exists",
+          "kind": "HTTPRoute",
+          "name": "checkout-route",
+          "namespace": "net-policy",
+          "remediation": "Apply HTTPRoute checkout-route in namespace net-policy."
+        },
+        {
+          "id": "val-net-route-prefix",
+          "description": "Configured PathPrefix /checkout on checkout-route",
+          "type": "resource_field_contains",
+          "kind": "HTTPRoute",
+          "name": "checkout-route",
+          "namespace": "net-policy",
+          "fieldPath": "spec.rules",
+          "expectedValue": "/checkout",
+          "remediation": "Set rule match path to /checkout in checkout-route."
+        }
+      ],
+      "solutionCommands": [
+        "kubectl create namespace net-policy",
+        "kubectl create deployment checkout-api --image=nginx:1.27-alpine -n net-policy --replicas=2",
+        "echo -e \"apiVersion: networking.k8s.io/v1\\nkind: NetworkPolicy\\nmetadata:\\n  name: default-deny-ingress\\n  namespace: net-policy\\nspec:\\n  podSelector: {}\\n  policyTypes:\\n  - Ingress\" > /home/learner/default-deny.yaml",
+        "kubectl apply -f /home/learner/default-deny.yaml",
+        "echo -e \"apiVersion: networking.k8s.io/v1\\nkind: NetworkPolicy\\nmetadata:\\n  name: allow-checkout-ingress\\n  namespace: net-policy\\nspec:\\n  podSelector:\\n    matchLabels:\\n      app: checkout-api\\n  policyTypes:\\n  - Ingress\\n  ingress:\\n  - ports:\\n    - protocol: TCP\\n      port: 80\" > /home/learner/allow-checkout.yaml",
+        "kubectl apply -f /home/learner/allow-checkout.yaml",
+        "echo -e \"apiVersion: gateway.networking.k8s.io/v1\\nkind: HTTPRoute\\nmetadata:\\n  name: checkout-route\\n  namespace: net-policy\\nspec:\\n  parentRefs:\\n  - name: edge-gateway\\n  rules:\\n  - matches:\\n    - path:\\n        type: PathPrefix\\n        value: /checkout\\n    backendRefs:\\n    - name: checkout-api\\n      port: 80\" > /home/learner/checkout-route.yaml",
+        "kubectl apply -f /home/learner/checkout-route.yaml"
+      ],
+      "troubleshootingGuide": "Ensure namespace net-policy exists, default-deny and allow-checkout NetworkPolicies are applied, and checkout-route HTTPRoute matches /checkout."
+    }
+  ],
+  "assessmentQuestions": [
+    {
+      "id": "q-net-01",
+      "question": "What is the primary difference in DNS resolution between a standard ClusterIP Service and a Headless Service (clusterIP: None)?",
+      "options": [
+        "(Recommended) A standard ClusterIP returns a single virtual IP load-balanced across pods, whereas a Headless Service returns multiple A/AAAA records with direct individual Pod IP addresses and SRV records.",
+        "A Headless Service disables DNS resolution completely, requiring hardcoded IP addresses.",
+        "A standard ClusterIP Service cannot route traffic across nodes, while a Headless Service routes externally.",
+        "A Headless Service requires an external LoadBalancer cloud controller to generate IP addresses."
+      ],
+      "correctIndex": 0,
+      "explanation": "Headless Services (clusterIP: None) do not allocate a virtual ClusterIP; instead, CoreDNS resolves the service domain name directly to the set of individual Pod IPs backing the selector, which is critical for stateful clustering, peer discovery, and client-side load balancing."
+    },
+    {
+      "id": "q-net-02",
+      "question": "In the Kubernetes Gateway API architecture, which persona and resource is responsible for defining application traffic routing rules to backend services?",
+      "options": [
+        "(Recommended) Application Developers configure HTTPRoute or GRPCRoute resources attached to parent Gateways.",
+        "Infrastructure Providers configure GatewayClass resources on the worker nodes.",
+        "Cluster Operators configure HTTPRoute resources inside the kube-system namespace.",
+        "Linux kernel administrators write eBPF programs inside the CNI daemonset."
+      ],
+      "correctIndex": 0,
+      "explanation": "The Gateway API uses role-oriented resource separation: Infrastructure Providers manage GatewayClass, Cluster Operators deploy Gateway listeners, and Application Developers author HTTPRoute or GRPCRoute manifests attached to parent Gateways to control layer 7 traffic routing."
+    }
+  ]
+}

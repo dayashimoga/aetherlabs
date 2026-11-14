@@ -1,0 +1,314 @@
+{
+  "id": "k8s-storage",
+  "title": "Kubernetes Storage: CSI, StorageClasses, PVCs & StatefulSets",
+  "category": "Kubernetes & CNCF",
+  "trackId": "track-k8s-admin",
+  "version": "1.0.0",
+  "difficulty": "Intermediate",
+  "estimatedHours": 8,
+  "summary": "Master container storage interfaces (CSI): dynamic StorageClass provisioning, volumeBindingMode (WaitForFirstConsumer), access modes (RWO, RWX), PersistentVolumeClaims, and StatefulSets with persistent volumeClaimTemplates.",
+  "prerequisites": [
+    "kubernetes-core-v4",
+    "ckad-developer"
+  ],
+  "learningObjectives": [
+    "Configure StorageClasses with CSI provisioners, mount options, and volumeBindingMode: WaitForFirstConsumer to prevent zonal scheduling deadlocks.",
+    "Provision and bind PersistentVolumeClaims with distinct access modes (ReadWriteOnce, ReadWriteMany) and attach them to Pod workloads.",
+    "Orchestrate stateful workloads using StatefulSets with volumeClaimTemplates, verifying stable network identity and ordinal storage persistence."
+  ],
+  "curriculumModules": [
+    {
+      "id": "mod-k8sstore-01",
+      "title": "Container Storage Interface (CSI) Architecture & StorageClasses",
+      "conceptSummary": "CSI standardizes out-of-tree storage plugins across cloud providers and SAN/NAS systems. StorageClasses define volume drivers, reclaimPolicies (Delete, Retain), allowVolumeExpansion, and volumeBindingMode (Immediate vs WaitForFirstConsumer).",
+      "productionArchitecturePattern": "Always configure volumeBindingMode: WaitForFirstConsumer in multi-AZ clusters so storage volumes are provisioned in the exact Availability Zone where the scheduler places the consuming Pod.",
+      "keyCommands": [
+        "kubectl get storageclass",
+        "kubectl describe storageclass <name>",
+        "kubectl get pv"
+      ]
+    },
+    {
+      "id": "mod-k8sstore-02",
+      "title": "PersistentVolumes, Claims & Volume Access Modes",
+      "conceptSummary": "PersistentVolumes (PV) represent provisioned physical storage. PersistentVolumeClaims (PVC) are consumer requests specifying accessModes (ReadWriteOnce, ReadWriteMany, ReadOnlyMany) and capacity requests. Kubelet mounts volumes into container filesystems at target mountPaths.",
+      "productionArchitecturePattern": "Use ReadWriteOnce (RWO) with block/EBS/pd-ssd for databases to avoid filesystem corruption, and ReadWriteMany (RWX) backed by NFS/CephFS/EFS only for shared assets.",
+      "keyCommands": [
+        "kubectl get pvc -A",
+        "kubectl describe pvc <name>",
+        "kubectl get pv"
+      ]
+    },
+    {
+      "id": "mod-k8sstore-03",
+      "title": "StatefulSets, VolumeClaimTemplates & Ordinal Persistence",
+      "conceptSummary": "StatefulSets manage stateful applications requiring ordered deployment, ordinal naming (pod-0, pod-1), and persistent storage through volumeClaimTemplates. When a stateful pod is deleted, its replacement reattaches the exact same PVC and underlying volume.",
+      "productionArchitecturePattern": "Decouple PVC retention policy (whenDeleted: Retain) on production StatefulSets so accidental workload deletions never destroy underlying data volumes.",
+      "keyCommands": [
+        "kubectl get statefulset",
+        "kubectl rollout status statefulset/<name>",
+        "kubectl get pvc -l app=<name>"
+      ]
+    }
+  ],
+  "labs": [
+    {
+      "id": "lab-storage-01-sc-pvc-pv",
+      "title": "Dynamic Storage Provisioning: StorageClass, PVC & Pod Mounts",
+      "difficulty": "Intermediate",
+      "durationMinutes": 20,
+      "xpReward": 150,
+      "scenario": "Create a custom StorageClass fast-nvme configured with volumeBindingMode: WaitForFirstConsumer, define a 10Gi PersistentVolumeClaim data-volume in namespace storage-workloads, and mount the volume into a batch processing Pod data-writer at /mnt/data.",
+      "productionContext": "Dynamic volume provisioning automates cloud block storage creation upon PVC submission, eliminating manual administrator provisioning tickets.",
+      "prerequisites": [
+        "lab-k8s-01-ha-deployments"
+      ],
+      "objectives": [
+        "Create cluster-scoped StorageClass fast-nvme with WaitForFirstConsumer binding",
+        "Create namespace storage-workloads",
+        "Provision 10Gi PersistentVolumeClaim data-volume in storage-workloads",
+        "Deploy Pod data-writer mounting data-volume to /mnt/data",
+        "Verify Pod reaches Running status with mounted storage"
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Create StorageClass",
+          "instruction": "Create `/home/learner/storageclass.yaml` defining StorageClass `fast-nvme` with `volumeBindingMode: WaitForFirstConsumer`.",
+          "commandHint": "echo -e \"...\" > /home/learner/storageclass.yaml && kubectl apply -f /home/learner/storageclass.yaml"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Create Workload Namespace",
+          "instruction": "Create namespace `storage-workloads`.",
+          "commandHint": "kubectl create namespace storage-workloads"
+        },
+        {
+          "stepNumber": 3,
+          "title": "Provision PersistentVolumeClaim",
+          "instruction": "Create `/home/learner/pvc.yaml` requesting 10Gi with StorageClass `fast-nvme`.",
+          "commandHint": "echo -e \"...\" > /home/learner/pvc.yaml && kubectl apply -f /home/learner/pvc.yaml"
+        },
+        {
+          "stepNumber": 4,
+          "title": "Mount Storage into Pod",
+          "instruction": "Create `/home/learner/pod-writer.yaml` mounting `data-volume` at `/mnt/data`.",
+          "commandHint": "echo -e \"...\" > /home/learner/pod-writer.yaml && kubectl apply -f /home/learner/pod-writer.yaml"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "val-store-sc-exists",
+          "description": "Created cluster-scoped StorageClass fast-nvme",
+          "type": "resource_exists",
+          "kind": "StorageClass",
+          "name": "fast-nvme",
+          "remediation": "Apply StorageClass fast-nvme."
+        },
+        {
+          "id": "val-store-sc-binding",
+          "description": "Configured volumeBindingMode WaitForFirstConsumer on StorageClass",
+          "type": "resource_field_equals",
+          "kind": "StorageClass",
+          "name": "fast-nvme",
+          "fieldPath": "volumeBindingMode",
+          "expectedValue": "WaitForFirstConsumer",
+          "remediation": "Set volumeBindingMode: WaitForFirstConsumer in StorageClass fast-nvme."
+        },
+        {
+          "id": "val-store-ns-workloads",
+          "description": "Created storage-workloads namespace",
+          "type": "resource_exists",
+          "kind": "Namespace",
+          "name": "storage-workloads",
+          "remediation": "Run 'kubectl create namespace storage-workloads'."
+        },
+        {
+          "id": "val-store-pvc-exists",
+          "description": "Created PersistentVolumeClaim data-volume in storage-workloads",
+          "type": "resource_exists",
+          "kind": "PersistentVolumeClaim",
+          "name": "data-volume",
+          "namespace": "storage-workloads",
+          "remediation": "Apply PersistentVolumeClaim data-volume in namespace storage-workloads."
+        },
+        {
+          "id": "val-store-pod-vol",
+          "description": "Mounted data-volume into Pod data-writer volumes",
+          "type": "resource_field_contains",
+          "kind": "Pod",
+          "name": "data-writer",
+          "namespace": "storage-workloads",
+          "fieldPath": "spec.volumes",
+          "expectedValue": "data-volume",
+          "remediation": "Attach persistentVolumeClaim data-volume in spec.volumes of Pod data-writer."
+        },
+        {
+          "id": "val-store-pod-running",
+          "description": "Verified Pod data-writer reaches Running status",
+          "type": "pod_status_running",
+          "name": "data-writer",
+          "namespace": "storage-workloads",
+          "remediation": "Ensure Pod data-writer starts successfully."
+        }
+      ],
+      "solutionCommands": [
+        "echo -e \"apiVersion: storage.k8s.io/v1\\nkind: StorageClass\\nmetadata:\\n  name: fast-nvme\\nprovisioner: kubernetes.io/no-provisioner\\nvolumeBindingMode: WaitForFirstConsumer\" > /home/learner/storageclass.yaml",
+        "kubectl apply -f /home/learner/storageclass.yaml",
+        "kubectl create namespace storage-workloads",
+        "echo -e \"apiVersion: v1\\nkind: PersistentVolumeClaim\\nmetadata:\\n  name: data-volume\\n  namespace: storage-workloads\\nspec:\\n  accessModes:\\n  - ReadWriteOnce\\n  storageClassName: fast-nvme\\n  resources:\\n    requests:\\n      storage: 10Gi\" > /home/learner/pvc.yaml",
+        "kubectl apply -f /home/learner/pvc.yaml",
+        "echo -e \"apiVersion: v1\\nkind: Pod\\nmetadata:\\n  name: data-writer\\n  namespace: storage-workloads\\nspec:\\n  containers:\\n  - name: writer\\n    image: busybox:1.36\\n    command: [\\\"sh\\\", \\\"-c\\\", \\\"sleep 3600\\\"]\\n    volumeMounts:\\n    - name: storage\\n      mountPath: /mnt/data\\n  volumes:\\n  - name: storage\\n    persistentVolumeClaim:\\n      claimName: data-volume\" > /home/learner/pod-writer.yaml",
+        "kubectl apply -f /home/learner/pod-writer.yaml"
+      ],
+      "troubleshootingGuide": "Ensure StorageClass fast-nvme has volumeBindingMode WaitForFirstConsumer, PVC data-volume exists in storage-workloads, and Pod data-writer mounts it."
+    },
+    {
+      "id": "lab-storage-02-statefulset-volume-claims",
+      "title": "Stateful Workloads: StatefulSet with Ordinal VolumeClaimTemplates",
+      "difficulty": "Intermediate",
+      "durationMinutes": 20,
+      "xpReward": 175,
+      "scenario": "Deploy an HA distributed database cluster redis-cluster in namespace stateful-apps using a StatefulSet with 3 replicas, a headless Service redis-headless, and volumeClaimTemplates requesting 5Gi storage per ordinal pod.",
+      "productionContext": "StatefulSets paired with volumeClaimTemplates guarantee that each replica possesses dedicated persistent storage that automatically rebinds across pod rescheduling and rolling updates.",
+      "prerequisites": [
+        "lab-storage-01-sc-pvc-pv"
+      ],
+      "objectives": [
+        "Create namespace stateful-apps for stateful workloads",
+        "Create headless Service redis-headless with clusterIP None",
+        "Deploy StatefulSet redis-cluster with 3 replicas",
+        "Configure volumeClaimTemplates requesting 5Gi ReadWriteOnce storage",
+        "Verify all 3 ordinal pods (redis-cluster-0, 1, 2) reach Running status"
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Create Stateful Namespace",
+          "instruction": "Create namespace `stateful-apps` using `kubectl create namespace stateful-apps`.",
+          "commandHint": "kubectl create namespace stateful-apps"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Create Headless Service",
+          "instruction": "Create `/home/learner/redis-headless.yaml` with `clusterIP: None`.",
+          "commandHint": "echo -e \"...\" > /home/learner/redis-headless.yaml && kubectl apply -f /home/learner/redis-headless.yaml"
+        },
+        {
+          "stepNumber": 3,
+          "title": "Author StatefulSet Manifest",
+          "instruction": "Create `/home/learner/redis-statefulset.yaml` with 3 replicas and `volumeClaimTemplates` requesting 5Gi.",
+          "commandHint": "echo -e \"...\" > /home/learner/redis-statefulset.yaml && kubectl apply -f /home/learner/redis-statefulset.yaml"
+        },
+        {
+          "stepNumber": 4,
+          "title": "Inspect Stateful Pods",
+          "instruction": "Verify that all 3 ordinal pods (`redis-cluster-0`, `redis-cluster-1`, `redis-cluster-2`) are running.",
+          "commandHint": "kubectl get pods -n stateful-apps"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "val-store-ns-stateful",
+          "description": "Created stateful-apps namespace for stateful workloads",
+          "type": "resource_exists",
+          "kind": "Namespace",
+          "name": "stateful-apps",
+          "remediation": "Run 'kubectl create namespace stateful-apps'."
+        },
+        {
+          "id": "val-store-svc-headless",
+          "description": "Created headless Service redis-headless in stateful-apps",
+          "type": "resource_exists",
+          "kind": "Service",
+          "name": "redis-headless",
+          "namespace": "stateful-apps",
+          "remediation": "Apply Service redis-headless in namespace stateful-apps."
+        },
+        {
+          "id": "val-store-svc-clusterip",
+          "description": "Configured clusterIP None on headless Service",
+          "type": "resource_field_equals",
+          "kind": "Service",
+          "name": "redis-headless",
+          "namespace": "stateful-apps",
+          "fieldPath": "spec.clusterIP",
+          "expectedValue": "None",
+          "remediation": "Set spec.clusterIP: None on Service redis-headless."
+        },
+        {
+          "id": "val-store-sts-exists",
+          "description": "Deployed StatefulSet redis-cluster with 3 replicas",
+          "type": "resource_exists",
+          "kind": "StatefulSet",
+          "name": "redis-cluster",
+          "namespace": "stateful-apps",
+          "remediation": "Apply StatefulSet redis-cluster in namespace stateful-apps."
+        },
+        {
+          "id": "val-store-sts-templates",
+          "description": "Configured volumeClaimTemplates with 5Gi capacity in StatefulSet",
+          "type": "resource_field_contains",
+          "kind": "StatefulSet",
+          "name": "redis-cluster",
+          "namespace": "stateful-apps",
+          "fieldPath": "spec.volumeClaimTemplates",
+          "expectedValue": "5Gi",
+          "remediation": "Configure volumeClaimTemplates requesting 5Gi in StatefulSet redis-cluster."
+        },
+        {
+          "id": "val-store-pods-count",
+          "description": "Verified at least 3 stateful ordinal pods running in namespace",
+          "type": "resource_count",
+          "kind": "Pod",
+          "namespace": "stateful-apps",
+          "operator": ">=",
+          "expectedValue": 3,
+          "remediation": "Ensure all 3 StatefulSet ordinal pods reach Running state."
+        }
+      ],
+      "solutionCommands": [
+        "kubectl create namespace stateful-apps",
+        "echo -e \"apiVersion: v1\\nkind: Service\\nmetadata:\\n  name: redis-headless\\n  namespace: stateful-apps\\nspec:\\n  clusterIP: None\\n  selector:\\n    app: redis-cluster\\n  ports:\\n  - port: 6379\\n    targetPort: 6379\" > /home/learner/redis-headless.yaml",
+        "kubectl apply -f /home/learner/redis-headless.yaml",
+        "echo -e \"apiVersion: apps/v1\\nkind: StatefulSet\\nmetadata:\\n  name: redis-cluster\\n  namespace: stateful-apps\\nspec:\\n  serviceName: redis-headless\\n  replicas: 3\\n  selector:\\n    matchLabels:\\n      app: redis-cluster\\n  template:\\n    metadata:\\n      labels:\\n        app: redis-cluster\\n    spec:\\n      containers:\\n      - name: redis\\n        image: redis:7-alpine\\n        ports:\\n        - containerPort: 6379\\n  volumeClaimTemplates:\\n  - metadata:\\n      name: redis-data\\n    spec:\\n      accessModes: [ \\\"ReadWriteOnce\\\" ]\\n      resources:\\n        requests:\\n          storage: 5Gi\" > /home/learner/redis-statefulset.yaml",
+        "kubectl apply -f /home/learner/redis-statefulset.yaml"
+      ],
+      "troubleshootingGuide": "Verify namespace stateful-apps exists, redis-headless has clusterIP None, and StatefulSet redis-cluster has 3 replicas and volumeClaimTemplates requesting 5Gi."
+    }
+  ],
+  "assessmentQuestions": [
+    {
+      "id": "q-storage-01",
+      "question": "What critical operational problem does setting 'volumeBindingMode: WaitForFirstConsumer' in a StorageClass solve?",
+      "options": [
+        "(Recommended) It delays persistent disk provisioning until the consuming Pod is scheduled, ensuring the volume is created in the exact Availability Zone where the node resides.",
+        "It speeds up disk attachment by bypassing the kube-scheduler completely.",
+        "It automatically formats the disk with an encrypted ext4 filesystem on creation.",
+        "It enables simultaneous ReadWriteMany access across distinct worker nodes for block devices."
+      ],
+      "correctIndex": 0,
+      "explanation": "In multi-zone clusters, default 'Immediate' volume binding creates the storage volume in an arbitrary availability zone before the pod is scheduled. If the scheduler later assigns the pod to a node in a different AZ, the pod fails to start with a volume zone mismatch. 'WaitForFirstConsumer' delays provisioning until the pod's node and zone are chosen."
+    },
+    {
+      "id": "q-storage-02",
+      "question": "When deleting a StatefulSet replica Pod (e.g. redis-cluster-1), what is the default behavior regarding its associated PersistentVolumeClaim?",
+      "options": [
+        "(Recommended) The PVC is NOT deleted by default; it remains intact and is automatically re-attached when a replacement pod with the same ordinal index is scheduled.",
+        "The PVC is immediately destroyed along with all underlying disk data.",
+        "The PVC is automatically cloned and assigned to redis-cluster-0.",
+        "The PVC is detached and marked with reclaimPolicy: Delete in the root namespace."
+      ],
+      "correctIndex": 0,
+      "explanation": "To prevent catastrophic data loss during pod restarts or rolling updates, Kubernetes StatefulSets explicitly do not delete PVCs created via volumeClaimTemplates when pods are terminated. The replacement pod with the exact same ordinal identity re-mounts the pre-existing PVC."
+    }
+  ]
+}
