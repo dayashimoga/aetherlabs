@@ -1,0 +1,245 @@
+{
+  "id": "docker-containers",
+  "title": "Docker & OCI Container Engineering",
+  "category": "Containers & Packaging",
+  "trackId": "track-foundations",
+  "version": "1.0.0",
+  "difficulty": "Intermediate",
+  "estimatedHours": 6,
+  "summary": "Master Docker containerization, multi-stage distroless builds, non-root user execution, OCI layer caching, OverlayFS storage drivers, and rootless daemon security architecture.",
+  "prerequisites": [
+    "linux-fundamentals",
+    "linux-admin"
+  ],
+  "learningObjectives": [
+    "Build hardened, minimal OCI container images using multi-stage Dockerfiles and distroless base images.",
+    "Inspect and troubleshoot container filesystem layers, copy-on-write (COW) mechanics, and OverlayFS storage driver directories.",
+    "Enforce non-root execution contexts, unprivileged user namespaces, and container resource limits."
+  ],
+  "curriculumModules": [
+    {
+      "id": "mod-docker-01",
+      "title": "Multi-Stage Builds, Distroless Images & Layer Optimization",
+      "conceptSummary": "Multi-stage builds separate build-time dependencies (compilers, SDKs, dev headers) from runtime environments. Using gcr.io/distroless/static-debian12:nonroot as the final stage eliminates package managers, shells, and system utilities, drastically shrinking attack surface and image size down to minimal static binaries.",
+      "productionArchitecturePattern": "Leverage Docker BuildKit cache mounts (--mount=type=cache) and multi-stage pipelines to compile Golang, Rust, or Java binaries, then copy only the stripped executable, CA certificates, and non-root /etc/passwd entries into distroless.",
+      "keyCommands": [
+        "docker build -t app:distroless .",
+        "docker inspect app:distroless",
+        "docker images"
+      ]
+    },
+    {
+      "id": "mod-docker-02",
+      "title": "Rootless Containers, User Namespaces & Security Contexts",
+      "conceptSummary": "Running container daemons or payloads as root inside a container represents severe privilege escalation risk if container escape vulnerabilities emerge. Rootless Docker and user namespaces map container UID 0 to an unprivileged subuid on the host, preventing host root compromise.",
+      "productionArchitecturePattern": "Enforce USER 65532:65532 (nonroot) in Dockerfiles and configure RootlessKit or user namespace remapping (userns-remap) across production worker nodes.",
+      "keyCommands": [
+        "docker run --user 65532:65532 -d app",
+        "docker exec app whoami",
+        "docker inspect --format '{{.Config.User}}' app"
+      ]
+    },
+    {
+      "id": "mod-docker-03",
+      "title": "OverlayFS Architecture: LowerDir, UpperDir, Merged & WorkDir",
+      "conceptSummary": "Docker's default storage driver on Linux is overlay2. OverlayFS merges read-only image layers (lowerdir) with a single read-write container layer (upperdir) using workdir for atomic copy-on-write transactions, presenting a unified filesystem view at merged.",
+      "productionArchitecturePattern": "Avoid writing transient or ephemeral logs directly into the container's writable layer (upperdir); route telemetry to stdout/stderr or ephemeral volume mounts to prevent storage driver exhaustion.",
+      "keyCommands": [
+        "docker inspect --format '{{json .GraphDriver}}' container",
+        "docker diff container",
+        "docker image prune -f"
+      ]
+    }
+  ],
+  "labs": [
+    {
+      "id": "lab-docker-01-multistage-distroless",
+      "title": "Hardening Microservices with Multi-Stage Distroless Builds",
+      "difficulty": "Intermediate",
+      "durationMinutes": 20,
+      "xpReward": 150,
+      "scenario": "A security scan flagged severe vulnerabilities in an enterprise payment API running as root with full bash shells and package managers. You must create a multi-stage Dockerfile, build a hardened distroless image tagged 'payment-api:distroless', launch the container with exposed port 8080, and verify its non-root security context.",
+      "productionContext": "Distroless images strip shells, package managers, and standard utilities, preventing attackers from downloading tools or executing interactive shells during Remote Code Execution (RCE) incidents.",
+      "prerequisites": [
+        "lab-linux-01-permissions-streams"
+      ],
+      "objectives": [
+        "Create a multi-stage Dockerfile targeting gcr.io/distroless/static-debian12:nonroot",
+        "Build the hardened container image tagged payment-api:distroless",
+        "Run the container in detached mode named secure-api exposing port 8080",
+        "Inspect container configuration and verify non-root user execution"
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Create Multi-Stage Dockerfile",
+          "instruction": "Create a multi-stage `Dockerfile` with a Go builder stage and a final `gcr.io/distroless/static-debian12:nonroot` stage.",
+          "commandHint": "echo \"FROM golang:1.22-alpine AS builder\" > Dockerfile"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Build Distroless Container Image",
+          "instruction": "Build the container image and tag it as `payment-api:distroless`.",
+          "commandHint": "docker build -t payment-api:distroless ."
+        },
+        {
+          "stepNumber": 3,
+          "title": "Deploy Hardened Container",
+          "instruction": "Launch the container in detached mode named `secure-api` exposing port 8080.",
+          "commandHint": "docker run -d --name secure-api -p 8080:8080 payment-api:distroless"
+        },
+        {
+          "stepNumber": 4,
+          "title": "Verify Non-Root Execution Context",
+          "instruction": "Inspect the container's configuration using `docker inspect secure-api` to confirm user context.",
+          "commandHint": "docker inspect secure-api"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "val-docker-build-01",
+          "description": "Built hardened image payment-api:distroless via multi-stage Dockerfile",
+          "type": "command_executed",
+          "commandSubstring": "docker build -t payment-api:distroless",
+          "remediation": "Run 'docker build -t payment-api:distroless .' to build the image."
+        },
+        {
+          "id": "val-docker-run-02",
+          "description": "Started secure-api container with port mapping 8080:8080",
+          "type": "command_executed",
+          "commandSubstring": "docker run -d --name secure-api",
+          "remediation": "Run 'docker run -d --name secure-api -p 8080:8080 payment-api:distroless' to launch the container."
+        },
+        {
+          "id": "val-docker-inspect-03",
+          "description": "Inspected container metadata and verified non-root security context",
+          "type": "command_executed",
+          "commandSubstring": "docker inspect secure-api",
+          "remediation": "Run 'docker inspect secure-api' to audit container security context and user."
+        }
+      ],
+      "solutionCommands": [
+        "echo \"FROM golang:1.22-alpine AS builder\" > Dockerfile",
+        "docker build -t payment-api:distroless .",
+        "docker run -d --name secure-api -p 8080:8080 payment-api:distroless",
+        "docker inspect secure-api"
+      ],
+      "troubleshootingGuide": "Ensure you build the image tagged payment-api:distroless, run it named secure-api, and inspect it."
+    },
+    {
+      "id": "lab-docker-02-overlayfs-storage",
+      "title": "OverlayFS Storage Driver, Layer Inspection & Garbage Collection",
+      "difficulty": "Intermediate",
+      "durationMinutes": 20,
+      "xpReward": 150,
+      "scenario": "High node disk utilization was reported on a container host. You must start a caching container, inspect its OverlayFS GraphDriver paths (LowerDir, UpperDir, MergedDir), analyze filesystem modifications made in the writable layer via docker diff, and prune dangling unused image layers.",
+      "productionContext": "Understanding OverlayFS copy-on-write overhead and container writable layer growth is critical to preventing root partition disk exhaustion in production container hosts.",
+      "prerequisites": [
+        "lab-docker-01-multistage-distroless"
+      ],
+      "objectives": [
+        "Launch redis cache container named cache-worker",
+        "Inspect container GraphDriver and OverlayFS directory paths",
+        "Inspect filesystem layer mutations using docker diff",
+        "Prune dangling image layers to reclaim host disk space"
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Launch Caching Container",
+          "instruction": "Run a Redis container named `cache-worker` on port 6379 in detached mode.",
+          "commandHint": "docker run -d --name cache-worker -p 6379:6379 redis:7.2-alpine"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Inspect OverlayFS GraphDriver",
+          "instruction": "Inspect `cache-worker` using `docker inspect` to view LowerDir, UpperDir, and MergedDir paths.",
+          "commandHint": "docker inspect cache-worker"
+        },
+        {
+          "stepNumber": 3,
+          "title": "Track Filesystem Layer Modifications",
+          "instruction": "Audit container filesystem layer writes and mutations with `docker diff cache-worker`.",
+          "commandHint": "docker diff cache-worker"
+        },
+        {
+          "stepNumber": 4,
+          "title": "Garbage Collect Dangling Images",
+          "instruction": "Reclaim host disk storage by pruning dangling unused image layers.",
+          "commandHint": "docker image prune -f"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "val-docker-run-cache",
+          "description": "Started cache-worker container with redis image",
+          "type": "command_executed",
+          "commandSubstring": "docker run -d --name cache-worker",
+          "remediation": "Run 'docker run -d --name cache-worker -p 6379:6379 redis:7.2-alpine' to start the cache worker."
+        },
+        {
+          "id": "val-docker-inspect-overlay",
+          "description": "Inspected container GraphDriver and OverlayFS storage paths",
+          "type": "command_executed",
+          "commandSubstring": "docker inspect cache-worker",
+          "remediation": "Run 'docker inspect cache-worker' to inspect the OverlayFS mount points."
+        },
+        {
+          "id": "val-docker-diff-layer",
+          "description": "Analyzed writable layer mutations with docker diff",
+          "type": "command_executed",
+          "commandSubstring": "docker diff cache-worker",
+          "remediation": "Run 'docker diff cache-worker' to inspect modified files."
+        },
+        {
+          "id": "val-docker-prune-gc",
+          "description": "Reclaimed disk space by pruning dangling image layers",
+          "type": "command_executed",
+          "commandSubstring": "docker image prune",
+          "remediation": "Run 'docker image prune -f' to remove unreferenced image layers."
+        }
+      ],
+      "solutionCommands": [
+        "docker run -d --name cache-worker -p 6379:6379 redis:7.2-alpine",
+        "docker inspect cache-worker",
+        "docker diff cache-worker",
+        "docker image prune -f"
+      ],
+      "troubleshootingGuide": "Ensure you launch cache-worker, inspect it, run docker diff cache-worker, and prune images."
+    }
+  ],
+  "assessmentQuestions": [
+    {
+      "id": "q-docker-01",
+      "question": "In a production multi-stage Docker build targeting Go or Rust, why is gcr.io/distroless/static-debian12:nonroot superior to alpine:latest as a runtime base?",
+      "options": [
+        "(Recommended) Distroless completely omits package managers (apk) and interactive shells (/bin/sh), preventing attackers from executing secondary payload downloads during RCE.",
+        "Distroless contains a full glibc runtime with debugging utilities pre-installed.",
+        "Alpine images cannot run compiled Golang static binaries due to kernel incompatibility.",
+        "Distroless automatically compiles source code without needing a builder stage."
+      ],
+      "correctIndex": 0,
+      "explanation": "Distroless images include only the application binary and minimal runtime dependencies (like CA certificates, tzdata, and /etc/passwd entries for non-root users). Omitting package managers and shells drastically reduces the attack surface and renders typical web-shell or script injection attacks inert."
+    },
+    {
+      "id": "q-docker-02",
+      "question": "In Linux OverlayFS (overlay2), where are newly created files and modifications written when a container is executing?",
+      "options": [
+        "(Recommended) Into the read-write upperdir layer, while deleted files from lowerdir are masked with character device whiteout files.",
+        "Directly into the read-only lowerdir image layers via kernel bypass.",
+        "Into the ephemeral workdir which persists across container restarts.",
+        "Directly into the host /var/log directory via a kernel redirect loop."
+      ],
+      "correctIndex": 0,
+      "explanation": "OverlayFS constructs a union mount where image layers form read-only lowerdir paths, and the container's mutable state resides in upperdir. Deletions of underlying lowerdir files are represented in upperdir as character device whiteouts (c 0 0)."
+    }
+  ]
+}

@@ -3257,6 +3257,7 @@ spec:
     if (sub === 'inspect') {
       const target = argv[2] || 'container';
       const c = this.simulatedContainers.find((x) => x.id.startsWith(target) || x.name === target) || this.simulatedContainers[0];
+      const isNonRoot = c && (c.image.includes('distroless') || c.image.includes('nonroot') || c.rootless);
       const doc = [{
         Id: c.id,
         Created: new Date().toISOString(),
@@ -3273,6 +3274,20 @@ spec:
           ExitCode: 0
         },
         Image: c.image,
+        Config: {
+          User: isNonRoot ? '65532:65532' : '0:0',
+          Env: ['PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin', 'SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt'],
+          Cmd: ['/app/server']
+        },
+        GraphDriver: {
+          Name: 'overlay2',
+          Data: {
+            LowerDir: '/var/lib/docker/overlay2/lower2/diff:/var/lib/docker/overlay2/lower1/diff',
+            MergedDir: '/var/lib/docker/overlay2/merged',
+            UpperDir: '/var/lib/docker/overlay2/diff',
+            WorkDir: '/var/lib/docker/overlay2/work'
+          }
+        },
         NetworkSettings: {
           IPAddress: '172.17.0.2',
           Gateway: '172.17.0.1',
@@ -3280,6 +3295,25 @@ spec:
         }
       }];
       return { stdout: JSON.stringify(doc, null, 2) + '\n', stderr: '', code: 0 };
+    }
+
+    if (sub === 'diff') {
+      return {
+        stdout: 'C /app\nA /app/config.json\nA /tmp/app.pid\n',
+        stderr: '',
+        code: 0
+      };
+    }
+
+    if (sub === 'image' || sub === 'system') {
+      const act = argv[2];
+      if (act === 'prune') {
+        return {
+          stdout: 'Deleted Images:\ndeleted: sha256:7b1e4c8d9a2b0c1e3f4a5b6c7d8e9f0a\n\nTotal reclaimed space: 420.5MB\n',
+          stderr: '',
+          code: 0
+        };
+      }
     }
 
     if (sub === 'network') {
@@ -3391,6 +3425,59 @@ spec:
         ['c3d4e5f6a1b2', '0.12', '18MB', '1.1MB', '45']
       ];
       return { stdout: this._formatTable(headers, rows) + '\n', stderr: '', code: 0 };
+    }
+
+    if (sub === 'info') {
+      const infoDoc = {
+        status: {
+          conditions: [
+            { type: 'RuntimeReady', status: true },
+            { type: 'NetworkReady', status: true }
+          ]
+        },
+        cniconfig: {
+          pluginDirs: ['/opt/cni/bin'],
+          pluginConfDir: '/etc/cni/net.d'
+        },
+        config: {
+          containerd: {
+            snapshotter: 'overlayfs',
+            defaultRuntimeName: 'runc',
+            runtimes: {
+              runc: { runtimeType: 'io.containerd.runc.v2' },
+              runsc: { runtimeType: 'io.containerd.runsc.v1' },
+              kata: { runtimeType: 'io.containerd.kata.v2' }
+            },
+            registry: {
+              configPath: '/etc/containerd/certs.d'
+            }
+          }
+        }
+      };
+      return { stdout: JSON.stringify(infoDoc, null, 2) + '\n', stderr: '', code: 0 };
+    }
+
+    if (sub === 'version' || sub === 'runtimeversion') {
+      return {
+        stdout: 'Version:  0.1.0\nRuntimeName:  containerd\nRuntimeVersion:  v1.7.20\nRuntimeApiVersion:  v1\n',
+        stderr: '',
+        code: 0
+      };
+    }
+
+    if (sub === 'pull') {
+      const img = argv[2] || 'registry.k8s.io/pause:3.9';
+      return { stdout: `Image is up to date for ${img}\n`, stderr: '', code: 0 };
+    }
+
+    if (sub === 'rm' || sub === 'rmp') {
+      const target = argv[2] || 'target';
+      return { stdout: `${target}\n`, stderr: '', code: 0 };
+    }
+
+    if (sub === 'stop' || sub === 'stopp') {
+      const target = argv[2] || 'target';
+      return { stdout: `${target}\n`, stderr: '', code: 0 };
     }
 
     return { stdout: 'crictl CRI connection active on /run/containerd/containerd.sock\n', stderr: '', code: 0 };

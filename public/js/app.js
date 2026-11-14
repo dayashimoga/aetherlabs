@@ -730,6 +730,8 @@
     'linux-admin': '⚙️',
     'networking-fundamentals': '🌐',
     'git-fundamentals': '🐙',
+    'docker-containers': '🐳',
+    'container-runtime-cri': '📦',
     'containers-runtime': '🐳',
     'cloud-networking': '🌐',
     'cncf-packaging': '📦',

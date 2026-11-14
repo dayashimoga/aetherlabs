@@ -1,0 +1,267 @@
+{
+  "id": "container-runtime-cri",
+  "title": "OCI Container Runtimes & CRI Architecture",
+  "category": "Containers & Packaging",
+  "trackId": "track-foundations",
+  "version": "1.0.0",
+  "difficulty": "Intermediate",
+  "estimatedHours": 6,
+  "summary": "Master the Kubernetes Container Runtime Interface (CRI), containerd daemon configuration, low-level OCI runtimes (runc vs gVisor sandboxes), and cri-tools (crictl) node diagnostics.",
+  "prerequisites": [
+    "docker-containers",
+    "linux-admin"
+  ],
+  "learningObjectives": [
+    "Diagnose container and Pod sandbox states directly on worker nodes using the crictl CLI without apiserver dependency.",
+    "Configure containerd registry mirrors, endpoints, and certs in /etc/containerd/certs.d for high-availability image pulling.",
+    "Isolate multi-tenant and untrusted workloads using sandboxed OCI runtimes (gVisor runsc) and Kubernetes RuntimeClasses."
+  ],
+  "curriculumModules": [
+    {
+      "id": "mod-cri-01",
+      "title": "CRI Architecture: Kubelet, containerd & CRI gRPC Interface",
+      "conceptSummary": "The Container Runtime Interface (CRI) is a gRPC API that allows Kubelet to communicate with container runtimes (containerd, CRI-O) over a local Unix domain socket (e.g. /run/containerd/containerd.sock). CRI exposes two main services: RuntimeService (pod sandbox management, container lifecycle, exec, logs) and ImageService (image pull, list, inspect, remove).",
+      "productionArchitecturePattern": "When troubleshooting a worker node experiencing apiserver disconnection or NotReady status, use crictl directly against the containerd socket to inspect PodSandbox status and diagnose runtime failures.",
+      "keyCommands": [
+        "crictl pods",
+        "crictl ps",
+        "crictl inspect <id>",
+        "crictl stats"
+      ]
+    },
+    {
+      "id": "mod-cri-02",
+      "title": "Low-Level OCI Runtimes: runc vs. Sandboxed Runtimes (gVisor runsc)",
+      "conceptSummary": "While standard runc relies on Linux cgroups and namespaces sharing the host kernel, sandboxed runtimes like gVisor (runsc) intercept system calls in user space via a Sentry process, providing strong virtualization-like boundary isolation without heavy VM overhead.",
+      "productionArchitecturePattern": "Define a Kubernetes RuntimeClass with handler 'runsc' and assign runtimeClassName: gvisor on untrusted, external-facing, or multi-tenant Pods to prevent host kernel exploits.",
+      "keyCommands": [
+        "kubectl apply -f runtimeclass.yaml",
+        "crictl info",
+        "kubectl get runtimeclass"
+      ]
+    },
+    {
+      "id": "mod-cri-03",
+      "title": "containerd Registry Mirrors & cri-tools (crictl) Node Diagnostics",
+      "conceptSummary": "containerd 1.7+ and 2.0+ manage registry mirrors and authentication via /etc/containerd/certs.d/<registry-host>/hosts.toml. Configuring internal registry pull-through caches accelerates image distribution and prevents external rate-limiting incidents.",
+      "productionArchitecturePattern": "Deploy local registry mirror configurations pointing to Harbor or internal caching proxies with TLS client certificate validation and fallback upstream registries.",
+      "keyCommands": [
+        "crictl info",
+        "crictl images",
+        "crictl pull <image>",
+        "crictl stats"
+      ]
+    }
+  ],
+  "labs": [
+    {
+      "id": "lab-cri-01-crictl-diagnostics",
+      "title": "Worker Node Pod Sandbox & Container Diagnostics with crictl",
+      "difficulty": "Intermediate",
+      "durationMinutes": 20,
+      "xpReward": 150,
+      "scenario": "A worker node lost apiserver connectivity, but workloads must be verified locally. Connect directly to the containerd CRI socket using crictl to inspect active Pod sandboxes, inspect container runtime metadata, examine CPU and memory consumption, and audit containerd runtime engine info.",
+      "productionContext": "In production SEV-1 incidents where the Kubernetes control plane is unreachable or etcd has lost quorum, SREs use crictl directly on worker nodes to diagnose node-level container failures.",
+      "prerequisites": [
+        "lab-docker-01-multistage-distroless"
+      ],
+      "objectives": [
+        "List all active Pod sandboxes on the node with crictl pods",
+        "List running containers across all sandboxes with crictl ps",
+        "Inspect container sandbox runtime details with crictl inspect",
+        "Query real-time resource utilization with crictl stats",
+        "Audit containerd CRI configuration and runtimes with crictl info"
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Query Active Pod Sandboxes",
+          "instruction": "Run `crictl pods` to inspect all active Pod sandboxes managed by containerd.",
+          "commandHint": "crictl pods"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Query Running Containers",
+          "instruction": "Run `crictl ps` to inspect all running containers and their parent Pod IDs.",
+          "commandHint": "crictl ps"
+        },
+        {
+          "stepNumber": 3,
+          "title": "Inspect Container Details",
+          "instruction": "Inspect container runtime details and sandbox metadata using `crictl inspect a1b2c3d4e5f6`.",
+          "commandHint": "crictl inspect a1b2c3d4e5f6"
+        },
+        {
+          "stepNumber": 4,
+          "title": "Audit Stats and Engine Configuration",
+          "instruction": "Audit CPU and memory utilization with `crictl stats` and containerd runtime configuration with `crictl info`.",
+          "commandHint": "crictl stats && crictl info"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "val-cri-pods-01",
+          "description": "Queried active Pod sandboxes on node using crictl pods",
+          "type": "command_executed",
+          "commandSubstring": "crictl pods",
+          "remediation": "Run 'crictl pods' to inspect running pod sandboxes."
+        },
+        {
+          "id": "val-cri-ps-02",
+          "description": "Queried active containers across sandboxes using crictl ps",
+          "type": "command_executed",
+          "commandSubstring": "crictl ps",
+          "remediation": "Run 'crictl ps' to list active containers."
+        },
+        {
+          "id": "val-cri-inspect-03",
+          "description": "Inspected container sandbox metadata using crictl inspect",
+          "type": "command_executed",
+          "commandSubstring": "crictl inspect",
+          "remediation": "Run 'crictl inspect a1b2c3d4e5f6' to view container status."
+        },
+        {
+          "id": "val-cri-stats-04",
+          "description": "Audited container runtime resource stats with crictl stats",
+          "type": "command_executed",
+          "commandSubstring": "crictl stats",
+          "remediation": "Run 'crictl stats' to view CPU and memory consumption."
+        },
+        {
+          "id": "val-cri-info-05",
+          "description": "Audited containerd runtime engine configuration with crictl info",
+          "type": "command_executed",
+          "commandSubstring": "crictl info",
+          "remediation": "Run 'crictl info' to inspect containerd runtime handler configurations."
+        }
+      ],
+      "solutionCommands": [
+        "crictl pods",
+        "crictl ps",
+        "crictl inspect a1b2c3d4e5f6",
+        "crictl stats",
+        "crictl info"
+      ],
+      "troubleshootingGuide": "Ensure you run crictl pods, crictl ps, crictl inspect a1b2c3d4e5f6, crictl stats, and crictl info."
+    },
+    {
+      "id": "lab-cri-02-sandboxed-runtimes",
+      "title": "Securing Untrusted Workloads with gVisor Sandboxed RuntimeClass",
+      "difficulty": "Intermediate",
+      "durationMinutes": 20,
+      "xpReward": 150,
+      "scenario": "A multi-tenant SaaS application executes untrusted third-party user scripts. Running them with standard runc exposes the host kernel to privilege escalation. You must register a Kubernetes RuntimeClass named 'gvisor' using handler 'runsc' and deploy a hardened Pod 'untrusted-sandbox' referencing this runtime class.",
+      "productionContext": "Using sandboxed OCI runtimes (gVisor or Kata Containers) provides kernel-level fault isolation, guaranteeing that an untrusted workload breakout cannot compromise the host kernel.",
+      "prerequisites": [
+        "lab-cri-01-crictl-diagnostics"
+      ],
+      "objectives": [
+        "Verify containerd supports runsc sandbox via crictl info",
+        "Create and apply a Kubernetes RuntimeClass named gvisor with handler runsc",
+        "Deploy Pod untrusted-sandbox referencing runtimeClassName: gvisor",
+        "Verify pod status is Running under sandboxed isolation"
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "apiVersion: node.k8s.io/v1\nkind: RuntimeClass\nmetadata:\n  name: gvisor\nhandler: runsc",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Audit containerd Runtime Handlers",
+          "instruction": "Audit containerd runtime configuration to verify `runsc` is available.",
+          "commandHint": "crictl info"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Register RuntimeClass for gVisor",
+          "instruction": "Apply the RuntimeClass manifest registering `gvisor` with handler `runsc`.",
+          "commandHint": "cat <<EOF | kubectl apply -f -\napiVersion: node.k8s.io/v1\nkind: RuntimeClass\nmetadata:\n  name: gvisor\nhandler: runsc\nEOF"
+        },
+        {
+          "stepNumber": 3,
+          "title": "Deploy Sandboxed Pod",
+          "instruction": "Deploy Pod `untrusted-sandbox` with `runtimeClassName: gvisor` in namespace `default`.",
+          "commandHint": "cat <<EOF | kubectl apply -f -\napiVersion: v1\nkind: Pod\nmetadata:\n  name: untrusted-sandbox\n  namespace: default\nspec:\n  runtimeClassName: gvisor\n  containers:\n  - name: sandbox-app\n    image: nginx:1.27-alpine\nEOF"
+        },
+        {
+          "stepNumber": 4,
+          "title": "Verify Running Status",
+          "instruction": "Verify that `untrusted-sandbox` entered the `Running` phase under gVisor isolation.",
+          "commandHint": "kubectl get pod untrusted-sandbox"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "val-cri-info-check",
+          "description": "Verified containerd runtime handlers via crictl info",
+          "type": "command_executed",
+          "commandSubstring": "crictl info",
+          "remediation": "Run 'crictl info' to verify containerd runtime configuration."
+        },
+        {
+          "id": "val-rc-exists",
+          "description": "Registered RuntimeClass gvisor with handler runsc",
+          "type": "resource_exists",
+          "kind": "RuntimeClass",
+          "name": "gvisor",
+          "remediation": "Apply a RuntimeClass manifest with name 'gvisor' and handler 'runsc'."
+        },
+        {
+          "id": "val-pod-exists",
+          "description": "Created Pod untrusted-sandbox referencing RuntimeClass gvisor",
+          "type": "resource_exists",
+          "kind": "Pod",
+          "name": "untrusted-sandbox",
+          "namespace": "default",
+          "remediation": "Deploy Pod 'untrusted-sandbox' in namespace 'default'."
+        },
+        {
+          "id": "val-pod-running",
+          "description": "Pod untrusted-sandbox successfully reconciled and entered Running phase",
+          "type": "pod_status_running",
+          "name": "untrusted-sandbox",
+          "namespace": "default",
+          "remediation": "Ensure Pod 'untrusted-sandbox' has valid container specs and enters Running status."
+        }
+      ],
+      "solutionCommands": [
+        "crictl info",
+        "cat <<EOF | kubectl apply -f -\napiVersion: node.k8s.io/v1\nkind: RuntimeClass\nmetadata:\n  name: gvisor\nhandler: runsc\nEOF",
+        "cat <<EOF | kubectl apply -f -\napiVersion: v1\nkind: Pod\nmetadata:\n  name: untrusted-sandbox\n  namespace: default\nspec:\n  runtimeClassName: gvisor\n  containers:\n  - name: sandbox-app\n    image: nginx:1.27-alpine\nEOF",
+        "kubectl get pod untrusted-sandbox"
+      ],
+      "troubleshootingGuide": "Verify RuntimeClass gvisor with handler runsc is created and pod untrusted-sandbox has runtimeClassName: gvisor and enters Running phase."
+    }
+  ],
+  "assessmentQuestions": [
+    {
+      "id": "q-cri-01",
+      "question": "How does gVisor (runsc) fundamentally isolate container workloads compared to standard runc?",
+      "options": [
+        "(Recommended) gVisor acts as an application kernel running in user space (Sentry), intercepting guest system calls and emulating them without direct access to the host kernel.",
+        "gVisor spins up a heavy full-weight VMware hypervisor virtual machine for each container.",
+        "gVisor uses standard Linux namespaces without any system call filtering or interception.",
+        "gVisor only works on Windows containers and cannot execute Linux ELF binaries."
+      ],
+      "correctIndex": 0,
+      "explanation": "Unlike runc which shares the host Linux kernel directly via cgroups and namespaces, gVisor provides a distinct application kernel (Sentry) implemented in Go that intercepts system calls and implements kernel primitives in user space, shielding the host kernel from exploits."
+    },
+    {
+      "id": "q-cri-02",
+      "question": "In containerd 1.7+ and 2.0+, what is the recommended architecture for configuring private registry mirrors with TLS certificates?",
+      "options": [
+        "(Recommended) Specifying per-registry host directories under /etc/containerd/certs.d/<registry-domain>/hosts.toml.",
+        "Embedding credentials directly into /etc/docker/daemon.json.",
+        "Hardcoding mirror IP addresses into /etc/resolv.conf.",
+        "Passing unencrypted plaintext flags to kubelet --image-repository-mirror."
+      ],
+      "correctIndex": 0,
+      "explanation": "containerd uses the /etc/containerd/certs.d/ directory structure where each registry host has its own directory containing hosts.toml, CA certs, and client TLS credentials, providing decentralized, modular mirror and endpoint configuration."
+    }
+  ]
+}
