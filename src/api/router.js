@@ -822,11 +822,13 @@ class ApiRouter {
     if (method === 'POST' && pathname === '/api/architectures/deploy') {
       const body = await readJsonBody(req);
       const compiled = this.architectures.compileToManifests(body.nodes || [], body.edges || []);
-      if (compiled.kubernetesYaml && compiled.kubernetesYaml.trim()) {
-        session.cluster.applyManifest(compiled.kubernetesYaml);
+      const yamlToApply = (body.yaml && body.yaml.trim()) ? body.yaml : compiled.kubernetesYaml;
+      if (yamlToApply && yamlToApply.trim()) {
+        session.cluster.applyManifest(yamlToApply);
       }
       return sendJson(res, 200, {
         ...compiled,
+        kubernetesYaml: yamlToApply,
         clusterState: session.cluster.exportSnapshot()
       });
     }

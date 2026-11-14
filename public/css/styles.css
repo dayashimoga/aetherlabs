@@ -1943,7 +1943,8 @@ pre {
 
 .arch-canvas-node {
   position: absolute;
-  width: 170px;
+  min-width: 220px;
+  width: 220px;
   background: var(--bg-card);
   border: 1px solid var(--border-subtle);
   border-radius: 8px;
@@ -1977,7 +1978,7 @@ pre {
 }
 
 .arch-node-header {
-  padding: 0.35rem 0.5rem;
+  padding: 0.35rem 0.65rem;
   background: #090e1a;
   border-bottom: 1px solid var(--border-subtle);
   border-radius: 7px 7px 0 0;
@@ -1987,10 +1988,11 @@ pre {
 }
 
 .arch-node-type-badge {
-  font-size: 0.68rem;
+  font-size: 0.7rem;
   font-weight: 700;
   text-transform: uppercase;
-  color: var(--accent-blue);
+  color: var(--accent-cyan);
+  letter-spacing: 0.04em;
 }
 
 .arch-node-remove-btn {
@@ -1998,7 +2000,7 @@ pre {
   border: none;
   color: var(--text-muted);
   cursor: pointer;
-  font-size: 0.9rem;
+  font-size: 0.95rem;
   line-height: 1;
   padding: 0 2px;
 }
@@ -2008,17 +2010,19 @@ pre {
 }
 
 .arch-node-body {
-  padding: 0.45rem 0.55rem;
+  padding: 0.5rem 0.65rem;
 }
 
 .arch-node-title {
-  font-size: 0.78rem;
+  font-size: 0.82rem;
   font-weight: 700;
   color: var(--text-primary);
   margin-bottom: 0.25rem;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  line-height: 1.35;
+  letter-spacing: -0.01em;
 }
 
 .arch-node-meta {
@@ -2085,20 +2089,22 @@ pre {
   width: 12px;
   height: 12px;
   border-radius: 50%;
-  background: #38bdf8;
+  background: var(--accent-cyan);
   border: 2px solid #060a13;
   cursor: crosshair;
   position: absolute;
   top: 50%;
   transform: translateY(-50%);
   pointer-events: auto;
-  transition: transform 0.15s, background 0.15s;
+  transition: transform 0.15s, background 0.15s, box-shadow 0.15s;
   z-index: 10;
+  box-shadow: 0 0 6px rgba(56, 189, 248, 0.5);
 }
 
 .arch-node-port:hover, .arch-node-port.connecting {
   transform: translateY(-50%) scale(1.4);
   background: #f59e0b;
+  box-shadow: 0 0 10px #f59e0b;
 }
 
 .arch-node-port.input-port {

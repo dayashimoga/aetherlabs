@@ -844,12 +844,13 @@
           <div class="arch-tab-content active" id="arch-tab-yaml" role="tabpanel" aria-labelledby="arch-tab-btn-yaml">
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.4rem;">
               <span style="font-size:0.78rem; font-weight:600; color:var(--accent-blue);">Live Compiled Kubernetes Manifests (YAML)</span>
-              <div style="display:flex; gap:0.35rem;">
+              <div style="display:flex; gap:0.35rem; align-items:center;">
+                <button class="btn btn-xs" id="btn-sync-arch-yaml" type="button" title="Parse YAML edits and synchronize visual node-graph canvas">🔄 Sync to Canvas</button>
                 <button class="btn btn-xs" id="btn-copy-arch-yaml" type="button">📋 Copy YAML</button>
                 <button class="btn btn-primary btn-xs" id="btn-arch-apply-yaml" type="button">▶ Apply to Cluster</button>
               </div>
             </div>
-            <textarea id="arch-yaml-out" class="code-editor arch-code-editor" spellcheck="false" readonly></textarea>
+            <textarea id="arch-yaml-out" class="code-editor arch-code-editor" spellcheck="false" placeholder="# Kubernetes manifests compile live here as you assemble components..."></textarea>
           </div>
 
           <!-- Tab 2: OpenTofu / Terraform HCL Compiler -->
@@ -860,7 +861,7 @@
                 <button class="btn btn-xs" id="btn-copy-arch-hcl" type="button">📋 Copy HCL</button>
               </div>
             </div>
-            <textarea id="arch-hcl-out" class="code-editor arch-code-editor" spellcheck="false" readonly></textarea>
+            <textarea id="arch-hcl-out" class="code-editor arch-code-editor" spellcheck="false" placeholder="# OpenTofu and Terraform HCL manifests compile live here..."></textarea>
           </div>
 
           <!-- Tab 3: Well-Architected Framework & CIS Security Pillars -->
