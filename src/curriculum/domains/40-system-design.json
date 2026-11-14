@@ -1,0 +1,266 @@
+{
+  "id": "system-design",
+  "title": "System Design, Capacity Estimation, Sharding & Distributed Rate Limiting",
+  "category": "Architecture & System Design",
+  "trackId": "track-platform",
+  "version": "1.0.0",
+  "difficulty": "Advanced",
+  "estimatedHours": 8,
+  "summary": "Master high-scale distributed system design: quantitative capacity estimations (QPS, egress bandwidth, storage growth over 5 years), consistent hashing rings and database horizontal sharding keys, multi-tier distributed caching architectures (Redis cache-aside, thundering herd mitigation, TTL jitter), and distributed rate-limiting algorithms (Token Bucket, Sliding Window Counter).",
+  "prerequisites": [
+    "microservices-architecture",
+    "distributed-systems"
+  ],
+  "learningObjectives": [
+    "Perform mathematical capacity estimations for million-RPS systems across compute, memory, network bandwidth, and persistent storage retention.",
+    "Design horizontal database sharding architectures with consistent hashing to prevent hot spot partition skew.",
+    "Configure multi-tier distributed caching strategies and Token Bucket rate limiters to protect critical downstream datastores."
+  ],
+  "curriculumModules": [
+    {
+      "id": "mod-sys-01",
+      "title": "Capacity Estimation & Consistent Hashing Sharding Topology",
+      "conceptSummary": "High-scale system design begins with mathematical capacity planning: converting Daily Active Users (DAU) into average and peak QPS, multiplying transaction payload sizes to calculate network ingress/egress throughput (Gbps), and calculating 5-year storage retention with replication overhead. For database partitioning, traditional modulo hashing (hash(k) % N) re-shuffles almost all keys when nodes are added or removed; Consistent Hashing rings with virtual nodes minimize data migration to K/N keys while distributing partition load evenly across heterogeneous hardware.",
+      "productionArchitecturePattern": "Size microservice pools according to peak QPS projections and shard database tiers across Consistent Hashing rings with 100 to 256 virtual nodes per physical instance.",
+      "keyCommands": [
+        "cat /sysdesign/capacity-plan-spec.yaml",
+        "kubectl apply -f /sysdesign/capacity-plan-spec.yaml"
+      ]
+    },
+    {
+      "id": "mod-sys-02",
+      "title": "Multi-Tier Caching & Distributed Rate Limiting (Token Bucket)",
+      "conceptSummary": "High-throughput systems require protective tiers between clients and datastores. In the Cache-Aside pattern, application workers query Redis first; on misses, they read from the database and populate the cache with randomized TTL jitter to prevent thundering herd (cache stampede) failures. To prevent abuse and protect connection pools, distributed Token Bucket rate limiters maintain discrete token balances with constant refill rates, rejecting traffic exceeding capacity with HTTP 429 Too Many Requests.",
+      "productionArchitecturePattern": "Deploy high-availability Redis cache clusters alongside Token Bucket ingress rate limiters to bound backend traffic and protect core database connection pools.",
+      "keyCommands": [
+        "cat /sysdesign/cache-and-ratelimit.yaml",
+        "kubectl apply -f /sysdesign/cache-and-ratelimit.yaml"
+      ]
+    }
+  ],
+  "labs": [
+    {
+      "id": "lab-sys-01-capacity-estimation-plan",
+      "title": "Quantitative Capacity & Bandwidth Estimation Specification",
+      "difficulty": "Advanced",
+      "durationMinutes": 20,
+      "xpReward": 150,
+      "scenario": "Formalize an enterprise capacity plan for a high-volume financial transactions tier: author a capacity estimation specification in /sysdesign/capacity-plan-spec.yaml defining ConfigMap capacity-plan-spec in namespace production with targetPeakQPS: '50000', dailyActiveUsers: '10000000', readWriteRatio: '4:1', and fiveYearStorageTB: '120'. Apply to namespace production.",
+      "productionContext": "Accurate quantitative capacity planning prevents disastrous infrastructure out-of-memory crashes, egress bandwidth saturation, and unexpected cloud compute overages during high-traffic events.",
+      "prerequisites": [
+        "lab-micro-02-transactional-outbox"
+      ],
+      "objectives": [
+        "Create namespace production if not present.",
+        "Author ConfigMap capacity-plan-spec.",
+        "Configure targetPeakQPS to '50000'.",
+        "Configure fiveYearStorageTB to '120'.",
+        "Apply ConfigMap to namespace production."
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: capacity-plan-spec\n  namespace: production\ndata:\n  targetPeakQPS: \"50000\"\n  dailyActiveUsers: \"10000000\"\n  readWriteRatio: \"4:1\"\n  fiveYearStorageTB: \"120\"\n",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Create production namespace",
+          "instruction": "Create namespace production if not present.",
+          "commandHint": "kubectl create namespace production"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Author capacity plan specification",
+          "instruction": "Author manifest /sysdesign/capacity-plan-spec.yaml defining ConfigMap capacity-plan-spec.",
+          "commandHint": "cat << 'EOF' > /sysdesign/capacity-plan-spec.yaml\n...\nEOF"
+        },
+        {
+          "stepNumber": 3,
+          "title": "Apply capacity plan manifest",
+          "instruction": "Apply manifest to namespace production.",
+          "commandHint": "kubectl apply -f /sysdesign/capacity-plan-spec.yaml"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "cm-capacity-plan-exists",
+          "description": "ConfigMap capacity-plan-spec exists in namespace production",
+          "type": "resource_exists",
+          "kind": "ConfigMap",
+          "namespace": "production",
+          "name": "capacity-plan-spec",
+          "remediation": "Apply ConfigMap capacity-plan-spec in namespace production"
+        },
+        {
+          "id": "cm-target-peak-qps",
+          "description": "ConfigMap targetPeakQPS is '50000'",
+          "type": "resource_field_equals",
+          "kind": "ConfigMap",
+          "namespace": "production",
+          "name": "capacity-plan-spec",
+          "fieldPath": "data.targetPeakQPS",
+          "expectedValue": "50000",
+          "remediation": "Set data.targetPeakQPS: '50000' on ConfigMap capacity-plan-spec"
+        },
+        {
+          "id": "cm-storage-tb",
+          "description": "ConfigMap fiveYearStorageTB is '120'",
+          "type": "resource_field_equals",
+          "kind": "ConfigMap",
+          "namespace": "production",
+          "name": "capacity-plan-spec",
+          "fieldPath": "data.fiveYearStorageTB",
+          "expectedValue": "120",
+          "remediation": "Set data.fiveYearStorageTB: '120' on ConfigMap capacity-plan-spec"
+        }
+      ],
+      "solutionCommands": [
+        "mkdir -p /sysdesign",
+        "kubectl create namespace production",
+        "cat << 'EOF' > /sysdesign/capacity-plan-spec.yaml\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: capacity-plan-spec\n  namespace: production\ndata:\n  targetPeakQPS: \"50000\"\n  dailyActiveUsers: \"10000000\"\n  readWriteRatio: \"4:1\"\n  fiveYearStorageTB: \"120\"\nEOF",
+        "kubectl apply -f /sysdesign/capacity-plan-spec.yaml"
+      ],
+      "troubleshootingGuide": [
+        {
+          "problem": "ConfigMap missing or data fields incorrect.",
+          "cause": "ConfigMap must contain targetPeakQPS as '50000' and fiveYearStorageTB as '120'.",
+          "solution": "Apply /sysdesign/capacity-plan-spec.yaml to namespace production."
+        }
+      ]
+    },
+    {
+      "id": "lab-sys-02-token-bucket-ratelimit",
+      "title": "Distributed Token Bucket Rate Limiter & Gateway Deployment",
+      "difficulty": "Advanced",
+      "durationMinutes": 20,
+      "xpReward": 150,
+      "scenario": "Implement a distributed Token Bucket rate limiter contract and gateway tier: author ConfigMap ratelimit-token-bucket in namespace production defining algorithm: TokenBucket, capacity: '10000', refillRatePerSec: '2000', and backendCache: redis-cluster, and deploy Deployment payment-gateway in namespace production with 3 replicas. Apply all manifests to namespace production.",
+      "productionContext": "Distributed rate limiting prevents malicious traffic spikes from overwhelming payment databases, guaranteeing fair compute allocation across client tenants.",
+      "prerequisites": [
+        "lab-sys-01-capacity-estimation-plan"
+      ],
+      "objectives": [
+        "Create namespace production if not present.",
+        "Author ConfigMap ratelimit-token-bucket.",
+        "Author Deployment payment-gateway with 3 replicas.",
+        "Apply all manifests to namespace production."
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: ratelimit-token-bucket\n  namespace: production\ndata:\n  algorithm: \"TokenBucket\"\n  capacity: \"10000\"\n  refillRatePerSec: \"2000\"\n  backendCache: \"redis-cluster\"\n---\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: payment-gateway\n  namespace: production\nspec:\n  replicas: 3\n  selector:\n    matchLabels:\n      app: payment-gateway\n  template:\n    metadata:\n      labels:\n        app: payment-gateway\n    spec:\n      containers:\n        - name: gateway\n          image: nginx:1.27-alpine\n",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Create production namespace",
+          "instruction": "Create namespace production if not present.",
+          "commandHint": "kubectl create namespace production"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Author rate limiter and gateway manifest",
+          "instruction": "Author manifest /sysdesign/cache-and-ratelimit.yaml defining ConfigMap and Deployment.",
+          "commandHint": "cat << 'EOF' > /sysdesign/cache-and-ratelimit.yaml\n...\nEOF"
+        },
+        {
+          "stepNumber": 3,
+          "title": "Apply manifest",
+          "instruction": "Apply manifest to namespace production.",
+          "commandHint": "kubectl apply -f /sysdesign/cache-and-ratelimit.yaml"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "cm-ratelimit-exists",
+          "description": "ConfigMap ratelimit-token-bucket exists in namespace production",
+          "type": "resource_exists",
+          "kind": "ConfigMap",
+          "namespace": "production",
+          "name": "ratelimit-token-bucket",
+          "remediation": "Apply ConfigMap ratelimit-token-bucket in namespace production"
+        },
+        {
+          "id": "cm-ratelimit-algo",
+          "description": "ConfigMap algorithm is TokenBucket",
+          "type": "resource_field_equals",
+          "kind": "ConfigMap",
+          "namespace": "production",
+          "name": "ratelimit-token-bucket",
+          "fieldPath": "data.algorithm",
+          "expectedValue": "TokenBucket",
+          "remediation": "Set data.algorithm: TokenBucket on ConfigMap ratelimit-token-bucket"
+        },
+        {
+          "id": "cm-ratelimit-capacity",
+          "description": "ConfigMap capacity is '10000'",
+          "type": "resource_field_equals",
+          "kind": "ConfigMap",
+          "namespace": "production",
+          "name": "ratelimit-token-bucket",
+          "fieldPath": "data.capacity",
+          "expectedValue": "10000",
+          "remediation": "Set data.capacity: '10000' on ConfigMap ratelimit-token-bucket"
+        },
+        {
+          "id": "deploy-gateway-exists",
+          "description": "Deployment payment-gateway exists in namespace production",
+          "type": "resource_exists",
+          "kind": "Deployment",
+          "namespace": "production",
+          "name": "payment-gateway",
+          "remediation": "Apply Deployment payment-gateway in namespace production"
+        },
+        {
+          "id": "deploy-gateway-replicas",
+          "description": "Deployment payment-gateway has 3 replicas",
+          "type": "resource_field_equals",
+          "kind": "Deployment",
+          "namespace": "production",
+          "name": "payment-gateway",
+          "fieldPath": "spec.replicas",
+          "expectedValue": 3,
+          "remediation": "Set spec.replicas: 3 on Deployment payment-gateway"
+        }
+      ],
+      "solutionCommands": [
+        "mkdir -p /sysdesign",
+        "kubectl create namespace production",
+        "cat << 'EOF' > /sysdesign/cache-and-ratelimit.yaml\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: ratelimit-token-bucket\n  namespace: production\ndata:\n  algorithm: \"TokenBucket\"\n  capacity: \"10000\"\n  refillRatePerSec: \"2000\"\n  backendCache: \"redis-cluster\"\n---\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: payment-gateway\n  namespace: production\nspec:\n  replicas: 3\n  selector:\n    matchLabels:\n      app: payment-gateway\n  template:\n    metadata:\n      labels:\n        app: payment-gateway\n    spec:\n      containers:\n        - name: gateway\n          image: nginx:1.27-alpine\nEOF",
+        "kubectl apply -f /sysdesign/cache-and-ratelimit.yaml"
+      ],
+      "troubleshootingGuide": [
+        {
+          "problem": "Deployment or ConfigMap missing in namespace production.",
+          "cause": "Both resources must be applied to namespace production.",
+          "solution": "Apply /sysdesign/cache-and-ratelimit.yaml to namespace production."
+        }
+      ]
+    }
+  ],
+  "assessmentQuestions": [
+    {
+      "id": "q-sys-01",
+      "question": "What is the primary advantage of Consistent Hashing with virtual nodes over simple modulo hashing (hash(key) % N) in distributed storage clusters?",
+      "options": [
+        "Consistent hashing eliminates the need for network cables.",
+        "When nodes are added or removed, traditional modulo hashing remaps almost all keys, triggering catastrophic network data rebalancing; Consistent Hashing only remaps K/N keys (where K is total keys and N is number of servers), and virtual nodes ensure uniform distribution without hotspots.",
+        "Modulo hashing only works on 32-bit processors.",
+        "Consistent hashing prevents all database crashes."
+      ],
+      "correctIndex": 1,
+      "explanation": "Consistent Hashing maps both servers and data keys to a circular ring. Adding or removing a node only impacts adjacent keys on the ring ($K/N$ keys), preventing massive cluster reshuffling, while virtual nodes distribute variance across all physical servers."
+    },
+    {
+      "id": "q-sys-02",
+      "question": "In distributed rate limiting, how does the Token Bucket algorithm differ from the Leaky Bucket algorithm?",
+      "options": [
+        "Token Bucket requires a physical water pipe.",
+        "Token Bucket permits short bursts of traffic up to the bucket capacity while maintaining a constant average replenishment rate; Leaky Bucket forces all requests to exit at a strict, continuous, constant output rate, smoothing bursts into a uniform stream.",
+        "Leaky bucket cannot be implemented in software.",
+        "Token bucket only works with HTTP POST requests."
+      ],
+      "correctIndex": 1,
+      "explanation": "Token Bucket allows temporary bursts as long as accumulated tokens exist in the bucket. Leaky Bucket enforces an invariant, constant egress processing rate, queuing or discarding bursts that exceed the leak rate."
+    }
+  ]
+}
