@@ -566,6 +566,481 @@
     if (statLevel) statLevel.textContent = `Level ${Math.floor((profile.xp || 0) / 250) + 1}`;
   }
 
+  // ==========================================================================
+  // 7-Tier DAG Skill Tree & Domain Syllabus Drawer
+  // ==========================================================================
+
+  const CURRICULUM_TIERS = [
+    {
+      tier: 1,
+      title: 'Tier 1: Systems & Networking Foundations',
+      badge: 'Tier 1: Foundations',
+      summary: 'Linux kernel isolation primitives (cgroups v2, namespaces), OCI container runtime mechanics, and cloud-native L4/L7 TCP/IP networking.',
+      certTarget: 'CCNFA / LFCS',
+      domainIds: ['linux-fundamentals', 'containers-runtime', 'cloud-networking']
+    },
+    {
+      tier: 2,
+      title: 'Tier 2: Packaging, CI/CD & GitOps Delivery',
+      badge: 'Tier 2: Packaging & GitOps',
+      summary: 'Declarative packaging with Helm charts and Kustomize overlays, Argo CD GitOps reconciliation engines, and automated cloud-native delivery pipelines.',
+      certTarget: 'GitOps / CCOA',
+      domainIds: ['cncf-packaging', 'gitops-delivery', 'devops-cicd']
+    },
+    {
+      tier: 3,
+      title: 'Tier 3: Kubernetes Core, Security & Lifecycle Operations',
+      badge: 'Tier 3: Kubernetes Core',
+      summary: 'Production workload scheduling, cluster bootstrapping with kubeadm, etcd disaster recovery, Gateway API, Kyverno policies, and CKS hardening.',
+      certTarget: 'CKA / CKAD / CKS',
+      domainIds: [
+        'kubernetes-core',
+        'k8s-control-plane-lifecycle',
+        'storage-csi-velero-dr',
+        'gateway-api-cilium',
+        'policy-as-code-kyverno',
+        'devsecops-security'
+      ]
+    },
+    {
+      tier: 4,
+      title: 'Tier 4: Infrastructure as Code & Multi-Cloud Architecture',
+      badge: 'Tier 4: IaC & Multi-Cloud',
+      summary: 'Declarative infrastructure with OpenTofu/Terraform, and hybrid cloud topologies across AWS EKS, Azure AKS, and Google GKE.',
+      certTarget: 'Terraform / AWS / Azure',
+      domainIds: ['iac-opentofu-terraform', 'cloud-aws', 'cloud-azure-gcp']
+    },
+    {
+      tier: 5,
+      title: 'Tier 5: Service Mesh & Zero-Trust Cryptographic Security',
+      badge: 'Tier 5: Service Mesh & Zero-Trust',
+      summary: 'Istio mTLS, L7 traffic management, SPIFFE/SPIRE cryptographic workload identities, and External Secrets Operator integrations.',
+      certTarget: 'ICA / Zero-Trust',
+      domainIds: ['service-mesh', 'zero-trust-spiffe-externalsecrets']
+    },
+    {
+      tier: 6,
+      title: 'Tier 6: Observability, SRE & Platform Engineering',
+      badge: 'Tier 6: SRE & Platform',
+      summary: 'Prometheus & OpenTelemetry instrumentation, Chaos Mesh drills, Internal Developer Platforms (Backstage), and KEDA/Karpenter autoscaling.',
+      certTarget: 'PCA / SRE Certified',
+      domainIds: [
+        'observability-stack',
+        'sre-incident-chaos',
+        'platform-engineering',
+        'autoscaling-keda-karpenter',
+        'multitenancy-vcluster-crossplane'
+      ]
+    },
+    {
+      tier: 7,
+      title: 'Tier 7: Cutting-Edge & Autonomous AI-Ops',
+      badge: 'Tier 7: Autonomous & AI-Ops',
+      summary: 'Self-healing autonomous control loops, eBPF Tetragon security observability, Wasm runtimes, KServe LLM inference, and FinOps unit economics.',
+      certTarget: 'CMCAP / AI-Ops',
+      domainIds: [
+        'aiops-autonomous',
+        'wasm-ebpf-edge',
+        'cloud-native-aiml-kserve',
+        'finops-green-cloud'
+      ]
+    }
+  ];
+
+  const DOMAIN_ICONS = {
+    'linux-fundamentals': '🐧',
+    'containers-runtime': '🐳',
+    'cloud-networking': '🌐',
+    'cncf-packaging': '📦',
+    'gitops-delivery': '🐙',
+    'devops-cicd': '🚀',
+    'kubernetes-core': '☸️',
+    'k8s-control-plane-lifecycle': '⚙️',
+    'storage-csi-velero-dr': '💾',
+    'gateway-api-cilium': '🚦',
+    'policy-as-code-kyverno': '📜',
+    'devsecops-security': '🛡️',
+    'iac-opentofu-terraform': '📐',
+    'cloud-aws': '☁️',
+    'cloud-azure-gcp': '🌍',
+    'service-mesh': '🕸️',
+    'zero-trust-spiffe-externalsecrets': '🔐',
+    'observability-stack': '📊',
+    'sre-incident-chaos': '🚨',
+    'platform-engineering': '🏗️',
+    'autoscaling-keda-karpenter': '📈',
+    'multitenancy-vcluster-crossplane': '🏢',
+    'aiops-autonomous': '🤖',
+    'wasm-ebpf-edge': '⚡',
+    'cloud-native-aiml-kserve': '🧠',
+    'finops-green-cloud': '🌿'
+  };
+
+  const DOMAIN_CERTS = {
+    'linux-fundamentals': 'LFCS / Linux',
+    'containers-runtime': 'CKAD / CRI',
+    'cloud-networking': 'CCNFA / CNI',
+    'cncf-packaging': 'Helm / Kustomize',
+    'gitops-delivery': 'GitOps / CCOA',
+    'devops-cicd': 'CI/CD Pipelines',
+    'kubernetes-core': 'CKA / CKAD',
+    'k8s-control-plane-lifecycle': 'CKA Operations',
+    'storage-csi-velero-dr': 'CKA / Storage DR',
+    'gateway-api-cilium': 'Cilium / Gateway API',
+    'policy-as-code-kyverno': 'Kyverno / CKS',
+    'devsecops-security': 'CKS Hardening',
+    'iac-opentofu-terraform': 'Terraform Assoc.',
+    'cloud-aws': 'AWS Solutions',
+    'cloud-azure-gcp': 'Azure / GCP Multi-Cloud',
+    'service-mesh': 'ICA / Istio Mesh',
+    'zero-trust-spiffe-externalsecrets': 'CKS / Zero-Trust',
+    'observability-stack': 'PCA / Prometheus',
+    'sre-incident-chaos': 'SRE / Chaos Mesh',
+    'platform-engineering': 'Platform Eng. / IDP',
+    'autoscaling-keda-karpenter': 'FinOps / Autoscaling',
+    'multitenancy-vcluster-crossplane': 'Crossplane / vCluster',
+    'aiops-autonomous': 'AI-Ops / Self-Healing',
+    'wasm-ebpf-edge': 'Wasm / eBPF Edge',
+    'cloud-native-aiml-kserve': 'MLOps / KServe',
+    'finops-green-cloud': 'FinOps Certified'
+  };
+
+  const DOMAIN_INCIDENT_MAP = {
+    'linux-fundamentals': 'inc-15-node-notready-kubelet-down',
+    'containers-runtime': 'inc-02-bad-image-rollout',
+    'cloud-networking': 'inc-11-coredns-loop-crash',
+    'cncf-packaging': 'inc-06-gitops-drift',
+    'gitops-delivery': 'inc-06-gitops-drift',
+    'devops-cicd': 'inc-02-bad-image-rollout',
+    'kubernetes-core': 'inc-01-selector-blackhole',
+    'k8s-control-plane-lifecycle': 'inc-09-etcd-quorum-loss',
+    'storage-csi-velero-dr': 'inc-12-pvc-storageclass-pending',
+    'gateway-api-cilium': 'inc-01-selector-blackhole',
+    'policy-as-code-kyverno': 'inc-10-kyverno-admission-block',
+    'devsecops-security': 'inc-08-zero-trust-db-exposure',
+    'iac-opentofu-terraform': 'inc-14-iam-irsa-access-denied',
+    'cloud-aws': 'inc-14-iam-irsa-access-denied',
+    'cloud-azure-gcp': 'inc-05-cpu-starvation-pending',
+    'service-mesh': 'inc-08-zero-trust-db-exposure',
+    'zero-trust-spiffe-externalsecrets': 'inc-03-crashloop-secret',
+    'observability-stack': 'inc-13-slow-app-cpu-throttling',
+    'sre-incident-chaos': 'inc-04-oomkilled-memory',
+    'platform-engineering': 'inc-10-kyverno-admission-block',
+    'autoscaling-keda-karpenter': 'inc-04-oomkilled-memory',
+    'multitenancy-vcluster-crossplane': 'inc-09-etcd-quorum-loss',
+    'aiops-autonomous': 'inc-04-oomkilled-memory',
+    'wasm-ebpf-edge': 'inc-08-zero-trust-db-exposure',
+    'cloud-native-aiml-kserve': 'inc-07-gpu-taint-unschedulable',
+    'finops-green-cloud': 'inc-13-slow-app-cpu-throttling'
+  };
+
+  function render7TierSkillTree(filterText = '') {
+    const container = document.getElementById('skill-tree-container');
+    if (!container || !state.overview) return;
+
+    const completedLabs = ((state.overview.learner && state.overview.learner.completedLabs) || []).filter(
+      (l) => l.status === 'completed'
+    );
+    const completedSet = new Set(completedLabs.map((l) => l.lab_id));
+    const allDomains = state.overview.domains || [];
+    const domainMap = new Map(allDomains.map((d) => [d.id, d]));
+    const q = (filterText || '').trim().toLowerCase();
+
+    let html = '';
+    const visibleTiers = [];
+
+    CURRICULUM_TIERS.forEach((tierConfig) => {
+      // Find domains in this tier
+      const tierDomains = tierConfig.domainIds
+        .map((id) => domainMap.get(id))
+        .filter(Boolean);
+
+      // Filter if search query is present
+      const matchingDomains = tierDomains.filter((d) => {
+        if (!q) return true;
+        return (
+          d.id.toLowerCase().includes(q) ||
+          d.title.toLowerCase().includes(q) ||
+          (d.summary || '').toLowerCase().includes(q) ||
+          (DOMAIN_CERTS[d.id] || '').toLowerCase().includes(q) ||
+          (d.labs || []).some((l) => l.title.toLowerCase().includes(q))
+        );
+      });
+
+      if (q && matchingDomains.length === 0) {
+        return; // Skip empty tiers during search
+      }
+
+      visibleTiers.push({ tierConfig, tierDomains, matchingDomains });
+    });
+
+    if (q && visibleTiers.length === 0) {
+      container.innerHTML = `
+        <div style="text-align:center; padding:3rem; background:var(--bg-card); border:1px dashed var(--border-subtle); border-radius:12px;">
+          <p style="color:var(--text-secondary); font-size:0.95rem;">No curriculum domains match "${escapeHtml(filterText)}".</p>
+          <button class="btn btn-primary" id="btn-clear-tree-search" type="button" style="margin-top:0.75rem;">Clear Search Filter</button>
+        </div>
+      `;
+      const clearBtn = document.getElementById('btn-clear-tree-search');
+      if (clearBtn) {
+        clearBtn.addEventListener('click', () => {
+          const searchInput = document.getElementById('search-input');
+          if (searchInput) searchInput.value = '';
+          renderPathsAndDomains();
+        });
+      }
+      return;
+    }
+
+    visibleTiers.forEach(({ tierConfig, tierDomains, matchingDomains }, index) => {
+      // Calculate tier progression
+      const allTierLabs = tierDomains.flatMap((d) => d.labs || []);
+      const completedTierLabs = allTierLabs.filter((l) => completedSet.has(l.id));
+      const tierPct = allTierLabs.length > 0 ? Math.round((completedTierLabs.length / allTierLabs.length) * 100) : 0;
+
+      // Tier unlock logic: Tier 1 is always unlocked; higher tiers unlock when learner has XP/labs
+      const isTierUnlocked = tierConfig.tier === 1 || completedLabs.length > 0;
+
+      const nodesHtml = matchingDomains
+        .map((domain) => {
+          const dLabs = domain.labs || [];
+          const dDoneLabs = dLabs.filter((l) => completedSet.has(l.id));
+          const dPct = dLabs.length > 0 ? Math.round((dDoneLabs.length / dLabs.length) * 100) : 0;
+          const isMastered = dLabs.length > 0 && dDoneLabs.length === dLabs.length;
+          const isInProgress =
+            dDoneLabs.length > 0 || (state.activeLab && dLabs.some((l) => l.id === state.activeLab.id));
+
+          let status = 'unlocked';
+          let statusClass = '';
+          let dotClass = 'status-unlocked';
+
+          if (isMastered) {
+            status = 'mastered';
+            statusClass = 'node-mastered';
+            dotClass = 'status-mastered';
+          } else if (isInProgress) {
+            status = 'progress';
+            statusClass = 'node-progress';
+            dotClass = 'status-progress';
+          } else if (!isTierUnlocked) {
+            status = 'locked';
+            statusClass = 'node-locked';
+            dotClass = 'status-locked';
+          }
+
+          const icon = DOMAIN_ICONS[domain.id] || '☸️';
+          const cert = DOMAIN_CERTS[domain.id] || domain.category || 'Cloud-Native';
+
+          return `
+            <div class="domain-node-card ${statusClass}" data-domain-id="${domain.id}" role="button" tabindex="0" aria-label="${escapeHtml(domain.title)}">
+              <div class="domain-node-top">
+                <div class="domain-node-title-wrap">
+                  <span class="domain-node-icon" aria-hidden="true">${icon}</span>
+                  <div>
+                    <div class="domain-node-title">${escapeHtml(domain.title)}</div>
+                    <span style="font-size:0.72rem; color:var(--text-muted); font-family:var(--font-mono);">${domain.id}</span>
+                  </div>
+                </div>
+                <span class="node-status-dot ${dotClass}" title="Status: ${status}"></span>
+              </div>
+              <div style="font-size:0.78rem; color:var(--text-secondary); line-height:1.4; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden;">
+                ${escapeHtml(domain.summary || '')}
+              </div>
+              <div class="domain-node-progress-bar">
+                <div class="domain-node-progress-fill" style="width:${dPct}%; background:${dPct === 100 ? 'var(--accent-emerald)' : 'var(--accent-cyan)'};"></div>
+              </div>
+              <div class="domain-node-footer">
+                <span class="domain-node-cert">${escapeHtml(cert)}</span>
+                <span>${dDoneLabs.length}/${dLabs.length} Labs (${dPct}%)</span>
+              </div>
+            </div>
+          `;
+        })
+        .join('');
+
+      html += `
+        <div class="tier-group" id="tier-${tierConfig.tier}">
+          <div class="tier-group-header">
+            <div class="tier-title-wrap">
+              <span class="badge tier-badge ${tierPct === 100 ? 'badge-emerald' : 'badge-cyan'}">${escapeHtml(tierConfig.badge)}</span>
+              <div>
+                <h3 class="tier-name">${escapeHtml(tierConfig.title)}</h3>
+                <p class="tier-summary">${escapeHtml(tierConfig.summary)}</p>
+              </div>
+            </div>
+            <div style="display:flex; align-items:center; gap:0.75rem; flex-wrap:wrap;">
+              <span class="badge" style="background:var(--bg-secondary); border:1px solid var(--border-subtle);">${escapeHtml(tierConfig.certTarget)}</span>
+              <span style="font-size:0.8rem; font-family:var(--font-mono); color:${tierPct === 100 ? 'var(--accent-emerald)' : 'var(--accent-cyan)'}; font-weight:700;">
+                ${tierPct}% Mastery (${completedTierLabs.length}/${allTierLabs.length} Labs)
+              </span>
+            </div>
+          </div>
+          <div class="tier-nodes-grid">
+            ${nodesHtml}
+          </div>
+        </div>
+      `;
+
+      // DAG Connector between tiers (except after last visible tier)
+      if (index < visibleTiers.length - 1 && !q) {
+        html += `
+          <div class="tier-connector" aria-hidden="true">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="12" y1="5" x2="12" y2="19"></line>
+              <polyline points="19 12 12 19 5 12"></polyline>
+            </svg>
+          </div>
+        `;
+      }
+    });
+
+    container.innerHTML = html;
+
+    // Attach click and keyboard events
+    container.querySelectorAll('.domain-node-card').forEach((card) => {
+      const dId = card.dataset.domainId;
+      card.addEventListener('click', () => openSyllabusDrawer(dId));
+      card.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          openSyllabusDrawer(dId);
+        }
+      });
+    });
+  }
+
+  function openSyllabusDrawer(domainId) {
+    if (!state.overview || !state.overview.domains) return;
+    const domain = state.overview.domains.find((d) => d.id === domainId);
+    if (!domain) return;
+
+    const tier = CURRICULUM_TIERS.find((t) => t.domainIds.includes(domainId));
+    const tierBadge = document.getElementById('syllabus-tier-badge');
+    if (tierBadge) tierBadge.textContent = tier ? tier.badge : 'Cloud-Native Domain';
+
+    const certBadge = document.getElementById('syllabus-cert-badge');
+    if (certBadge) certBadge.textContent = DOMAIN_CERTS[domainId] || domain.category || 'Certification Track';
+
+    const diffBadge = document.getElementById('syllabus-difficulty-badge');
+    if (diffBadge) diffBadge.textContent = domain.difficulty || 'Intermediate';
+
+    const titleEl = document.getElementById('syllabus-domain-title');
+    if (titleEl) titleEl.textContent = domain.title;
+
+    const idEl = document.getElementById('syllabus-domain-id');
+    if (idEl) idEl.textContent = `${domain.id} • ${domain.estimatedHours || 2}h estimated • ${domain.category || 'Cloud-Native'}`;
+
+    const conceptEl = document.getElementById('syllabus-concept-desc');
+    if (conceptEl) {
+      let desc = domain.summary || '';
+      if (domain.learningObjectives && domain.learningObjectives.length) {
+        desc += '\n\nKey Learning Objectives:\n' + domain.learningObjectives.slice(0, 4).map((o) => `• ${o}`).join('\n');
+      }
+      conceptEl.textContent = desc;
+    }
+
+    const labsCountEl = document.getElementById('syllabus-labs-count');
+    const labsListEl = document.getElementById('syllabus-labs-list');
+    const completedSet = new Set(
+      ((state.overview.learner && state.overview.learner.completedLabs) || [])
+        .filter((l) => l.status === 'completed')
+        .map((l) => l.lab_id)
+    );
+
+    const labs = domain.labs || [];
+    if (labsCountEl) labsCountEl.textContent = labs.length;
+
+    if (labsListEl) {
+      labsListEl.innerHTML = labs
+        .map((lab) => {
+          const isDone = completedSet.has(lab.id);
+          return `
+            <div class="syllabus-lab-item">
+              <div class="syllabus-lab-info">
+                <span class="syllabus-lab-name">${escapeHtml(lab.title)}</span>
+                <div class="syllabus-lab-meta">
+                  <span>${escapeHtml(lab.difficulty || 'Intermediate')}</span>
+                  <span>•</span>
+                  <span>${lab.durationMinutes || 15}m</span>
+                  <span>•</span>
+                  <span style="color:var(--accent-cyan); font-weight:600;">+${lab.xpReward || 150} XP</span>
+                  ${isDone ? '<span class="badge badge-emerald" style="margin-left:0.3rem;">Completed</span>' : ''}
+                </div>
+              </div>
+              <button class="btn btn-primary syllabus-lab-launch-btn" data-lab-id="${lab.id}" type="button" style="font-size:0.75rem; padding:0.3rem 0.65rem;">
+                ${isDone ? 'Practice Again' : 'Launch Lab'}
+              </button>
+            </div>
+          `;
+        })
+        .join('');
+
+      labsListEl.querySelectorAll('.syllabus-lab-launch-btn').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          closeSyllabusDrawer();
+          await startLab(btn.dataset.labId);
+        });
+      });
+    }
+
+    // Break-fix challenge section
+    const incId = DOMAIN_INCIDENT_MAP[domainId] || 'inc-01-selector-blackhole';
+    const incident = (state.overview.incidents || []).find((i) => i.id === incId);
+    const breakfixTitle = document.getElementById('syllabus-breakfix-title');
+    const breakfixDesc = document.getElementById('syllabus-breakfix-desc');
+    const breakfixBtn = document.getElementById('syllabus-btn-start-breakfix');
+
+    if (incident) {
+      if (breakfixTitle) breakfixTitle.textContent = `${incident.severity}: ${incident.title}`;
+      if (breakfixDesc) breakfixDesc.textContent = incident.alertSummary || incident.customerImpact || 'Live production incident remediation.';
+      if (breakfixBtn) {
+        breakfixBtn.style.display = 'inline-flex';
+        breakfixBtn.onclick = async () => {
+          closeSyllabusDrawer();
+          await startIncident(incident.id);
+          switchView('view-incidents');
+        };
+      }
+    } else {
+      if (breakfixBtn) breakfixBtn.style.display = 'none';
+    }
+
+    // Start Domain primary CTA
+    const startDomainBtn = document.getElementById('syllabus-btn-start-domain');
+    if (startDomainBtn) {
+      const nextLab = labs.find((l) => !completedSet.has(l.id)) || labs[0];
+      if (nextLab) {
+        startDomainBtn.textContent = `Launch ${nextLab.title.slice(0, 32)}... in Workbench`;
+        startDomainBtn.onclick = async () => {
+          closeSyllabusDrawer();
+          await startLab(nextLab.id);
+        };
+      } else {
+        startDomainBtn.textContent = 'Explore All Labs in Workbench';
+        startDomainBtn.onclick = () => {
+          closeSyllabusDrawer();
+          switchView('view-workbench');
+        };
+      }
+    }
+
+    const drawer = document.getElementById('domain-syllabus-drawer');
+    if (drawer) {
+      drawer.style.display = 'flex';
+      drawer.setAttribute('aria-hidden', 'false');
+      document.body.classList.add('modal-open');
+    }
+  }
+
+  function closeSyllabusDrawer() {
+    const drawer = document.getElementById('domain-syllabus-drawer');
+    if (drawer) {
+      drawer.style.display = 'none';
+      drawer.setAttribute('aria-hidden', 'true');
+      document.body.classList.remove('modal-open');
+    }
+  }
+
   function renderSvgTopology(clusterState) {
     const svg = document.getElementById('cluster-topology-svg');
     if (!svg || !clusterState) return;
@@ -705,6 +1180,7 @@
     if (!filterText) {
       renderContinueLearningHero();
     }
+    render7TierSkillTree(filterText);
     const q = filterText.trim().toLowerCase();
     const completedSet = new Set(
       ((state.overview.learner && state.overview.learner.completedLabs) || [])
@@ -2942,6 +3418,21 @@
       });
     }
 
+    // Domain Syllabus Drawer wiring
+    const closeSyllabusBtn = document.getElementById('btn-close-syllabus-drawer');
+    if (closeSyllabusBtn) {
+      closeSyllabusBtn.addEventListener('click', closeSyllabusDrawer);
+    }
+
+    const syllabusDrawerBackdrop = document.getElementById('domain-syllabus-drawer');
+    if (syllabusDrawerBackdrop) {
+      syllabusDrawerBackdrop.addEventListener('click', (e) => {
+        if (e.target === syllabusDrawerBackdrop) {
+          closeSyllabusDrawer();
+        }
+      });
+    }
+
     // Rail footer action buttons
     const railDiagBtn = document.getElementById('rail-btn-diagnostics');
     if (railDiagBtn) {
@@ -3039,12 +3530,28 @@
         if (archModal && archModal.style.display !== 'none') {
           closeLabArchModal();
         }
+        const syllabusDrawer = document.getElementById('domain-syllabus-drawer');
+        if (syllabusDrawer && syllabusDrawer.style.display !== 'none') {
+          closeSyllabusDrawer();
+        }
       }
     });
 
     if (window.location.hash === '#admin-diagnostics' || window.location.pathname === '/admin/diagnostics') {
       openDiagnosticsModal();
     }
+  }
+
+  if (typeof window !== 'undefined') {
+    window.KubeLabsSkillTree = {
+      CURRICULUM_TIERS,
+      DOMAIN_ICONS,
+      DOMAIN_CERTS,
+      DOMAIN_INCIDENT_MAP,
+      render7TierSkillTree,
+      openSyllabusDrawer,
+      closeSyllabusDrawer
+    };
   }
 
   document.addEventListener('DOMContentLoaded', init);

@@ -216,11 +216,36 @@
         </div>
       </section>
 
-      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:1rem; margin-bottom:1.25rem;">
+      <!-- 7-TIER DAG SKILL TREE ROADMAP -->
+      <section id="roadmap-section" class="roadmap-section" aria-label="Interactive 7-Tier Cloud-Native Skill Tree Roadmap">
+        <div class="roadmap-header-bar">
+          <div>
+            <div style="display:flex; align-items:center; gap:0.5rem;">
+              <span class="badge badge-cyan badge-glow-cyan">Curriculum Roadmap</span>
+              <h2 class="roadmap-title" id="roadmap-heading">7-Tier Cloud-Native Architecture DAG Skill Tree</h2>
+            </div>
+            <p class="roadmap-subtitle">
+              Interactive guided progression spanning beginner foundations to CKA/CKAD/CKS, GitOps, Service Mesh, Platform Engineering &amp; Autonomous AI-Ops.
+            </p>
+          </div>
+          <div class="roadmap-legend">
+            <span class="legend-item"><span class="node-status-dot status-mastered"></span> Mastered</span>
+            <span class="legend-item"><span class="node-status-dot status-progress"></span> In Progress</span>
+            <span class="legend-item"><span class="node-status-dot status-unlocked"></span> Available</span>
+            <span class="legend-item"><span class="node-status-dot status-locked"></span> Locked</span>
+          </div>
+        </div>
+
+        <div id="skill-tree-container" class="skill-tree-dag" role="region" aria-label="7-Tier Skill Tree DAG">
+          <!-- Dynamically populated via app.js -->
+        </div>
+      </section>
+
+      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:1rem; margin-top:2.5rem; margin-bottom:1.25rem;">
         <div>
-          <h1 id="paths-heading" style="font-size:1.35rem;">Guided Cloud-Native Role Learning Paths &amp; Modular Plugin Catalog</h1>
-          <p style="color:var(--text-secondary); font-size:0.88rem;">
-            26 schema-validated technology plugins | 52 hands-on labs | 12 production outages | 8 enterprise capstone projects | 8 reference architectures
+          <h2 id="paths-heading" style="font-size:1.25rem;">6 Role-Based Career Tracks &amp; Enterprise Capstones</h2>
+          <p style="color:var(--text-secondary); font-size:0.85rem;">
+            Curated job-role certifications and multi-milestone enterprise capstone projects.
           </p>
         </div>
         <div style="display:flex; gap:0.5rem;">
@@ -789,6 +814,63 @@
         <span class="cmd-hint-item"><kbd>ESC</kbd> Close</span>
       </div>
     </div>
+  </div>
+
+  <!-- DOMAIN SYLLABUS DRAWER -->
+  <div id="domain-syllabus-drawer" class="syllabus-drawer-backdrop" style="display:none;" aria-hidden="true">
+    <aside class="syllabus-drawer glass-panel" role="dialog" aria-modal="true" aria-labelledby="syllabus-domain-title">
+      <div class="syllabus-drawer-header">
+        <div class="syllabus-header-info">
+          <div style="display:flex; align-items:center; gap:0.5rem; flex-wrap:wrap;">
+            <span class="badge badge-cyan" id="syllabus-tier-badge">Tier 3</span>
+            <span class="badge" id="syllabus-cert-badge">CKA Alignment</span>
+            <span class="badge" id="syllabus-difficulty-badge">Intermediate</span>
+          </div>
+          <h2 class="syllabus-domain-title" id="syllabus-domain-title">Domain Title</h2>
+          <span class="syllabus-domain-id" id="syllabus-domain-id">04-kubernetes-core</span>
+        </div>
+        <button class="modal-close-btn" id="btn-close-syllabus-drawer" type="button" aria-label="Close Syllabus Drawer">&times;</button>
+      </div>
+
+      <div class="syllabus-drawer-body">
+        <div class="syllabus-section">
+          <h3 class="syllabus-section-title">Concept Overview</h3>
+          <p class="syllabus-concept-desc" id="syllabus-concept-desc">...</p>
+        </div>
+
+        <div class="syllabus-section">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.6rem;">
+            <h3 class="syllabus-section-title">Hands-On Labs (<span id="syllabus-labs-count">2</span>)</h3>
+            <span style="font-size:0.75rem; color:var(--text-muted);">Interactive Multi-Step Runbooks</span>
+          </div>
+          <div class="syllabus-labs-list" id="syllabus-labs-list">
+            <!-- Dynamically populated labs -->
+          </div>
+        </div>
+
+        <div class="syllabus-section" id="syllabus-breakfix-section">
+          <h3 class="syllabus-section-title">Break-Fix Challenge &amp; Incident Drill</h3>
+          <div class="card" style="padding:0.85rem; border-color:rgba(239, 68, 68, 0.25);">
+            <div style="display:flex; align-items:center; gap:0.5rem;">
+              <span class="badge sev1">SEV-1 Drill</span>
+              <strong id="syllabus-breakfix-title" style="font-size:0.86rem; color:var(--text-primary);">Cluster Outage Scenario</strong>
+            </div>
+            <p id="syllabus-breakfix-desc" style="font-size:0.78rem; color:var(--text-secondary); margin-top:0.35rem;">
+              Troubleshoot and remediate live break-fix failures against the cluster state graph.
+            </p>
+            <button class="btn btn-outline-danger" id="syllabus-btn-start-breakfix" type="button" style="margin-top:0.6rem; width:100%; justify-content:center; font-size:0.78rem;">
+              Launch Break-Fix Incident Drill &rarr;
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div class="syllabus-drawer-footer">
+        <button class="btn btn-primary" id="syllabus-btn-start-domain" type="button" style="width:100%; justify-content:center;">
+          Launch Domain in Lab Workbench
+        </button>
+      </div>
+    </aside>
   </div>
 
   <script src="/js/autocompletionEngine.js"></script>
