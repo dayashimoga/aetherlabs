@@ -1,0 +1,231 @@
+{
+  "id": "argocd-gitops",
+  "title": "ArgoCD Enterprise GitOps, ApplicationSets & Sync Waves",
+  "category": "GitOps & Delivery",
+  "trackId": "track-k8s-admin",
+  "version": "1.0.0",
+  "difficulty": "Intermediate",
+  "estimatedHours": 8,
+  "summary": "Master enterprise GitOps with ArgoCD: Application CRDs, multi-tenant ApplicationSets, declarative sync waves, hooks, health checks, self-healing automated sync, and rollouts integration.",
+  "prerequisites": [
+    "gitops-delivery",
+    "kubernetes-core-v4"
+  ],
+  "learningObjectives": [
+    "Author and reconcile declarative ArgoCD Application custom resources with automated sync policies.",
+    "Orchestrate multi-step deployments with ArgoCD sync waves (argocd.argoproj.io/sync-wave) and PreSync hooks.",
+    "Manage enterprise multi-cluster deployments using ArgoCD ApplicationSets and matrix generators."
+  ],
+  "curriculumModules": [
+    {
+      "id": "mod-argo-01",
+      "title": "ArgoCD Application Architecture & Declarative CRDs",
+      "conceptSummary": "ArgoCD runs as a Kubernetes controller that continuously reconciles git repositories against cluster state. Applications are defined declaratively via Application CRDs specifying repoURL, path, targetRevision, and destination cluster/namespace.",
+      "productionArchitecturePattern": "Deploy ArgoCD in a dedicated argocd namespace with automated self-healing, prune enabled, and strict RBAC projects restricting tenant destination namespaces.",
+      "keyCommands": [
+        "argocd app list",
+        "argocd app get frontend-portal",
+        "argocd app sync frontend-portal",
+        "kubectl get applications -n argocd"
+      ]
+    },
+    {
+      "id": "mod-argo-02",
+      "title": "Sync Waves, Resource Hooks & Multi-Cluster ApplicationSets",
+      "conceptSummary": "Sync waves order resource application into phases using the argocd.argoproj.io/sync-wave annotation (e.g. wave 0 for ConfigMaps/Secrets, wave 1 for Databases, wave 2 for Applications). PreSync and PostSync hooks execute database migrations and verification tests.",
+      "productionArchitecturePattern": "Apply wave 0 to shared dependencies, wave 1 to backend workloads, and wave 2 to frontend ingress routes, verifying health before progressing to subsequent waves.",
+      "keyCommands": [
+        "argocd app sync frontend-portal --prune",
+        "kubectl get applicationsets -n argocd",
+        "kubectl get pods -n production -l argocd.argoproj.io/instance"
+      ]
+    }
+  ],
+  "labs": [
+    {
+      "id": "lab-argo-01-app-declarative-sync",
+      "title": "Deploying and Synchronizing an ArgoCD Application",
+      "difficulty": "Intermediate",
+      "durationMinutes": 20,
+      "xpReward": 150,
+      "scenario": "Deploy an ArgoCD Application resource named frontend-portal in namespace argocd that targets repo https://github.com/kubelabs/frontend.git at path deploy/prod with destination namespace production. Run argocd app sync frontend-portal to achieve Synced and Healthy status, resulting in a running Deployment frontend-portal in namespace production.",
+      "productionContext": "Declarative Application CRDs allow entire Kubernetes application stacks to be version-controlled, reviewed, and deployed automatically across dev, staging, and production clusters.",
+      "prerequisites": [
+        "lab-gitops-01-pull-reconciliation"
+      ],
+      "objectives": [
+        "Create and apply Application manifest for frontend-portal in namespace argocd.",
+        "Execute argocd app sync frontend-portal to reconcile live cluster resources.",
+        "Verify Application is Synced and Healthy and Deployment frontend-portal is running in namespace production."
+      ],
+      "initialClusterState": {
+        "resources": [
+          {
+            "apiVersion": "v1",
+            "kind": "Namespace",
+            "metadata": {
+              "name": "argocd"
+            }
+          },
+          {
+            "apiVersion": "v1",
+            "kind": "Namespace",
+            "metadata": {
+              "name": "production"
+            }
+          }
+        ]
+      },
+      "starterManifest": "apiVersion: argoproj.io/v1alpha1\nkind: Application\nmetadata:\n  name: frontend-portal\n  namespace: argocd\nspec:\n  project: default\n  source:\n    repoURL: https://github.com/kubelabs/frontend.git\n    targetRevision: HEAD\n    path: deploy/prod\n  destination:\n    server: https://kubernetes.default.svc\n    namespace: production\n  syncPolicy:\n    automated:\n      prune: true\n      selfHeal: true\n",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Apply ArgoCD Application manifest",
+          "instruction": "Save the Application specification to /gitops/frontend-app.yaml and apply it to namespace argocd.",
+          "commandHint": "cat << 'EOF' > /gitops/frontend-app.yaml\n...\nEOF\nkubectl apply -f /gitops/frontend-app.yaml"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Synchronize application via ArgoCD CLI",
+          "instruction": "Trigger a sync on frontend-portal using the argocd CLI to reconcile resources into the production namespace.",
+          "commandHint": "argocd app sync frontend-portal"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "argo-app-synced-status",
+          "description": "Application frontend-portal is Synced and Healthy",
+          "type": "argocd_app_synced",
+          "name": "frontend-portal",
+          "namespace": "argocd",
+          "remediation": "Run argocd app sync frontend-portal"
+        },
+        {
+          "id": "frontend-deployment-exists",
+          "description": "Deployment frontend-portal exists in namespace production",
+          "type": "resource_exists",
+          "kind": "Deployment",
+          "namespace": "production",
+          "name": "frontend-portal",
+          "remediation": "Ensure frontend-portal deployment is reconciled in namespace production"
+        }
+      ],
+      "solutionCommands": [
+        "mkdir -p /gitops",
+        "cat << 'EOF' > /gitops/frontend-app.yaml\napiVersion: argoproj.io/v1alpha1\nkind: Application\nmetadata:\n  name: frontend-portal\n  namespace: argocd\nspec:\n  project: default\n  source:\n    repoURL: https://github.com/kubelabs/frontend.git\n    targetRevision: HEAD\n    path: deploy/prod\n  destination:\n    server: https://kubernetes.default.svc\n    namespace: production\n  syncPolicy:\n    automated:\n      prune: true\n      selfHeal: true\nEOF",
+        "kubectl apply -f /gitops/frontend-app.yaml",
+        "argocd app sync frontend-portal"
+      ],
+      "troubleshootingGuide": [
+        {
+          "problem": "Application frontend-portal status is OutOfSync or not found.",
+          "cause": "The Application manifest was not applied or argocd app sync was not run.",
+          "solution": "Apply /gitops/frontend-app.yaml and run argocd app sync frontend-portal."
+        }
+      ]
+    },
+    {
+      "id": "lab-argo-02-sync-waves-phased-rollout",
+      "title": "Phased Rollout Orchestration with ArgoCD Sync Waves",
+      "difficulty": "Intermediate",
+      "durationMinutes": 20,
+      "xpReward": 150,
+      "scenario": "To prevent application startup failures, database ConfigMap dependencies must be ready before backend pods start. Apply ConfigMap backend-config with annotation argocd.argoproj.io/sync-wave: '0' and Deployment backend-api with annotation argocd.argoproj.io/sync-wave: '1' in namespace production.",
+      "productionContext": "Sync waves allow Kubernetes resources to be applied in a deterministic sequence, guaranteeing database migrations and secrets exist before dependent microservices start.",
+      "prerequisites": [
+        "lab-argo-01-app-declarative-sync"
+      ],
+      "objectives": [
+        "Deploy ConfigMap backend-config with sync-wave 0 in namespace production.",
+        "Deploy Deployment backend-api with sync-wave 1 in namespace production."
+      ],
+      "initialClusterState": {
+        "resources": [
+          {
+            "apiVersion": "v1",
+            "kind": "Namespace",
+            "metadata": {
+              "name": "production"
+            }
+          }
+        ]
+      },
+      "starterManifest": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: backend-config\n  namespace: production\n  annotations:\n    argocd.argoproj.io/sync-wave: \"0\"\ndata:\n  API_TIMEOUT: \"30s\"\n  LOG_LEVEL: \"info\"\n---\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: backend-api\n  namespace: production\n  annotations:\n    argocd.argoproj.io/sync-wave: \"1\"\nspec:\n  replicas: 2\n  selector:\n    matchLabels:\n      app: backend-api\n  template:\n    metadata:\n      labels:\n        app: backend-api\n    spec:\n      containers:\n        - name: api\n          image: ghcr.io/kubelabs/backend-api:v2.1.0\n",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Define and apply sync wave manifests",
+          "instruction": "Save the ConfigMap and Deployment manifests with argocd.argoproj.io/sync-wave annotations to /gitops/sync-waves.yaml and apply to production.",
+          "commandHint": "cat << 'EOF' > /gitops/sync-waves.yaml\n...\nEOF\nkubectl apply -f /gitops/sync-waves.yaml"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Verify sync wave annotations",
+          "instruction": "Inspect annotations on both resources to confirm wave ordering (0 for config, 1 for workload).",
+          "commandHint": "kubectl get cm backend-config -n production -o yaml\nkubectl get deploy backend-api -n production -o yaml"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "configmap-wave-0-annotation",
+          "description": "ConfigMap backend-config has sync-wave: '0'",
+          "type": "resource_field_equals",
+          "kind": "ConfigMap",
+          "namespace": "production",
+          "name": "backend-config",
+          "fieldPath": "metadata.annotations['argocd.argoproj.io/sync-wave']",
+          "expectedValue": "0",
+          "remediation": "Add annotation argocd.argoproj.io/sync-wave: '0' to ConfigMap backend-config"
+        },
+        {
+          "id": "deployment-wave-1-annotation",
+          "description": "Deployment backend-api has sync-wave: '1'",
+          "type": "resource_field_equals",
+          "kind": "Deployment",
+          "namespace": "production",
+          "name": "backend-api",
+          "fieldPath": "metadata.annotations['argocd.argoproj.io/sync-wave']",
+          "expectedValue": "1",
+          "remediation": "Add annotation argocd.argoproj.io/sync-wave: '1' to Deployment backend-api"
+        }
+      ],
+      "solutionCommands": [
+        "cat << 'EOF' > /gitops/sync-waves.yaml\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: backend-config\n  namespace: production\n  annotations:\n    argocd.argoproj.io/sync-wave: \"0\"\ndata:\n  API_TIMEOUT: \"30s\"\n  LOG_LEVEL: \"info\"\n---\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: backend-api\n  namespace: production\n  annotations:\n    argocd.argoproj.io/sync-wave: \"1\"\nspec:\n  replicas: 2\n  selector:\n    matchLabels:\n      app: backend-api\n  template:\n    metadata:\n      labels:\n        app: backend-api\n    spec:\n      containers:\n        - name: api\n          image: ghcr.io/kubelabs/backend-api:v2.1.0\nEOF",
+        "kubectl apply -f /gitops/sync-waves.yaml"
+      ],
+      "troubleshootingGuide": [
+        {
+          "problem": "Sync wave annotations not detected.",
+          "cause": "The annotation key or value was incorrectly formatted.",
+          "solution": "Ensure metadata.annotations contains 'argocd.argoproj.io/sync-wave': '0' on the ConfigMap and '1' on the Deployment."
+        }
+      ]
+    }
+  ],
+  "assessmentQuestions": [
+    {
+      "id": "q-argo-01",
+      "question": "What is the purpose of ArgoCD sync waves (argocd.argoproj.io/sync-wave)?",
+      "options": [
+        "To compress container images across network links before synchronization.",
+        "To establish phased resource application ordering so foundational dependencies (CRDs, Namespaces, ConfigMaps) are healthy before application pods start.",
+        "To distribute pod scheduling evenly across AWS Availability Zones.",
+        "To automatically generate TLS certificates via Let's Encrypt."
+      ],
+      "correctIndex": 1,
+      "explanation": "Sync waves allow engineers to order resource application phases (negative waves first, then 0, 1, 2, etc.). ArgoCD waits for resources in a given wave to become Healthy before starting the next wave."
+    },
+    {
+      "id": "q-argo-02",
+      "question": "In an ArgoCD Application custom resource, what does syncPolicy.automated.selfHeal do?",
+      "options": [
+        "It automatically restarts worker nodes when memory exceeds 90%.",
+        "It automatically reverts manual mutations made directly to the live cluster back to the state declared in Git.",
+        "It generates automated pull requests when a container vulnerability is detected.",
+        "It rolls back the cluster to the previous Kubernetes minor version."
+      ],
+      "correctIndex": 1,
+      "explanation": "With selfHeal enabled, ArgoCD continuously reconciles the cluster and automatically overrides uncommitted out-of-band changes with the desired Git state, preventing configuration drift."
+    }
+  ]
+}

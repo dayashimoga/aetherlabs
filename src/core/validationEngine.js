@@ -67,8 +67,8 @@ function getFieldByPath(obj, fieldPath) {
   if (!obj || !fieldPath) return undefined;
   const cleanPath = String(fieldPath).replace(/^\./, '').trim();
 
-  // If path starts with $ or contains bracket query like [*], evaluate via RFC 9535 JSONPath
-  if (cleanPath.startsWith('$') || cleanPath.includes('[*]') || cleanPath.includes('?(')) {
+  // If path starts with $, contains bracket query, or has bracket property access, evaluate via RFC 9535 JSONPath
+  if (cleanPath.startsWith('$') || cleanPath.includes('[*]') || cleanPath.includes('?(') || cleanPath.includes('[')) {
     const expr = cleanPath.startsWith('$') ? cleanPath : `$.${cleanPath}`;
     const matches = jsonPath(obj, expr);
     return matches.length > 0 ? matches[0] : undefined;
@@ -950,7 +950,25 @@ class ValidationEngine {
       case 'argocd_app_synced': {
         const target = String(rule.name || '');
         const apps = (context.cluster && context.cluster.state && context.cluster.state.argoApps) || [];
-        const app = apps.find((a) => a.name === target);
+        let app = apps.find((a) => a.name === target);
+        if (!app && context.cluster && typeof context.cluster.getResource === 'function') {
+          const res = context.cluster.getResource('Application', target, rule.namespace || 'argocd') ||
+                      context.cluster.getResource('Application', target, 'default');
+          if (res) {
+            const syncStatus = (res.status && (res.status.syncStatus || (res.status.sync && res.status.sync.status))) || 'OutOfSync';
+            const healthStatus = (res.status && (res.status.healthStatus || (res.status.health && res.status.health.status))) || 'Missing';
+            app = { name: target, syncStatus, healthStatus };
+          }
+        }
+        if (!app && context.graph && typeof context.graph.get === 'function') {
+          const res = context.graph.get('Application', rule.namespace || 'argocd', target) ||
+                      context.graph.get('Application', 'default', target);
+          if (res) {
+            const syncStatus = (res.status && (res.status.sync && res.status.sync.status)) || 'OutOfSync';
+            const healthStatus = (res.status && (res.status.health && res.status.health.status)) || 'Missing';
+            app = { name: target, syncStatus, healthStatus };
+          }
+        }
         const passed = Boolean(app && app.syncStatus === 'Synced' && app.healthStatus === 'Healthy');
         return {
           passed,

@@ -1,0 +1,241 @@
+{
+  "id": "fluxcd-gitops",
+  "title": "FluxCD Multi-Tenancy, Kustomize Controller & HelmReleases",
+  "category": "GitOps & Delivery",
+  "trackId": "track-k8s-admin",
+  "version": "1.0.0",
+  "difficulty": "Intermediate",
+  "estimatedHours": 8,
+  "summary": "Master CNCF Graduated FluxCD v2: GitRepository sources, Kustomization reconciliation controllers, declarative HelmReleases, notification controllers, and automated artifact updates.",
+  "prerequisites": [
+    "gitops-delivery",
+    "helm-packaging",
+    "kustomize-manifests"
+  ],
+  "learningObjectives": [
+    "Configure Flux Source Controller GitRepository resources for continuous artifact packaging.",
+    "Orchestrate multi-environment overlays using Flux Kustomize Controller with pruning and health checks.",
+    "Manage declarative Helm charts via Flux HelmRelease and HelmRepository custom resources."
+  ],
+  "curriculumModules": [
+    {
+      "id": "mod-flux-01",
+      "title": "FluxCD GitOps Toolkit (GOTK) Architecture",
+      "conceptSummary": "Flux is composed of specialized controllers (source-controller, kustomize-controller, helm-controller, notification-controller) communicating via Kubernetes API custom resources (GitRepository, Kustomization, HelmRelease).",
+      "productionArchitecturePattern": "Deploy source-controller and kustomize-controller in flux-system with dedicated ServiceAccounts and RBAC impersonation to isolate multi-tenant application boundaries.",
+      "keyCommands": [
+        "flux check",
+        "flux get sources git",
+        "flux get kustomizations",
+        "flux reconcile source git fleet-infra"
+      ]
+    },
+    {
+      "id": "mod-flux-02",
+      "title": "Declarative HelmRelease & Multi-Tenant Reconciliation",
+      "conceptSummary": "The Flux Helm Controller reconciles HelmRelease resources by fetching packaged Helm charts from HelmRepository or OCI registries, templating values files, and driving Helm releases with automated rollbacks on failure.",
+      "productionArchitecturePattern": "Store HelmRelease CRDs alongside values overlays in Git, enabling declarative helm upgrades with automated drift detection and timeout guards.",
+      "keyCommands": [
+        "flux get helmreleases -n flux-system",
+        "flux reconcile helmrelease redis-cache -n flux-system",
+        "kubectl get helmreleases -A"
+      ]
+    }
+  ],
+  "labs": [
+    {
+      "id": "lab-flux-01-gitrepository-kustomization",
+      "title": "Configuring Flux GitRepository Source & Kustomization Reconciliation",
+      "difficulty": "Intermediate",
+      "durationMinutes": 20,
+      "xpReward": 150,
+      "scenario": "Set up Flux GitOps reconciliation: create a GitRepository resource fleet-infra in namespace flux-system referencing URL https://github.com/kubelabs/fleet-infra.git and branch main, and configure a Kustomization resource app-stack targeting path ./clusters/staging with interval 5m, prune: true, and sourceRef pointing to fleet-infra.",
+      "productionContext": "Flux GitRepository and Kustomization resources form the backbone of pull-based delivery, fetching raw git commits as immutable tar artifacts and applying Kustomize overlays.",
+      "prerequisites": [
+        "lab-gitops-01-pull-reconciliation"
+      ],
+      "objectives": [
+        "Deploy GitRepository fleet-infra in namespace flux-system.",
+        "Deploy Kustomization app-stack in namespace flux-system referencing fleet-infra.",
+        "Reconcile Kustomization app-stack using the flux CLI."
+      ],
+      "initialClusterState": {
+        "resources": [
+          {
+            "apiVersion": "v1",
+            "kind": "Namespace",
+            "metadata": {
+              "name": "flux-system"
+            }
+          }
+        ]
+      },
+      "starterManifest": "apiVersion: source.toolkit.fluxcd.io/v1\nkind: GitRepository\nmetadata:\n  name: fleet-infra\n  namespace: flux-system\nspec:\n  interval: 1m\n  url: https://github.com/kubelabs/fleet-infra.git\n  ref:\n    branch: main\n---\napiVersion: kustomize.toolkit.fluxcd.io/v1\nkind: Kustomization\nmetadata:\n  name: app-stack\n  namespace: flux-system\nspec:\n  interval: 5m\n  targetNamespace: default\n  sourceRef:\n    kind: GitRepository\n    name: fleet-infra\n  path: ./clusters/staging\n  prune: true\n",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Apply Flux GitRepository and Kustomization manifests",
+          "instruction": "Save the GitRepository and Kustomization manifests to /gitops/flux-kustomization.yaml and apply to flux-system.",
+          "commandHint": "cat << 'EOF' > /gitops/flux-kustomization.yaml\n...\nEOF\nkubectl apply -f /gitops/flux-kustomization.yaml"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Trigger reconciliation with flux CLI",
+          "instruction": "Run flux reconcile kustomization app-stack to force an immediate reconciliation cycle.",
+          "commandHint": "flux reconcile kustomization app-stack"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "flux-gitrepo-exists",
+          "description": "GitRepository fleet-infra exists in namespace flux-system",
+          "type": "resource_exists",
+          "kind": "GitRepository",
+          "namespace": "flux-system",
+          "name": "fleet-infra",
+          "remediation": "Create GitRepository fleet-infra in namespace flux-system"
+        },
+        {
+          "id": "flux-kustomization-exists",
+          "description": "Kustomization app-stack exists in namespace flux-system",
+          "type": "resource_exists",
+          "kind": "Kustomization",
+          "namespace": "flux-system",
+          "name": "app-stack",
+          "remediation": "Create Kustomization app-stack in namespace flux-system"
+        },
+        {
+          "id": "flux-reconcile-command-executed",
+          "description": "flux reconcile kustomization app-stack executed",
+          "type": "command_executed",
+          "commandSubstring": "flux reconcile kustomization app-stack",
+          "remediation": "Execute flux reconcile kustomization app-stack"
+        }
+      ],
+      "solutionCommands": [
+        "mkdir -p /gitops",
+        "cat << 'EOF' > /gitops/flux-kustomization.yaml\napiVersion: source.toolkit.fluxcd.io/v1\nkind: GitRepository\nmetadata:\n  name: fleet-infra\n  namespace: flux-system\nspec:\n  interval: 1m\n  url: https://github.com/kubelabs/fleet-infra.git\n  ref:\n    branch: main\n---\napiVersion: kustomize.toolkit.fluxcd.io/v1\nkind: Kustomization\nmetadata:\n  name: app-stack\n  namespace: flux-system\nspec:\n  interval: 5m\n  targetNamespace: default\n  sourceRef:\n    kind: GitRepository\n    name: fleet-infra\n  path: ./clusters/staging\n  prune: true\nEOF",
+        "kubectl apply -f /gitops/flux-kustomization.yaml",
+        "flux reconcile kustomization app-stack"
+      ],
+      "troubleshootingGuide": [
+        {
+          "problem": "flux reconcile kustomization command failed or was not executed.",
+          "cause": "Command not run in terminal session.",
+          "solution": "Execute flux reconcile kustomization app-stack in the terminal."
+        }
+      ]
+    },
+    {
+      "id": "lab-flux-02-helmrelease-reconciliation",
+      "title": "Declarative HelmRelease Management with Flux Helm Controller",
+      "difficulty": "Intermediate",
+      "durationMinutes": 20,
+      "xpReward": 150,
+      "scenario": "Configure declarative Helm management in Flux: deploy a HelmRelease resource redis-cache in namespace flux-system with targetNamespace cache-tier, referencing chart redis version 18.0.0 from HelmRepository bitnami, with spec.values.architecture set to standalone.",
+      "productionContext": "Flux HelmRelease CRDs enable GitOps teams to maintain declarative Helm chart installations with automatic upgrade retries, rollback triggers, and values file validation.",
+      "prerequisites": [
+        "lab-flux-01-gitrepository-kustomization"
+      ],
+      "objectives": [
+        "Create target namespace cache-tier.",
+        "Apply HelmRelease redis-cache in namespace flux-system targeting cache-tier.",
+        "Verify HelmRelease spec parameters (chart name, version, and architecture values)."
+      ],
+      "initialClusterState": {
+        "resources": [
+          {
+            "apiVersion": "v1",
+            "kind": "Namespace",
+            "metadata": {
+              "name": "flux-system"
+            }
+          }
+        ]
+      },
+      "starterManifest": "apiVersion: helm.toolkit.fluxcd.io/v2beta1\nkind: HelmRelease\nmetadata:\n  name: redis-cache\n  namespace: flux-system\nspec:\n  interval: 10m\n  targetNamespace: cache-tier\n  chart:\n    spec:\n      chart: redis\n      version: \"18.0.0\"\n      sourceRef:\n        kind: HelmRepository\n        name: bitnami\n        namespace: flux-system\n  values:\n    architecture: standalone\n",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Create namespace cache-tier",
+          "instruction": "Create the destination namespace cache-tier where Redis will be deployed.",
+          "commandHint": "kubectl create namespace cache-tier"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Apply HelmRelease manifest",
+          "instruction": "Save and apply the HelmRelease specification for redis-cache to namespace flux-system.",
+          "commandHint": "cat << 'EOF' > /gitops/redis-helmrelease.yaml\n...\nEOF\nkubectl apply -f /gitops/redis-helmrelease.yaml"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "namespace-cache-tier-exists",
+          "description": "Namespace cache-tier exists",
+          "type": "resource_exists",
+          "kind": "Namespace",
+          "name": "cache-tier",
+          "remediation": "Run kubectl create namespace cache-tier"
+        },
+        {
+          "id": "helmrelease-redis-cache-exists",
+          "description": "HelmRelease redis-cache exists in namespace flux-system",
+          "type": "resource_exists",
+          "kind": "HelmRelease",
+          "namespace": "flux-system",
+          "name": "redis-cache",
+          "remediation": "Apply HelmRelease redis-cache in namespace flux-system"
+        },
+        {
+          "id": "helmrelease-redis-cache-target-ns",
+          "description": "HelmRelease redis-cache targetNamespace is cache-tier",
+          "type": "resource_field_equals",
+          "kind": "HelmRelease",
+          "namespace": "flux-system",
+          "name": "redis-cache",
+          "fieldPath": "spec.targetNamespace",
+          "expectedValue": "cache-tier",
+          "remediation": "Set spec.targetNamespace: cache-tier in HelmRelease redis-cache"
+        }
+      ],
+      "solutionCommands": [
+        "kubectl create namespace cache-tier",
+        "cat << 'EOF' > /gitops/redis-helmrelease.yaml\napiVersion: helm.toolkit.fluxcd.io/v2beta1\nkind: HelmRelease\nmetadata:\n  name: redis-cache\n  namespace: flux-system\nspec:\n  interval: 10m\n  targetNamespace: cache-tier\n  chart:\n    spec:\n      chart: redis\n      version: \"18.0.0\"\n      sourceRef:\n        kind: HelmRepository\n        name: bitnami\n        namespace: flux-system\n  values:\n    architecture: standalone\nEOF",
+        "kubectl apply -f /gitops/redis-helmrelease.yaml"
+      ],
+      "troubleshootingGuide": [
+        {
+          "problem": "HelmRelease missing or wrong target namespace.",
+          "cause": "Manifest omitted spec.targetNamespace.",
+          "solution": "Verify spec.targetNamespace: cache-tier is specified in HelmRelease."
+        }
+      ]
+    }
+  ],
+  "assessmentQuestions": [
+    {
+      "id": "q-flux-01",
+      "question": "In FluxCD v2, which controller is responsible for fetching git repositories and compressing them into tar.gz artifacts in memory?",
+      "options": [
+        "helm-controller",
+        "source-controller",
+        "kustomize-controller",
+        "notification-controller"
+      ],
+      "correctIndex": 1,
+      "explanation": "The source-controller acquires external artifacts (GitRepository, HelmRepository, OCIRepository, Bucket) and exposes them as immutable tarballs for other controllers."
+    },
+    {
+      "id": "q-flux-02",
+      "question": "What happens when prune: true is set on a Flux Kustomization resource?",
+      "options": [
+        "Flux automatically deletes inactive Docker container images on worker nodes.",
+        "Flux garbage collects Kubernetes resources that were previously applied by the Kustomization but have since been removed from the Git repository.",
+        "Flux cleans up old git commit histories in the remote repository.",
+        "Flux reduces the replica count of deployments during off-peak hours."
+      ],
+      "correctIndex": 1,
+      "explanation": "With prune enabled, Flux ensures true GitOps synchronization by deleting live cluster resources when their manifests are removed from the Git source repository."
+    }
+  ]
+}

@@ -1,0 +1,257 @@
+{
+  "id": "gitops-delivery",
+  "title": "GitOps Principles, Pull-Based Reconciliation & Continuous Delivery",
+  "category": "GitOps & Delivery",
+  "trackId": "track-k8s-admin",
+  "version": "1.0.0",
+  "difficulty": "Intermediate",
+  "estimatedHours": 6,
+  "summary": "Master GitOps continuous delivery principles: declarative infrastructure, Git as single source of truth, pull-based automated reconciliation, drift detection and self-healing, sealed secrets, and progressive delivery.",
+  "prerequisites": [
+    "git-fundamentals",
+    "kubernetes-core-v4"
+  ],
+  "learningObjectives": [
+    "Implement automated pull-based cluster reconciliation eliminating external CI push credentials.",
+    "Detect and remediate out-of-band cluster drift restoring desired state from version-controlled Git manifests.",
+    "Deploy declarative secret management patterns using ExternalSecrets to securely inject Vault secrets into Kubernetes."
+  ],
+  "curriculumModules": [
+    {
+      "id": "mod-gitops-01",
+      "title": "Declarative State & Pull vs Push Delivery Models",
+      "conceptSummary": "GitOps establishes Git as the single source of truth for declarative infrastructure and applications. Pull-based agents running inside the cluster poll or receive webhooks from Git repositories, reconciling cluster state without exposing cluster admin credentials to external CI runners.",
+      "productionArchitecturePattern": "Eliminate direct kubectl write access from developers and CI runners; all infrastructure and workload changes must merge via peer-reviewed pull requests into Git main branches.",
+      "keyCommands": [
+        "git status",
+        "git log -n 5 --oneline",
+        "kubectl diff -f deploy.yaml",
+        "kubectl get pods -n gitops-apps"
+      ]
+    },
+    {
+      "id": "mod-gitops-02",
+      "title": "Drift Detection, Automated Self-Healing & Secret Management",
+      "conceptSummary": "Continuous drift detection compares live etcd resource specifications against target Git commits. When cluster mutations occur out-of-band, the GitOps controller triggers automated self-healing. Sensitive secrets are decoupled via ExternalSecrets Operator or SOPS.",
+      "productionArchitecturePattern": "Enforce automated drift healing with prune enabled on non-production clusters; use alert-only notifications on production clusters with automated self-healing during maintenance windows.",
+      "keyCommands": [
+        "kubectl get externalsecrets -n gitops-apps",
+        "kubectl get secret db-credentials -n gitops-apps",
+        "kubectl diff"
+      ]
+    }
+  ],
+  "labs": [
+    {
+      "id": "lab-gitops-01-pull-reconciliation",
+      "title": "Pull-Based Reconciliation & Drift Remediation",
+      "difficulty": "Intermediate",
+      "durationMinutes": 20,
+      "xpReward": 150,
+      "scenario": "An engineer manually scaled deployment payment-service in namespace gitops-apps to 5 replicas via ad-hoc imperative kubectl scale, drifting away from the Git desired state of 2 replicas. Inspect the drift, create the canonical GitOps manifest /gitops/payment-service.yaml, and apply it to reconcile payment-service to 2 replicas.",
+      "productionContext": "Manual imperative modifications to production workloads lead to configuration drift and unrepeatable deployments. GitOps reconciliation enforces consistency by reverting uncommitted cluster mutations.",
+      "prerequisites": [
+        "lab-k8s-01-ha-deployments"
+      ],
+      "objectives": [
+        "Inspect current drift and verify payment-service is running 5 replicas.",
+        "Write the declarative GitOps deployment manifest with 2 replicas to /gitops/payment-service.yaml.",
+        "Apply the manifest to gitops-apps to reconcile payment-service to 2 replicas."
+      ],
+      "initialClusterState": {
+        "resources": [
+          {
+            "apiVersion": "v1",
+            "kind": "Namespace",
+            "metadata": {
+              "name": "gitops-apps"
+            }
+          },
+          {
+            "apiVersion": "apps/v1",
+            "kind": "Deployment",
+            "metadata": {
+              "name": "payment-service",
+              "namespace": "gitops-apps",
+              "labels": {
+                "app": "payment-service",
+                "app.kubernetes.io/managed-by": "imperative-manual"
+              }
+            },
+            "spec": {
+              "replicas": 5,
+              "selector": {
+                "matchLabels": {
+                  "app": "payment-service"
+                }
+              },
+              "template": {
+                "metadata": {
+                  "labels": {
+                    "app": "payment-service"
+                  }
+                },
+                "spec": {
+                  "containers": [
+                    {
+                      "name": "payment-service",
+                      "image": "ghcr.io/kubelabs/payment:v1.2.0"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        ]
+      },
+      "starterManifest": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: payment-service\n  namespace: gitops-apps\n  labels:\n    app: payment-service\n    app.kubernetes.io/managed-by: gitops\nspec:\n  replicas: 2\n  selector:\n    matchLabels:\n      app: payment-service\n  template:\n    metadata:\n      labels:\n        app: payment-service\n    spec:\n      containers:\n        - name: payment-service\n          image: ghcr.io/kubelabs/payment:v1.2.0\n",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Inspect live configuration drift",
+          "instruction": "Check the current replica count of payment-service in namespace gitops-apps to observe the drift from version control.",
+          "commandHint": "kubectl get deployment payment-service -n gitops-apps"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Create and apply canonical GitOps manifest",
+          "instruction": "Write the desired deployment manifest with 2 replicas to /gitops/payment-service.yaml and apply it to reconcile cluster state.",
+          "commandHint": "cat << 'EOF' > /gitops/payment-service.yaml\n...\nEOF\nkubectl apply -f /gitops/payment-service.yaml"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "vfs-gitops-manifest",
+          "description": "Canonical manifest exists in /gitops/payment-service.yaml",
+          "type": "vfs_file_contains",
+          "path": "/gitops/payment-service.yaml",
+          "pattern": "payment-service",
+          "remediation": "Create /gitops/payment-service.yaml with deployment payment-service"
+        },
+        {
+          "id": "deployment-reconciled-replicas",
+          "description": "payment-service deployment scaled back to desired 2 replicas",
+          "type": "resource_field_equals",
+          "kind": "Deployment",
+          "namespace": "gitops-apps",
+          "name": "payment-service",
+          "fieldPath": "spec.replicas",
+          "expectedValue": 2,
+          "remediation": "Apply /gitops/payment-service.yaml with spec.replicas: 2"
+        }
+      ],
+      "solutionCommands": [
+        "mkdir -p /gitops",
+        "cat << 'EOF' > /gitops/payment-service.yaml\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: payment-service\n  namespace: gitops-apps\n  labels:\n    app: payment-service\n    app.kubernetes.io/managed-by: gitops\nspec:\n  replicas: 2\n  selector:\n    matchLabels:\n      app: payment-service\n  template:\n    metadata:\n      labels:\n        app: payment-service\n    spec:\n      containers:\n        - name: payment-service\n          image: ghcr.io/kubelabs/payment:v1.2.0\nEOF",
+        "kubectl apply -f /gitops/payment-service.yaml"
+      ],
+      "troubleshootingGuide": [
+        {
+          "problem": "payment-service still shows 5 replicas.",
+          "cause": "The manifest in /gitops/payment-service.yaml was not applied via kubectl apply.",
+          "solution": "Execute kubectl apply -f /gitops/payment-service.yaml to reconcile etcd with the desired state."
+        }
+      ]
+    },
+    {
+      "id": "lab-gitops-02-secrets-management",
+      "title": "Declarative Secret Management with ExternalSecrets",
+      "difficulty": "Intermediate",
+      "durationMinutes": 20,
+      "xpReward": 150,
+      "scenario": "Committing plaintext secrets to Git breaches security compliance. Deploy an ExternalSecret resource vault-db-credentials in namespace gitops-apps that defines secretStoreRef: vault-backend and target.name: db-credentials, and create the corresponding synced Kubernetes Secret db-credentials with keys username: dbadmin and password: vault-secure-pass.",
+      "productionContext": "Modern GitOps architectures never store unencrypted secrets in Git. The External Secrets Operator reconciles external secret managers (HashiCorp Vault, AWS Secrets Manager) into native Kubernetes Secrets.",
+      "prerequisites": [
+        "lab-gitops-01-pull-reconciliation"
+      ],
+      "objectives": [
+        "Create and apply ExternalSecret vault-db-credentials in namespace gitops-apps.",
+        "Create target Kubernetes Secret db-credentials in namespace gitops-apps with credentials."
+      ],
+      "initialClusterState": {
+        "resources": [
+          {
+            "apiVersion": "v1",
+            "kind": "Namespace",
+            "metadata": {
+              "name": "gitops-apps"
+            }
+          }
+        ]
+      },
+      "starterManifest": "apiVersion: external-secrets.io/v1beta1\nkind: ExternalSecret\nmetadata:\n  name: vault-db-credentials\n  namespace: gitops-apps\nspec:\n  refreshInterval: 1h\n  secretStoreRef:\n    name: vault-backend\n    kind: SecretStore\n  target:\n    name: db-credentials\n    creationPolicy: Owner\n  data:\n    - secretKey: username\n      remoteRef:\n        key: secret/database\n        property: username\n    - secretKey: password\n      remoteRef:\n        key: secret/database\n        property: password\n",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Define and apply ExternalSecret resource",
+          "instruction": "Save the ExternalSecret manifest to /gitops/external-secret.yaml and apply it to namespace gitops-apps.",
+          "commandHint": "cat << 'EOF' > /gitops/external-secret.yaml\n...\nEOF\nkubectl apply -f /gitops/external-secret.yaml"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Generate synced Kubernetes Secret",
+          "instruction": "Create the corresponding Kubernetes Secret db-credentials with keys username=dbadmin and password=vault-secure-pass in namespace gitops-apps.",
+          "commandHint": "kubectl create secret generic db-credentials -n gitops-apps --from-literal=username=dbadmin --from-literal=password=vault-secure-pass"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "external-secret-resource-exists",
+          "description": "ExternalSecret vault-db-credentials exists in gitops-apps",
+          "type": "resource_exists",
+          "kind": "ExternalSecret",
+          "namespace": "gitops-apps",
+          "name": "vault-db-credentials",
+          "remediation": "Create ExternalSecret vault-db-credentials in namespace gitops-apps"
+        },
+        {
+          "id": "k8s-secret-db-credentials-exists",
+          "description": "Secret db-credentials exists in namespace gitops-apps",
+          "type": "resource_exists",
+          "kind": "Secret",
+          "namespace": "gitops-apps",
+          "name": "db-credentials",
+          "remediation": "Create secret db-credentials in namespace gitops-apps"
+        }
+      ],
+      "solutionCommands": [
+        "cat << 'EOF' > /gitops/external-secret.yaml\napiVersion: external-secrets.io/v1beta1\nkind: ExternalSecret\nmetadata:\n  name: vault-db-credentials\n  namespace: gitops-apps\nspec:\n  refreshInterval: 1h\n  secretStoreRef:\n    name: vault-backend\n    kind: SecretStore\n  target:\n    name: db-credentials\n    creationPolicy: Owner\n  data:\n    - secretKey: username\n      remoteRef:\n        key: secret/database\n        property: username\n    - secretKey: password\n      remoteRef:\n        key: secret/database\n        property: password\nEOF",
+        "kubectl apply -f /gitops/external-secret.yaml",
+        "kubectl create secret generic db-credentials -n gitops-apps --from-literal=username=dbadmin --from-literal=password=vault-secure-pass"
+      ],
+      "troubleshootingGuide": [
+        {
+          "problem": "Secret db-credentials is not found in namespace gitops-apps.",
+          "cause": "The secret creation command was not executed or used the wrong namespace.",
+          "solution": "Execute kubectl create secret generic db-credentials -n gitops-apps --from-literal=username=dbadmin --from-literal=password=vault-secure-pass."
+        }
+      ]
+    }
+  ],
+  "assessmentQuestions": [
+    {
+      "id": "q-gitops-01",
+      "question": "Why does a pull-based GitOps model provide stronger cluster security than a push-based CI/CD pipeline?",
+      "options": [
+        "Pull-based models compile binaries faster inside the cluster.",
+        "Pull-based agents operate within the cluster perimeter, eliminating the need to expose long-lived cluster administrator credentials to external CI runners.",
+        "Push-based models cannot deploy Helm charts or Kustomize manifests.",
+        "Pull-based models bypass Kubernetes RBAC and admission controllers."
+      ],
+      "correctIndex": 1,
+      "explanation": "In a pull-based architecture, an in-cluster agent pulls manifests from Git. External CI systems only require write permissions to the Git repository, keeping cluster credentials secure inside the cluster boundary."
+    },
+    {
+      "id": "q-gitops-02",
+      "question": "What is configuration drift in a Kubernetes cluster and how does GitOps remediate it?",
+      "options": [
+        "Drift occurs when worker nodes run out of disk space; GitOps restarts the kubelet.",
+        "Drift is when live cluster state deviates from the declared Git repository state due to manual mutations; GitOps controllers automatically overwrite uncommitted changes with the desired Git state.",
+        "Drift is when DNS records take longer than 5 seconds to propagate across namespaces.",
+        "Drift occurs when an image tag is updated in Docker Hub without bumping the helm chart version."
+      ],
+      "correctIndex": 1,
+      "explanation": "Configuration drift happens when users execute imperative commands (e.g. kubectl scale, kubectl edit) directly on the cluster. GitOps controllers detect the difference between live etcd and Git and reconcile the cluster back to the Git source of truth."
+    }
+  ]
+}
