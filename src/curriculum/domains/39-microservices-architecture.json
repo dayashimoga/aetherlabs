@@ -1,0 +1,256 @@
+{
+  "id": "microservices-architecture",
+  "title": "Microservices Architecture, Strangler Fig, Event Streaming & Resilient Patterns",
+  "category": "Architecture & System Design",
+  "trackId": "track-platform",
+  "version": "1.0.0",
+  "difficulty": "Advanced",
+  "estimatedHours": 8,
+  "summary": "Master modern enterprise microservices architecture: Domain-Driven Design (DDD) bounded contexts, executing zero-downtime monolithic decompositions using the Strangler Fig migration pattern, designing synchronous (gRPC/Protobuf) and asynchronous (Kafka/NATS) communication contracts, and enforcing enterprise resilience with the Transactional Outbox pattern, Idempotent Consumers, and Bulkhead isolation.",
+  "prerequisites": [
+    "cloud-native-architecture",
+    "distributed-systems"
+  ],
+  "learningObjectives": [
+    "Decompose legacy monolithic architectures using Domain-Driven Design (DDD) bounded contexts and progressive Strangler Fig routing.",
+    "Design high-performance synchronous gRPC contracts alongside decoupled asynchronous event streams via Kafka/NATS.",
+    "Implement the Transactional Outbox pattern with CDC connectors and Bulkhead resource pools to eliminate distributed dual-writes and cascading failures."
+  ],
+  "curriculumModules": [
+    {
+      "id": "mod-micro-01",
+      "title": "DDD Bounded Contexts & The Strangler Fig Migration Pattern",
+      "conceptSummary": "Legacy monolithic databases intertwine disparate business domains, creating tight coupling that prevents autonomous team deployments. Domain-Driven Design (DDD) identifies distinct bounded contexts (Identity, Catalog, Orders, Payments) with clear ubiquitous language and context mapping. The Strangler Fig pattern places an API Gateway or Ingress controller ahead of the monolith, progressively intercepting and proxying specific API routes (/api/v1/orders) to dedicated microservice deployments while directing unmigrated traffic to the legacy monolith.",
+      "productionArchitecturePattern": "Deploy an Ingress or Gateway API HTTPRoute layer in front of the legacy monolith, carving off slice-by-slice routes to new microservice pods until the monolith is safely deprecated with zero downtime.",
+      "keyCommands": [
+        "kubectl get ingress -n production",
+        "kubectl get deployments -n production",
+        "kubectl apply -f /micro/strangler-fig-ingress.yaml"
+      ]
+    },
+    {
+      "id": "mod-micro-02",
+      "title": "Asynchronous Event Streaming, Transactional Outbox & Bulkhead Isolation",
+      "conceptSummary": "Directly dual-writing to a local SQL database and an event streaming broker (Kafka/NATS) risks data inconsistency when network partitions occur. The Transactional Outbox pattern writes both the business entity update and an outbox event record within a single local database ACID transaction; an asynchronous Change Data Capture (CDC) engine (e.g. Debezium) publishes the outbox events to Kafka with at-least-once delivery. Bulkhead isolation segregates container memory limits, thread pools, and worker replicas to prevent traffic spikes in one microservice from starving others.",
+      "productionArchitecturePattern": "Combine local transactional outbox tables for reliable event dispatch with dedicated pod replica pools and memory limits to enforce bulkhead domain isolation.",
+      "keyCommands": [
+        "cat /micro/outbox-event-contract.yaml",
+        "kubectl apply -f /micro/outbox-and-orders.yaml"
+      ]
+    }
+  ],
+  "labs": [
+    {
+      "id": "lab-micro-01-strangler-fig-routing",
+      "title": "Progressive Monolith Decomposition via Strangler Fig Ingress Routing",
+      "difficulty": "Advanced",
+      "durationMinutes": 20,
+      "xpReward": 150,
+      "scenario": "Execute a progressive Strangler Fig monolith migration: author an Ingress manifest in /micro/strangler-fig-ingress.yaml named monolith-strangler-ingress in namespace production routing path /api/v1/orders to service orders-service on port 8080, while directing default catch-all traffic (/) to service legacy-monolith on port 80. Apply to namespace production.",
+      "productionContext": "Strangler Fig routing allows platform engineers to migrate mission-critical APIs to autonomous microservices incrementally, avoiding high-risk big-bang rewrites.",
+      "prerequisites": [
+        "lab-dist-02-saga-orchestration"
+      ],
+      "objectives": [
+        "Create namespace production if not present.",
+        "Author Ingress manifest monolith-strangler-ingress.",
+        "Configure path /api/v1/orders targeting service orders-service on port 8080.",
+        "Configure path / targeting service legacy-monolith on port 80.",
+        "Apply Ingress to namespace production."
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "apiVersion: networking.k8s.io/v1\nkind: Ingress\nmetadata:\n  name: monolith-strangler-ingress\n  namespace: production\nspec:\n  rules:\n    - http:\n        paths:\n          - path: /api/v1/orders\n            pathType: Prefix\n            backend:\n              service:\n                name: orders-service\n                port:\n                  number: 8080\n          - path: /\n            pathType: Prefix\n            backend:\n              service:\n                name: legacy-monolith\n                port:\n                  number: 80\n",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Create production namespace",
+          "instruction": "Create namespace production if not present.",
+          "commandHint": "kubectl create namespace production"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Author Strangler Fig Ingress manifest",
+          "instruction": "Author manifest /micro/strangler-fig-ingress.yaml routing /api/v1/orders to orders-service and / to legacy-monolith.",
+          "commandHint": "cat << 'EOF' > /micro/strangler-fig-ingress.yaml\n...\nEOF"
+        },
+        {
+          "stepNumber": 3,
+          "title": "Apply Ingress manifest",
+          "instruction": "Apply the Ingress manifest to namespace production.",
+          "commandHint": "kubectl apply -f /micro/strangler-fig-ingress.yaml"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "ingress-strangler-exists",
+          "description": "Ingress monolith-strangler-ingress exists in namespace production",
+          "type": "resource_exists",
+          "kind": "Ingress",
+          "namespace": "production",
+          "name": "monolith-strangler-ingress",
+          "remediation": "Apply Ingress monolith-strangler-ingress in namespace production"
+        },
+        {
+          "id": "ingress-orders-path",
+          "description": "Ingress routes path /api/v1/orders",
+          "type": "resource_field_equals",
+          "kind": "Ingress",
+          "namespace": "production",
+          "name": "monolith-strangler-ingress",
+          "fieldPath": "spec.rules[0].http.paths[0].path",
+          "expectedValue": "/api/v1/orders",
+          "remediation": "Configure path: /api/v1/orders in Ingress monolith-strangler-ingress"
+        },
+        {
+          "id": "ingress-orders-svc",
+          "description": "Ingress /api/v1/orders routes to service orders-service",
+          "type": "resource_field_equals",
+          "kind": "Ingress",
+          "namespace": "production",
+          "name": "monolith-strangler-ingress",
+          "fieldPath": "spec.rules[0].http.paths[0].backend.service.name",
+          "expectedValue": "orders-service",
+          "remediation": "Configure backend service name: orders-service for /api/v1/orders"
+        }
+      ],
+      "solutionCommands": [
+        "mkdir -p /micro",
+        "kubectl create namespace production",
+        "cat << 'EOF' > /micro/strangler-fig-ingress.yaml\napiVersion: networking.k8s.io/v1\nkind: Ingress\nmetadata:\n  name: monolith-strangler-ingress\n  namespace: production\nspec:\n  rules:\n    - http:\n        paths:\n          - path: /api/v1/orders\n            pathType: Prefix\n            backend:\n              service:\n                name: orders-service\n                port:\n                  number: 8080\n          - path: /\n            pathType: Prefix\n            backend:\n              service:\n                name: legacy-monolith\n                port:\n                  number: 80\nEOF",
+        "kubectl apply -f /micro/strangler-fig-ingress.yaml"
+      ],
+      "troubleshootingGuide": [
+        {
+          "problem": "Ingress validation fails or routes not matched.",
+          "cause": "The first path must match /api/v1/orders targeting service orders-service on port 8080.",
+          "solution": "Apply /micro/strangler-fig-ingress.yaml to namespace production."
+        }
+      ]
+    },
+    {
+      "id": "lab-micro-02-transactional-outbox",
+      "title": "Implementing Transactional Outbox Contracts & Bulkhead Isolation",
+      "difficulty": "Advanced",
+      "durationMinutes": 20,
+      "xpReward": 150,
+      "scenario": "Implement a resilient event-driven architecture using Transactional Outbox and Bulkhead isolation: author ConfigMap outbox-event-contract in namespace production defining eventType: OrderCreated, topic: orders.events.v1, and payloadSchema: JSON, and author Deployment orders-service in namespace production with replicas: 3, memory request 256Mi, and memory limit 512Mi. Apply both manifests to namespace production.",
+      "productionContext": "Decoupling outbound events via transactional outbox prevents message loss, while dedicated pod replicas and memory boundaries prevent cascade failures during traffic spikes.",
+      "prerequisites": [
+        "lab-micro-01-strangler-fig-routing"
+      ],
+      "objectives": [
+        "Create namespace production if not present.",
+        "Author ConfigMap outbox-event-contract.",
+        "Author Deployment orders-service with 3 replicas.",
+        "Apply all manifests to namespace production."
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: outbox-event-contract\n  namespace: production\ndata:\n  eventType: \"OrderCreated\"\n  topic: \"orders.events.v1\"\n  payloadSchema: \"JSON\"\n---\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: orders-service\n  namespace: production\nspec:\n  replicas: 3\n  selector:\n    matchLabels:\n      app: orders-service\n  template:\n    metadata:\n      labels:\n        app: orders-service\n    spec:\n      containers:\n        - name: api\n          image: nginx:1.27-alpine\n          resources:\n            requests:\n              memory: \"256Mi\"\n            limits:\n              memory: \"512Mi\"\n",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Create production namespace",
+          "instruction": "Create namespace production if not present.",
+          "commandHint": "kubectl create namespace production"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Author outbox and bulkhead manifest",
+          "instruction": "Author manifest /micro/outbox-and-orders.yaml defining ConfigMap and Deployment.",
+          "commandHint": "cat << 'EOF' > /micro/outbox-and-orders.yaml\n...\nEOF"
+        },
+        {
+          "stepNumber": 3,
+          "title": "Apply manifest",
+          "instruction": "Apply manifest to namespace production.",
+          "commandHint": "kubectl apply -f /micro/outbox-and-orders.yaml"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "cm-outbox-contract-exists",
+          "description": "ConfigMap outbox-event-contract exists in namespace production",
+          "type": "resource_exists",
+          "kind": "ConfigMap",
+          "namespace": "production",
+          "name": "outbox-event-contract",
+          "remediation": "Apply ConfigMap outbox-event-contract in namespace production"
+        },
+        {
+          "id": "cm-outbox-event-type",
+          "description": "ConfigMap eventType is OrderCreated",
+          "type": "resource_field_equals",
+          "kind": "ConfigMap",
+          "namespace": "production",
+          "name": "outbox-event-contract",
+          "fieldPath": "data.eventType",
+          "expectedValue": "OrderCreated",
+          "remediation": "Set data.eventType: OrderCreated on ConfigMap outbox-event-contract"
+        },
+        {
+          "id": "deploy-orders-service-exists",
+          "description": "Deployment orders-service exists in namespace production",
+          "type": "resource_exists",
+          "kind": "Deployment",
+          "namespace": "production",
+          "name": "orders-service",
+          "remediation": "Apply Deployment orders-service in namespace production"
+        },
+        {
+          "id": "deploy-orders-replicas",
+          "description": "Deployment orders-service has 3 replicas",
+          "type": "resource_field_equals",
+          "kind": "Deployment",
+          "namespace": "production",
+          "name": "orders-service",
+          "fieldPath": "spec.replicas",
+          "expectedValue": 3,
+          "remediation": "Set spec.replicas: 3 on Deployment orders-service"
+        }
+      ],
+      "solutionCommands": [
+        "mkdir -p /micro",
+        "kubectl create namespace production",
+        "cat << 'EOF' > /micro/outbox-and-orders.yaml\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: outbox-event-contract\n  namespace: production\ndata:\n  eventType: \"OrderCreated\"\n  topic: \"orders.events.v1\"\n  payloadSchema: \"JSON\"\n---\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: orders-service\n  namespace: production\nspec:\n  replicas: 3\n  selector:\n    matchLabels:\n      app: orders-service\n  template:\n    metadata:\n      labels:\n        app: orders-service\n    spec:\n      containers:\n        - name: api\n          image: nginx:1.27-alpine\n          resources:\n            requests:\n              memory: \"256Mi\"\n            limits:\n              memory: \"512Mi\"\nEOF",
+        "kubectl apply -f /micro/outbox-and-orders.yaml"
+      ],
+      "troubleshootingGuide": [
+        {
+          "problem": "Deployment or ConfigMap missing in namespace production.",
+          "cause": "Both resources must be applied to namespace production.",
+          "solution": "Apply /micro/outbox-and-orders.yaml to namespace production."
+        }
+      ]
+    }
+  ],
+  "assessmentQuestions": [
+    {
+      "id": "q-micro-01",
+      "question": "What is the primary advantage of the Strangler Fig pattern when modernizing a legacy monolithic system?",
+      "options": [
+        "It replaces the database with flat JSON files.",
+        "It enables incremental, low-risk migration by intercepting network traffic at the edge and progressively routing specific functional domains to new microservices while the remainder continues running on the legacy monolith.",
+        "It shuts down the monolith immediately to force rapid adoption.",
+        "It requires all code to be converted into WebAssembly."
+      ],
+      "correctIndex": 1,
+      "explanation": "Named after strangler fig trees that slowly grow around host trees, the Strangler Fig pattern avoids disastrous big-bang rewrites by carving off one bounded context at a time behind an API gateway or reverse proxy until the monolith is extinguished."
+    },
+    {
+      "id": "q-micro-02",
+      "question": "How does the Transactional Outbox pattern solve the dual-write problem across distributed databases and message brokers (Kafka/NATS)?",
+      "options": [
+        "By ignoring failed message deliveries.",
+        "By writing the outbound event record into an 'outbox' table within the SAME local database transaction as the business entity mutation; an asynchronous Change Data Capture (CDC) process then reliably relays events from the outbox table to the message broker with at-least-once guarantees.",
+        "By forcing message brokers to use SQL.",
+        "By disabling database transactions altogether."
+      ],
+      "correctIndex": 1,
+      "explanation": "Because local database transactions are atomic, saving the business entity and the outbox event in the same transaction guarantees that events are only published if the database write succeeds, eliminating dual-write race conditions."
+    }
+  ]
+}
