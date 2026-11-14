@@ -1,0 +1,213 @@
+{
+  "id": "cicd-pipelines",
+  "title": "Cloud-Native CI/CD Pipelines, Tekton & DORA Engineering",
+  "category": "CI/CD & DevSecOps",
+  "trackId": "track-k8s-admin",
+  "version": "1.0.0",
+  "difficulty": "Intermediate",
+  "estimatedHours": 8,
+  "summary": "Master cloud-native CI/CD pipelines: declarative Tekton Tasks and Pipelines, workspace volume caching, GitHub Actions workflows, DORA metric instrumentation, and automated container build promotion.",
+  "prerequisites": [
+    "git-fundamentals",
+    "docker-containers",
+    "kubernetes-core-v4"
+  ],
+  "learningObjectives": [
+    "Construct declarative Kubernetes-native CI pipelines using Tekton Task and Pipeline custom resources.",
+    "Configure pipeline workspace caching and parameter bindings to accelerate build and test execution cycles.",
+    "Instrument DORA deployment frequency, lead time for changes, change failure rate, and MTTR telemetry."
+  ],
+  "curriculumModules": [
+    {
+      "id": "mod-cicd-01",
+      "title": "Tekton Pipeline Architecture: Tasks, Workspaces & PipelineRuns",
+      "conceptSummary": "Tekton provides Kubernetes-native CI/CD primitives. A Task defines an ordered sequence of container steps executing in a shared Pod. Pipelines compose Tasks via explicit runAfter dependencies, passing parameters and sharing state through Workspaces backed by PersistentVolumeClaims or emptyDir.",
+      "productionArchitecturePattern": "Isolate build steps in ephemeral rootless containers, persist intermediate build artifacts in dedicated cache volumes, and enforce pipeline concurrency limits to avoid cluster node starvation.",
+      "keyCommands": [
+        "kubectl get tasks -n tekton-pipelines",
+        "kubectl get pipelines -n tekton-pipelines",
+        "kubectl get pipelineruns -n tekton-pipelines",
+        "kubectl get taskruns -A"
+      ]
+    },
+    {
+      "id": "mod-cicd-02",
+      "title": "DORA Metrics & Enterprise Pipeline Governance",
+      "conceptSummary": "DORA (DevOps Research and Assessment) benchmarks organizational delivery velocity using four metrics: Deployment Frequency, Lead Time for Changes, Time to Restore Service (MTTR), and Change Failure Rate. Automated pipelines emit deployment telemetry on successful releases.",
+      "productionArchitecturePattern": "Tag git releases with semantic versions upon pipeline completion, publish deployment events to Prometheus or Webhooks, and gate promotions through automated staging canary verification.",
+      "keyCommands": [
+        "git tag -a v1.0.0 -m 'Release v1.0.0'",
+        "git push --tags",
+        "kubectl get events --sort-by=.metadata.creationTimestamp"
+      ]
+    }
+  ],
+  "labs": [
+    {
+      "id": "lab-cicd-01-tekton-pipeline",
+      "title": "Authoring Declarative Tekton Tasks and Pipelines",
+      "difficulty": "Intermediate",
+      "durationMinutes": 20,
+      "xpReward": 150,
+      "scenario": "Deploy a cloud-native build pipeline in namespace tekton-pipelines: create a Tekton Task build-image that runs step build-container with image crictl:latest, and create a Tekton Pipeline app-ci-pipeline referencing Task build-image with workspace shared-workspace.",
+      "productionContext": "Tekton decouples CI workflows from proprietary SaaS runners, running directly on Kubernetes with fine-grained RBAC, native secret management, and elastic pod autoscaling.",
+      "prerequisites": [
+        "lab-k8s-01-ha-deployments"
+      ],
+      "objectives": [
+        "Create namespace tekton-pipelines.",
+        "Deploy Tekton Task build-image in namespace tekton-pipelines.",
+        "Deploy Tekton Pipeline app-ci-pipeline in namespace tekton-pipelines."
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "apiVersion: tekton.dev/v1\nkind: Task\nmetadata:\n  name: build-image\n  namespace: tekton-pipelines\nspec:\n  steps:\n    - name: build-container\n      image: crictl:latest\n      command: ['echo', 'Building container image']\n---\napiVersion: tekton.dev/v1\nkind: Pipeline\nmetadata:\n  name: app-ci-pipeline\n  namespace: tekton-pipelines\nspec:\n  workspaces:\n    - name: shared-workspace\n  tasks:\n    - name: build-step\n      taskRef:\n        name: build-image\n",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Create namespace tekton-pipelines",
+          "instruction": "Create the dedicated namespace tekton-pipelines for CI workloads.",
+          "commandHint": "kubectl create namespace tekton-pipelines"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Apply Tekton Task and Pipeline manifest",
+          "instruction": "Save the Task and Pipeline specifications to /ci/tekton-pipeline.yaml and apply to the cluster.",
+          "commandHint": "cat << 'EOF' > /ci/tekton-pipeline.yaml\n...\nEOF\nkubectl apply -f /ci/tekton-pipeline.yaml"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "namespace-tekton-exists",
+          "description": "Namespace tekton-pipelines exists",
+          "type": "resource_exists",
+          "kind": "Namespace",
+          "name": "tekton-pipelines",
+          "remediation": "Run kubectl create namespace tekton-pipelines"
+        },
+        {
+          "id": "tekton-task-exists",
+          "description": "Task build-image exists in namespace tekton-pipelines",
+          "type": "resource_exists",
+          "kind": "Task",
+          "namespace": "tekton-pipelines",
+          "name": "build-image",
+          "remediation": "Deploy Task build-image in namespace tekton-pipelines"
+        },
+        {
+          "id": "tekton-pipeline-exists",
+          "description": "Pipeline app-ci-pipeline exists in namespace tekton-pipelines",
+          "type": "resource_exists",
+          "kind": "Pipeline",
+          "namespace": "tekton-pipelines",
+          "name": "app-ci-pipeline",
+          "remediation": "Deploy Pipeline app-ci-pipeline in namespace tekton-pipelines"
+        }
+      ],
+      "solutionCommands": [
+        "mkdir -p /ci",
+        "kubectl create namespace tekton-pipelines",
+        "cat << 'EOF' > /ci/tekton-pipeline.yaml\napiVersion: tekton.dev/v1\nkind: Task\nmetadata:\n  name: build-image\n  namespace: tekton-pipelines\nspec:\n  steps:\n    - name: build-container\n      image: crictl:latest\n      command: ['echo', 'Building container image']\n---\napiVersion: tekton.dev/v1\nkind: Pipeline\nmetadata:\n  name: app-ci-pipeline\n  namespace: tekton-pipelines\nspec:\n  workspaces:\n    - name: shared-workspace\n  tasks:\n    - name: build-step\n      taskRef:\n        name: build-image\nEOF",
+        "kubectl apply -f /ci/tekton-pipeline.yaml"
+      ],
+      "troubleshootingGuide": [
+        {
+          "problem": "Tekton resources not found in tekton-pipelines namespace.",
+          "cause": "The manifest omitted metadata.namespace or namespace was not created.",
+          "solution": "Create the namespace first and ensure metadata.namespace is tekton-pipelines."
+        }
+      ]
+    },
+    {
+      "id": "lab-cicd-02-github-actions-caching",
+      "title": "Configuring CI Workflow Build Caching & Artifact Upload",
+      "difficulty": "Intermediate",
+      "durationMinutes": 20,
+      "xpReward": 150,
+      "scenario": "Configure a production GitHub Actions CI pipeline: create directory .github/workflows and author ci-build.yml with jobs.build, steps utilizing actions/cache@v4 for dependency caching, and npm test execution.",
+      "productionContext": "Build caching in continuous integration pipelines reduces test latency by up to 70%, preventing redundant dependency downloads and accelerating developer feedback loops.",
+      "prerequisites": [
+        "lab-cicd-01-tekton-pipeline"
+      ],
+      "objectives": [
+        "Create directory .github/workflows in the repository root.",
+        "Author .github/workflows/ci-build.yml with actions/cache and npm test steps.",
+        "Verify file contents and syntax."
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "name: CI Pipeline\non:\n  push:\n    branches: [ main ]\n  pull_request:\n    branches: [ main ]\njobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - name: Cache Node Modules\n        uses: actions/cache@v4\n        with:\n          path: ~/.npm\n          key: npm-cache-${{ hashFiles('package-lock.json') }}\n      - name: Run Unit Tests\n        run: npm test\n",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Create workflow directory",
+          "instruction": "Create directory .github/workflows for the CI workflow definition.",
+          "commandHint": "mkdir -p .github/workflows"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Author workflow definition",
+          "instruction": "Write the GitHub Actions workflow to .github/workflows/ci-build.yml with actions/cache and npm test.",
+          "commandHint": "cat << 'EOF' > .github/workflows/ci-build.yml\n...\nEOF"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "ci-workflow-file-exists",
+          "description": ".github/workflows/ci-build.yml contains actions/cache@v4",
+          "type": "vfs_file_contains",
+          "path": ".github/workflows/ci-build.yml",
+          "pattern": "actions/cache@v4",
+          "remediation": "Create .github/workflows/ci-build.yml with actions/cache@v4"
+        },
+        {
+          "id": "ci-workflow-contains-npm-test",
+          "description": "Workflow runs npm test step",
+          "type": "vfs_file_contains",
+          "path": ".github/workflows/ci-build.yml",
+          "pattern": "npm test",
+          "remediation": "Add npm test step to .github/workflows/ci-build.yml"
+        }
+      ],
+      "solutionCommands": [
+        "mkdir -p .github/workflows",
+        "cat << 'EOF' > .github/workflows/ci-build.yml\nname: CI Pipeline\non:\n  push:\n    branches: [ main ]\n  pull_request:\n    branches: [ main ]\njobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - name: Cache Node Modules\n        uses: actions/cache@v4\n        with:\n          path: ~/.npm\n          key: npm-cache-${{ hashFiles('package-lock.json') }}\n      - name: Run Unit Tests\n        run: npm test\nEOF"
+      ],
+      "troubleshootingGuide": [
+        {
+          "problem": "Validation fails on missing cache action or npm test step.",
+          "cause": "The file was saved to the wrong directory or omitted required steps.",
+          "solution": "Ensure .github/workflows/ci-build.yml exists and contains actions/cache@v4 and npm test."
+        }
+      ]
+    }
+  ],
+  "assessmentQuestions": [
+    {
+      "id": "q-cicd-01",
+      "question": "What is the primary architectural difference between a Tekton Task and a Tekton Pipeline?",
+      "options": [
+        "A Task compiles Go code while a Pipeline only packages Docker images.",
+        "A Task defines an ordered sequence of container steps executing in a single Pod, whereas a Pipeline orchestrates multiple Tasks as a Directed Acyclic Graph (DAG) across Pods.",
+        "Tasks run exclusively on virtual machines while Pipelines run on Kubernetes.",
+        "A Task is deprecated in favor of Kubernetes CronJobs."
+      ],
+      "correctIndex": 1,
+      "explanation": "In Tekton, a Task executes sequential steps inside a single Pod sharing an emptyDir workspace. A Pipeline orders multiple Tasks using runAfter and shares data across Tasks using Workspaces."
+    },
+    {
+      "id": "q-cicd-02",
+      "question": "Which DORA metric measures the time elapsed from code commit to successful production deployment?",
+      "options": [
+        "Change Failure Rate",
+        "Lead Time for Changes",
+        "Deployment Frequency",
+        "Mean Time to Recovery (MTTR)"
+      ],
+      "correctIndex": 1,
+      "explanation": "Lead Time for Changes tracks the duration required for a committed code change to reach production. High-performing engineering teams achieve a lead time of less than one day."
+    }
+  ]
+}

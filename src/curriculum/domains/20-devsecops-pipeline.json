@@ -1,0 +1,209 @@
+{
+  "id": "devsecops-pipeline",
+  "title": "DevSecOps Supply Chain Security, SLSA, SBOM & Policy Admission",
+  "category": "CI/CD & DevSecOps",
+  "trackId": "track-devsecops",
+  "version": "1.0.0",
+  "difficulty": "Intermediate",
+  "estimatedHours": 8,
+  "summary": "Master DevSecOps pipeline security: Trivy container vulnerability scanning, Software Bill of Materials (SBOM) generation, Cosign digital artifact signing, SLSA supply chain provenance, and Kyverno policy-as-code admission control.",
+  "prerequisites": [
+    "cicd-pipelines",
+    "k8s-security-cks"
+  ],
+  "learningObjectives": [
+    "Integrate Trivy automated vulnerability scanning and SBOM generation into CI/CD build gates.",
+    "Sign container artifacts with Cosign to guarantee software supply chain provenance (SLSA Level 3).",
+    "Enforce declarative Kubernetes admission governance using Kyverno ClusterPolicy custom resources."
+  ],
+  "curriculumModules": [
+    {
+      "id": "mod-secops-01",
+      "title": "Supply Chain Security: Vulnerability Scanning, SBOM & Cosign Signing",
+      "conceptSummary": "Securing the software supply chain requires scanning container images for CVEs (Trivy), generating SPDX/CycloneDX Software Bill of Materials (SBOM), and cryptographically signing images using Cosign keyless or KMS signatures to achieve SLSA compliance.",
+      "productionArchitecturePattern": "Block pipeline builds if CRITICAL or HIGH CVEs exist with available fixes; mandate cryptographic image signatures verified by Kubernetes admission webhooks before pod creation.",
+      "keyCommands": [
+        "trivy image --severity HIGH,CRITICAL nginx:latest",
+        "cosign verify ghcr.io/kubelabs/app:v1.0.0",
+        "trivy k8s --report summary"
+      ]
+    },
+    {
+      "id": "mod-secops-02",
+      "title": "Policy as Code Admission Governance with Kyverno",
+      "conceptSummary": "Kyverno is a Kubernetes-native policy engine running as an admission controller. It validates, mutates, and generates resources using declarative YAML policies without requiring complex DSLs (unlike OPA Rego). ClusterPolicies block insecure pod configurations at admission time.",
+      "productionArchitecturePattern": "Deploy Kyverno ClusterPolicies in audit mode during onboarding, then transition to enforce mode with automated violation reporting streamed to security dashboards.",
+      "keyCommands": [
+        "kyverno apply /security/disallow-root-user.yaml",
+        "kubectl get clusterpolicies",
+        "kubectl get policyreports -A"
+      ]
+    }
+  ],
+  "labs": [
+    {
+      "id": "lab-secops-01-trivy-sbom-scan",
+      "title": "Vulnerability Scanning and Policy Gate with Trivy",
+      "difficulty": "Intermediate",
+      "durationMinutes": 20,
+      "xpReward": 150,
+      "scenario": "Perform container vulnerability scanning and validation: execute trivy image nginx:1.27-alpine to audit package CVEs, save the scan report to /security/trivy-report.txt, and verify that no critical vulnerabilities block release.",
+      "productionContext": "Container vulnerability scanning gates vulnerable base images from entering production clusters, protecting workloads from known remote code execution exploits.",
+      "prerequisites": [
+        "lab-cicd-01-tekton-pipeline"
+      ],
+      "objectives": [
+        "Create directory /security.",
+        "Execute trivy image scan.",
+        "Save scan results to /security/trivy-report.txt."
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "# Trivy Image Security Scan\n# Scan target: nginx:1.27-alpine\n# Output target: /security/trivy-report.txt\n",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Create security reports directory",
+          "instruction": "Create directory /security for vulnerability audit reports.",
+          "commandHint": "mkdir -p /security"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Execute Trivy image audit",
+          "instruction": "Run trivy image on nginx:1.27-alpine redirecting output to /security/trivy-report.txt.",
+          "commandHint": "trivy image nginx:1.27-alpine > /security/trivy-report.txt"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "trivy-command-executed",
+          "description": "trivy image command executed",
+          "type": "command_executed",
+          "commandSubstring": "trivy image",
+          "remediation": "Execute trivy image nginx:1.27-alpine"
+        },
+        {
+          "id": "trivy-report-saved",
+          "description": "Scan output saved to /security/trivy-report.txt",
+          "type": "vfs_file_contains",
+          "path": "/security/trivy-report.txt",
+          "pattern": "Scan Target",
+          "remediation": "Redirect trivy output to /security/trivy-report.txt"
+        }
+      ],
+      "solutionCommands": [
+        "mkdir -p /security",
+        "trivy image nginx:1.27-alpine > /security/trivy-report.txt"
+      ],
+      "troubleshootingGuide": [
+        {
+          "problem": "/security/trivy-report.txt is empty or missing.",
+          "cause": "Trivy command was run without output redirection.",
+          "solution": "Run trivy image nginx:1.27-alpine > /security/trivy-report.txt."
+        }
+      ]
+    },
+    {
+      "id": "lab-secops-02-kyverno-admission-policy",
+      "title": "Enforcing Kubernetes Admission Control with Kyverno ClusterPolicy",
+      "difficulty": "Intermediate",
+      "durationMinutes": 20,
+      "xpReward": 150,
+      "scenario": "Enforce pod security policy as code: author and deploy a Kyverno ClusterPolicy named disallow-root-user that matches Pod resources and validates that spec.securityContext.runAsNonRoot is true with validationFailureAction set to Enforce. Validate the policy using the kyverno CLI.",
+      "productionContext": "Kyverno ClusterPolicies provide declarative, Kubernetes-native admission enforcement without requiring Rego programming, preventing developers from inadvertently launching privileged containers.",
+      "prerequisites": [
+        "lab-secops-01-trivy-sbom-scan"
+      ],
+      "objectives": [
+        "Create and apply Kyverno ClusterPolicy disallow-root-user.",
+        "Verify ClusterPolicy validationFailureAction is set to Enforce.",
+        "Validate policy using kyverno apply."
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "apiVersion: kyverno.io/v1\nkind: ClusterPolicy\nmetadata:\n  name: disallow-root-user\nspec:\n  validationFailureAction: Enforce\n  rules:\n    - name: check-runAsNonRoot\n      match:\n        resources:\n          kinds:\n            - Pod\n      validate:\n        message: \"Running as root is forbidden. Set runAsNonRoot: true.\"\n        pattern:\n          spec:\n            securityContext:\n              runAsNonRoot: true\n",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Author and apply Kyverno ClusterPolicy",
+          "instruction": "Save the ClusterPolicy to /security/disallow-root-user.yaml and apply it with kubectl.",
+          "commandHint": "cat << 'EOF' > /security/disallow-root-user.yaml\n...\nEOF\nkubectl apply -f /security/disallow-root-user.yaml"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Validate policy using Kyverno CLI",
+          "instruction": "Run kyverno apply /security/disallow-root-user.yaml to test the policy logic against admission standards.",
+          "commandHint": "kyverno apply /security/disallow-root-user.yaml"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "kyverno-clusterpolicy-exists",
+          "description": "ClusterPolicy disallow-root-user exists",
+          "type": "resource_exists",
+          "kind": "ClusterPolicy",
+          "name": "disallow-root-user",
+          "remediation": "Apply ClusterPolicy disallow-root-user"
+        },
+        {
+          "id": "kyverno-failure-action-enforce",
+          "description": "validationFailureAction is Enforce",
+          "type": "resource_field_equals",
+          "kind": "ClusterPolicy",
+          "name": "disallow-root-user",
+          "fieldPath": "spec.validationFailureAction",
+          "expectedValue": "Enforce",
+          "remediation": "Set spec.validationFailureAction: Enforce in ClusterPolicy"
+        },
+        {
+          "id": "kyverno-cli-tested",
+          "description": "kyverno apply CLI executed",
+          "type": "command_executed",
+          "commandSubstring": "kyverno apply",
+          "remediation": "Execute kyverno apply /security/disallow-root-user.yaml"
+        }
+      ],
+      "solutionCommands": [
+        "mkdir -p /security",
+        "cat << 'EOF' > /security/disallow-root-user.yaml\napiVersion: kyverno.io/v1\nkind: ClusterPolicy\nmetadata:\n  name: disallow-root-user\nspec:\n  validationFailureAction: Enforce\n  rules:\n    - name: check-runAsNonRoot\n      match:\n        resources:\n          kinds:\n            - Pod\n      validate:\n        message: \"Running as root is forbidden. Set runAsNonRoot: true.\"\n        pattern:\n          spec:\n            securityContext:\n              runAsNonRoot: true\nEOF",
+        "kubectl apply -f /security/disallow-root-user.yaml",
+        "kyverno apply /security/disallow-root-user.yaml"
+      ],
+      "troubleshootingGuide": [
+        {
+          "problem": "ClusterPolicy disallow-root-user missing or validationFailureAction is not Enforce.",
+          "cause": "The manifest omitted spec.validationFailureAction: Enforce or was not applied.",
+          "solution": "Apply /security/disallow-root-user.yaml with spec.validationFailureAction: Enforce."
+        }
+      ]
+    }
+  ],
+  "assessmentQuestions": [
+    {
+      "id": "q-secops-01",
+      "question": "What is an SBOM (Software Bill of Materials) and why is it critical for DevSecOps pipelines?",
+      "options": [
+        "An SBOM is a billing report generated by cloud providers for Kubernetes cluster compute usage.",
+        "An SBOM is a formal machine-readable inventory of all software components, direct/transitive dependencies, and licenses in an application, enabling rapid vulnerability triage (e.g. Log4Shell).",
+        "An SBOM is a compiled binary executable containing all kernel drivers.",
+        "An SBOM is a git commit message template required by semantic versioning."
+      ],
+      "correctIndex": 1,
+      "explanation": "An SBOM (e.g. in SPDX or CycloneDX format) catalogs every third-party library and dependency packaged inside a container image, allowing security teams to immediately identify affected workloads when zero-day vulnerabilities emerge."
+    },
+    {
+      "id": "q-secops-02",
+      "question": "How does Kyverno admission enforcement differ from Open Policy Agent (OPA) Gatekeeper?",
+      "options": [
+        "Kyverno runs only outside Kubernetes on developer laptops.",
+        "Kyverno expresses policies as native Kubernetes YAML custom resources without requiring a separate DSL like Rego, making policy authoring familiar to Kubernetes engineers.",
+        "OPA Gatekeeper cannot mutate incoming Kubernetes admission payloads.",
+        "Kyverno only inspects network traffic and cannot evaluate Pod specifications."
+      ],
+      "correctIndex": 1,
+      "explanation": "Kyverno uses declarative Kubernetes resource patterns in YAML, whereas OPA Gatekeeper requires writing rules in the Rego domain-specific language. Both act as validating/mutating admission webhooks."
+    }
+  ]
+}
