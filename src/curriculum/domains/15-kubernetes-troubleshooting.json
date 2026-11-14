@@ -1,0 +1,272 @@
+{
+  "id": "k8s-troubleshooting",
+  "title": "Kubernetes Troubleshooting: Root Cause Analysis & Outage Remediation",
+  "category": "Kubernetes & CNCF",
+  "trackId": "track-k8s-admin",
+  "version": "1.0.0",
+  "difficulty": "Intermediate",
+  "estimatedHours": 8,
+  "summary": "Master production root cause analysis: diagnose CrashLoopBackOff, ImagePullBackOff, OOMKilled, and restore corrupted static pod control planes and misconfigured Kubelets.",
+  "prerequisites": [
+    "kubernetes-core-v4",
+    "ckad-developer"
+  ],
+  "learningObjectives": [
+    "Diagnose and remediate application Pod lifecycle failures including CrashLoopBackOff, missing ConfigMap/Secret keys, and OOMKilled events.",
+    "Perform deep-dive control plane diagnostics on static pods (/etc/kubernetes/manifests) and recover unresponsive kube-apiserver instances.",
+    "Utilize ephemeral debug containers (kubectl debug) and Kubelet journal logs to isolate node and container failures."
+  ],
+  "curriculumModules": [
+    {
+      "id": "mod-trouble-01",
+      "title": "Workload Failure Modes: CrashLoopBackOff, ImagePullBackOff & OOMKilled",
+      "conceptSummary": "Kubernetes surfaces distinct container failure states in pod status. CrashLoopBackOff indicates rapid process termination with exponential backoff delays. ImagePullBackOff points to invalid registry credentials or non-existent image tags. OOMKilled (Exit Code 137) occurs when memory exceeds cgroup limits.",
+      "productionArchitecturePattern": "Inspect pod termination reasons using kubectl describe pod and kubectl logs --previous to capture stderr traces before pod restart cycles wipe ephemeral logs.",
+      "keyCommands": [
+        "kubectl describe pod <name>",
+        "kubectl logs <pod> --previous",
+        "kubectl get events --sort-by='.metadata.creationTimestamp'"
+      ]
+    },
+    {
+      "id": "mod-trouble-02",
+      "title": "Static Pod & Control Plane Failure Recovery",
+      "conceptSummary": "Control-plane static pods (kube-apiserver, etcd, kube-controller-manager) are supervised by Kubelet reading manifests in /etc/kubernetes/manifests. A YAML indentation error or certificate expiry stops the apiserver completely, causing kubectl connection refused errors.",
+      "productionArchitecturePattern": "Validate static pod manifest syntax with linters before saving edits, and check /var/log/pods or crictl logs on the control plane node when apiserver fails to start.",
+      "keyCommands": [
+        "crictl ps -a",
+        "crictl logs <container-id>",
+        "systemctl status kubelet"
+      ]
+    },
+    {
+      "id": "mod-trouble-03",
+      "title": "Node & Kubelet Diagnostics: Ephemeral Containers & Systemd Logs",
+      "conceptSummary": "When worker nodes enter NotReady status, root cause analysis requires inspecting Kubelet systemd journals (journalctl -u kubelet -p err) and examining container runtime socket responsiveness (/run/containerd/containerd.sock).",
+      "productionArchitecturePattern": "Use ephemeral debug containers (kubectl debug -it <pod> --image=busybox --target=<container>) to attach interactive diagnostic tools without mutating production distroless images.",
+      "keyCommands": [
+        "kubectl debug pod/<name> -it --image=busybox",
+        "journalctl -u kubelet -n 50 --no-pager",
+        "df -h"
+      ]
+    }
+  ],
+  "labs": [
+    {
+      "id": "lab-troubleshoot-01-crashloop-oom",
+      "title": "Diagnosing & Fixing CrashLoopBackOff and OOMKilled Failures",
+      "difficulty": "Intermediate",
+      "durationMinutes": 20,
+      "xpReward": 150,
+      "scenario": "Microservice payment-processor in namespace troubleshoot-apps is stuck in CrashLoopBackOff due to a missing ConfigMap payment-config and insufficient memory limits (64Mi). Create the required ConfigMap with DB_HOST=postgres.troubleshoot-apps.svc, increase container memory limits to 256Mi, and verify the Deployment achieves healthy Running status.",
+      "productionContext": "Over 70% of production Kubernetes workload outages stem from configuration drift (missing ConfigMaps/Secrets) or aggressive memory limits triggering kernel OOM killer terminations.",
+      "prerequisites": [
+        "lab-k8s-01-ha-deployments"
+      ],
+      "objectives": [
+        "Create namespace troubleshoot-apps for isolated debugging",
+        "Create missing ConfigMap payment-config with DB_HOST literal",
+        "Deploy payment-processor with 256Mi memory limits to prevent OOMKilled",
+        "Verify all deployment pods reach healthy Running status"
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Create Debugging Namespace",
+          "instruction": "Create namespace `troubleshoot-apps` using `kubectl create namespace troubleshoot-apps`.",
+          "commandHint": "kubectl create namespace troubleshoot-apps"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Create Missing Configuration",
+          "instruction": "Create ConfigMap `payment-config` with key `DB_HOST=postgres.troubleshoot-apps.svc`.",
+          "commandHint": "kubectl create configmap payment-config --from-literal=DB_HOST=postgres.troubleshoot-apps.svc -n troubleshoot-apps"
+        },
+        {
+          "stepNumber": 3,
+          "title": "Author Patched Deployment Manifest",
+          "instruction": "Create `/home/learner/payment-processor.yaml` with 256Mi memory limit and apply it.",
+          "commandHint": "echo -e \"...\" > /home/learner/payment-processor.yaml && kubectl apply -f /home/learner/payment-processor.yaml"
+        },
+        {
+          "stepNumber": 4,
+          "title": "Verify Rollout Status",
+          "instruction": "Verify deployment rollout reaches complete state.",
+          "commandHint": "kubectl rollout status deployment/payment-processor -n troubleshoot-apps"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "val-trouble-ns-apps",
+          "description": "Created troubleshoot-apps namespace",
+          "type": "resource_exists",
+          "kind": "Namespace",
+          "name": "troubleshoot-apps",
+          "remediation": "Run 'kubectl create namespace troubleshoot-apps'."
+        },
+        {
+          "id": "val-trouble-cm-config",
+          "description": "Created payment-config ConfigMap in troubleshoot-apps",
+          "type": "resource_exists",
+          "kind": "ConfigMap",
+          "name": "payment-config",
+          "namespace": "troubleshoot-apps",
+          "remediation": "Run 'kubectl create configmap payment-config --from-literal=DB_HOST=postgres.troubleshoot-apps.svc -n troubleshoot-apps'."
+        },
+        {
+          "id": "val-trouble-dep-payment",
+          "description": "Deployed payment-processor Deployment in troubleshoot-apps",
+          "type": "resource_exists",
+          "kind": "Deployment",
+          "name": "payment-processor",
+          "namespace": "troubleshoot-apps",
+          "remediation": "Apply Deployment payment-processor in namespace troubleshoot-apps."
+        },
+        {
+          "id": "val-trouble-mem-limit",
+          "description": "Configured memory limits of at least 256Mi to prevent OOMKilled",
+          "type": "resource_field_contains",
+          "kind": "Deployment",
+          "name": "payment-processor",
+          "namespace": "troubleshoot-apps",
+          "fieldPath": "spec.template.spec.containers",
+          "expectedValue": "256Mi",
+          "remediation": "Set container resources.limits.memory to 256Mi."
+        },
+        {
+          "id": "val-trouble-replicas-ready",
+          "description": "Verified at least 2 ready replicas in payment-processor deployment",
+          "type": "replica_count_min",
+          "kind": "Deployment",
+          "name": "payment-processor",
+          "namespace": "troubleshoot-apps",
+          "expectedValue": 2,
+          "remediation": "Scale payment-processor to 2 ready replicas."
+        }
+      ],
+      "solutionCommands": [
+        "kubectl create namespace troubleshoot-apps",
+        "kubectl create configmap payment-config --from-literal=DB_HOST=postgres.troubleshoot-apps.svc -n troubleshoot-apps",
+        "echo -e \"apiVersion: apps/v1\\nkind: Deployment\\nmetadata:\\n  name: payment-processor\\n  namespace: troubleshoot-apps\\nspec:\\n  replicas: 2\\n  selector:\\n    matchLabels:\\n      app: payment-processor\\n  template:\\n    metadata:\\n      labels:\\n        app: payment-processor\\n    spec:\\n      containers:\\n      - name: processor\\n        image: nginx:1.27-alpine\\n        resources:\\n          limits:\\n            memory: 256Mi\\n            cpu: 500m\\n          requests:\\n            memory: 128Mi\\n            cpu: 100m\" > /home/learner/payment-processor.yaml",
+        "kubectl apply -f /home/learner/payment-processor.yaml",
+        "kubectl rollout status deployment/payment-processor -n troubleshoot-apps"
+      ],
+      "troubleshootingGuide": "Ensure namespace troubleshoot-apps exists, ConfigMap payment-config is created, and payment-processor Deployment has 2 replicas with 256Mi memory limit."
+    },
+    {
+      "id": "lab-troubleshoot-02-controlplane-kubelet",
+      "title": "Control Plane Recovery: Static Pod Manifests & Kubelet Diagnostics",
+      "difficulty": "Intermediate",
+      "durationMinutes": 20,
+      "xpReward": 175,
+      "scenario": "A control-plane node failure occurred where static pod manifest /etc/kubernetes/manifests/kube-apiserver.yaml was corrupted. Inspect the manifest using cat, repair the manifest syntax error, restart the Kubelet service using systemctl restart kubelet, and verify cluster component statuses.",
+      "productionContext": "Control plane outages require cluster administrators to bypass kubectl and directly troubleshoot node filesystems, static pod manifests, and systemd daemons to recover cluster quorum.",
+      "prerequisites": [
+        "lab-troubleshoot-01-crashloop-oom"
+      ],
+      "objectives": [
+        "Inspect corrupted static pod manifest /etc/kubernetes/manifests/kube-apiserver.yaml",
+        "Write valid static pod manifest configuration",
+        "Restart Kubelet daemon via systemctl restart kubelet",
+        "Verify cluster node health via kubectl get nodes"
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Inspect Manifest",
+          "instruction": "Inspect `/etc/kubernetes/manifests/kube-apiserver.yaml` using `cat`.",
+          "commandHint": "cat /etc/kubernetes/manifests/kube-apiserver.yaml"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Repair Static Pod Configuration",
+          "instruction": "Write valid YAML configuration to `/etc/kubernetes/manifests/kube-apiserver.yaml`.",
+          "commandHint": "echo -e \"...\" > /etc/kubernetes/manifests/kube-apiserver.yaml"
+        },
+        {
+          "stepNumber": 3,
+          "title": "Restart Kubelet Daemon",
+          "instruction": "Restart Kubelet using `systemctl restart kubelet`.",
+          "commandHint": "systemctl restart kubelet"
+        },
+        {
+          "stepNumber": 4,
+          "title": "Verify Cluster Health",
+          "instruction": "Check node status using `kubectl get nodes`.",
+          "commandHint": "kubectl get nodes"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "val-trouble-cat-exec",
+          "description": "Inspected corrupted static pod manifest via cat",
+          "type": "command_executed",
+          "commandSubstring": "cat /etc/kubernetes/manifests/kube-apiserver.yaml",
+          "remediation": "Run 'cat /etc/kubernetes/manifests/kube-apiserver.yaml'."
+        },
+        {
+          "id": "val-trouble-manifest-repaired",
+          "description": "Repaired kube-apiserver static pod manifest in VFS",
+          "type": "command_executed",
+          "commandSubstring": "> /etc/kubernetes/manifests/kube-apiserver.yaml",
+          "remediation": "Write valid kube-apiserver pod configuration to /etc/kubernetes/manifests/kube-apiserver.yaml."
+        },
+        {
+          "id": "val-trouble-restart-kubelet",
+          "description": "Restarted Kubelet systemd service",
+          "type": "command_executed",
+          "commandSubstring": "systemctl restart kubelet",
+          "remediation": "Run 'systemctl restart kubelet'."
+        },
+        {
+          "id": "val-trouble-nodes-verified",
+          "description": "Verified cluster health with kubectl get nodes",
+          "type": "command_executed",
+          "commandSubstring": "kubectl get nodes",
+          "remediation": "Run 'kubectl get nodes'."
+        }
+      ],
+      "solutionCommands": [
+        "cat /etc/kubernetes/manifests/kube-apiserver.yaml",
+        "echo -e \"apiVersion: v1\\nkind: Pod\\nmetadata:\\n  name: kube-apiserver\\n  namespace: kube-system\\nspec:\\n  containers:\\n  - name: kube-apiserver\\n    image: registry.k8s.io/kube-apiserver:v1.31.0\" > /etc/kubernetes/manifests/kube-apiserver.yaml",
+        "systemctl restart kubelet",
+        "kubectl get nodes"
+      ],
+      "troubleshootingGuide": "Inspect /etc/kubernetes/manifests/kube-apiserver.yaml with cat, repair the manifest with valid Pod YAML, restart kubelet, and verify nodes."
+    }
+  ],
+  "assessmentQuestions": [
+    {
+      "id": "q-trouble-01",
+      "question": "What is the key diagnostic indicator that distinguishes a container terminated due to OOMKilled from a container failing due to an application exception CrashLoopBackOff?",
+      "options": [
+        "(Recommended) OOMKilled containers exit with exit code 137 (SIGKILL 128 + 9) and show 'OOMKilled: true' in 'kubectl describe pod', whereas application exceptions usually exit with non-zero exit codes (e.g. 1) without OOMKilled flags.",
+        "OOMKilled pods always restart on a different node immediately.",
+        "Application exceptions cause the worker node to enter NotReady state.",
+        "OOMKilled pods are automatically scaled up by the Horizontal Pod Autoscaler."
+      ],
+      "correctIndex": 0,
+      "explanation": "Exit code 137 indicates that the Linux kernel OOM killer sent SIGKILL (signal 9: 128 + 9 = 137) because the container exceeded its cgroup memory limit. This is explicitly surfaced as 'OOMKilled: true' under Last State in 'kubectl describe pod'."
+    },
+    {
+      "id": "q-trouble-02",
+      "question": "When debugging a distroless container that lacks curl, bash, netstat, or ping, what is the modern Kubernetes-native mechanism to inspect its network namespace and filesystem without rebuilding the container image?",
+      "options": [
+        "(Recommended) Execute 'kubectl debug -it <pod> --image=<debug-image> --target=<container>' to launch an ephemeral container sharing the process and network namespace.",
+        "SSH directly into the container using standard openssh keys.",
+        "Edit the Deployment spec to add apt-get install curl commands.",
+        "Scale the Deployment to zero and back to one replica."
+      ],
+      "correctIndex": 0,
+      "explanation": "Ephemeral debug containers ('kubectl debug -it ... --target=...') allow administrators to attach a full-featured troubleshooting image (e.g., nicolaka/netshoot or busybox) directly into the running Pod's process and network namespace without modifying or rebuilding the distroless image."
+    }
+  ]
+}

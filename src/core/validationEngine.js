@@ -349,7 +349,13 @@ class ValidationEngine {
       // 4. RBAC Authorization (can-i)
       // -----------------------------------------------------------------------
       case 'rbac_can_i': {
-        const security = context.security || (context.graph ? new SecurityPolicyEngine(context.graph) : null);
+        let security = context.security;
+        if (!security) {
+          const graph = context.graph || (ResourceGraph ? new ResourceGraph() : null);
+          if (graph && SecurityPolicyEngine) {
+            security = new SecurityPolicyEngine(graph);
+          }
+        }
         const user = rule.user || 'developer';
         const verb = rule.verb || 'get';
         const resource = rule.resource || 'pods';
@@ -382,7 +388,13 @@ class ValidationEngine {
       // 5. Pod Security Standard (PSA)
       // -----------------------------------------------------------------------
       case 'pod_security_standard': {
-        const security = context.security || (context.graph ? new SecurityPolicyEngine(context.graph) : null);
+        let security = context.security;
+        if (!security) {
+          const graph = context.graph || (ResourceGraph ? new ResourceGraph() : null);
+          if (graph && SecurityPolicyEngine) {
+            security = new SecurityPolicyEngine(graph);
+          }
+        }
         const level = rule.level || 'baseline';
         const expectedStatus = rule.expectedStatus || 'allowed'; // 'allowed' or 'denied'
 

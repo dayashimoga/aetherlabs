@@ -1,0 +1,272 @@
+{
+  "id": "k8s-security-cks",
+  "title": "Certified Kubernetes Security Specialist (CKS) Hardening & Defense",
+  "category": "Kubernetes & CNCF",
+  "trackId": "track-k8s-admin",
+  "version": "1.0.0",
+  "difficulty": "Intermediate",
+  "estimatedHours": 8,
+  "summary": "Master CKS security engineering: Pod Security Standards (Privileged, Baseline, Restricted), container securityContext hardening, AppArmor, Seccomp profiles, and Falco runtime behavioral threat detection.",
+  "prerequisites": [
+    "kubernetes-core-v4",
+    "ckad-developer"
+  ],
+  "learningObjectives": [
+    "Enforce declarative Pod Security Admission (PSA) standards across namespaces using admission label synchronization.",
+    "Harden container workloads with least-privilege securityContext controls (allowPrivilegeEscalation: false, runAsNonRoot, dropping ALL capabilities).",
+    "Detect and mitigate container runtime threats, privilege escalation vectors, and unauthorized terminal shells using Falco behavioral rules."
+  ],
+  "curriculumModules": [
+    {
+      "id": "mod-cks-01",
+      "title": "Pod Security Standards (PSA) & Admission Controllers",
+      "conceptSummary": "Pod Security Admission replaces PodSecurityPolicies, categorizing workload isolation into Privileged, Baseline, and Restricted levels via namespace labels (pod-security.kubernetes.io/enforce: restricted).",
+      "productionArchitecturePattern": "Enforce restricted PSA on all application namespaces; reserve baseline only for system daemonsets requiring host networking, and forbid privileged entirely on worker nodes.",
+      "keyCommands": [
+        "kubectl label namespace <name> pod-security.kubernetes.io/enforce=restricted",
+        "kubectl get namespaces --show-labels"
+      ]
+    },
+    {
+      "id": "mod-cks-02",
+      "title": "Container SecurityContext & Linux Kernel Sandboxing",
+      "conceptSummary": "The container securityContext controls DAC permissions, privilege escalation, Linux capabilities, readOnlyRootFilesystem, and Seccomp syscall filtering (RuntimeDefault or custom profiles).",
+      "productionArchitecturePattern": "Mandate allowPrivilegeEscalation: false, drop ALL Linux capabilities, run as an unprivileged UID (>10000), and mount /tmp and cache directories as non-executable emptyDir volumes.",
+      "keyCommands": [
+        "kubectl get pods -o jsonpath='{.items[*].spec.containers[*].securityContext}'"
+      ]
+    },
+    {
+      "id": "mod-cks-03",
+      "title": "Runtime Threat Detection & Behavioral Auditing with Falco",
+      "conceptSummary": "Falco uses eBPF kernel probes to inspect system calls at runtime, alerting on anomalous events (terminal shell spawned inside container, sensitive file access /etc/shadow, package manager execution).",
+      "productionArchitecturePattern": "Stream Falco JSON alerts into SIEM / Loki with Falcosidekick and configure automated incident response webhooks to quarantine compromised pods via NetworkPolicy.",
+      "keyCommands": [
+        "falco -c /etc/falco/falco.yaml",
+        "kubectl get pods -n falco"
+      ]
+    }
+  ],
+  "labs": [
+    {
+      "id": "lab-cks-01-pod-security-standards",
+      "title": "Hardening Workloads with Restricted Pod Security Standards",
+      "difficulty": "Intermediate",
+      "durationMinutes": 20,
+      "xpReward": 150,
+      "scenario": "Enforce Pod Security Standards in namespace sec-restricted: label the namespace with pod-security.kubernetes.io/enforce=restricted, and deploy a compliant hardened Pod secure-vault with runAsNonRoot: true, allowPrivilegeEscalation: false, capabilities.drop: ['ALL'], and readOnlyRootFilesystem: true.",
+      "productionContext": "CKS hardening standards require production workloads to run with immutable root filesystems, non-root users, and zero ambient kernel capabilities to prevent container breakout.",
+      "prerequisites": [
+        "lab-k8s-01-ha-deployments"
+      ],
+      "objectives": [
+        "Create namespace sec-restricted with restricted PSA enforcement label",
+        "Deploy hardened Pod secure-vault compliant with restricted PSA",
+        "Verify all capabilities are dropped and root filesystem is read-only",
+        "Validate pod compliance using pod_security_standard validation rule"
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Create Security Namespace",
+          "instruction": "Create namespace `sec-restricted` using `kubectl create namespace sec-restricted`.",
+          "commandHint": "kubectl create namespace sec-restricted"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Enforce Restricted PSA Label",
+          "instruction": "Apply restricted Pod Security Admission label to `sec-restricted`.",
+          "commandHint": "kubectl label namespace sec-restricted pod-security.kubernetes.io/enforce=restricted"
+        },
+        {
+          "stepNumber": 3,
+          "title": "Author Hardened Pod Manifest",
+          "instruction": "Create `/home/learner/secure-vault.yaml` with non-root security context and dropped capabilities.",
+          "commandHint": "echo -e \"...\" > /home/learner/secure-vault.yaml && kubectl apply -f /home/learner/secure-vault.yaml"
+        },
+        {
+          "stepNumber": 4,
+          "title": "Verify Running Status",
+          "instruction": "Verify that Pod `secure-vault` reaches `Running` status.",
+          "commandHint": "kubectl get pod secure-vault -n sec-restricted"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "val-cks-ns-restricted",
+          "description": "Created sec-restricted namespace",
+          "type": "resource_exists",
+          "kind": "Namespace",
+          "name": "sec-restricted",
+          "remediation": "Run 'kubectl create namespace sec-restricted'."
+        },
+        {
+          "id": "val-cks-ns-label",
+          "description": "Configured pod-security.kubernetes.io/enforce=restricted label on namespace",
+          "type": "resource_field_contains",
+          "kind": "Namespace",
+          "name": "sec-restricted",
+          "fieldPath": "metadata.labels",
+          "expectedValue": "restricted",
+          "remediation": "Run 'kubectl label namespace sec-restricted pod-security.kubernetes.io/enforce=restricted'."
+        },
+        {
+          "id": "val-cks-pod-exists",
+          "description": "Created secure-vault Pod in sec-restricted namespace",
+          "type": "resource_exists",
+          "kind": "Pod",
+          "name": "secure-vault",
+          "namespace": "sec-restricted",
+          "remediation": "Apply secure-vault Pod in namespace sec-restricted."
+        },
+        {
+          "id": "val-cks-psa-restricted",
+          "description": "Pod secure-vault complies with restricted Pod Security Standards",
+          "type": "pod_security_standard",
+          "name": "secure-vault",
+          "namespace": "sec-restricted",
+          "level": "restricted",
+          "expectedStatus": "allowed",
+          "remediation": "Set runAsNonRoot: true, allowPrivilegeEscalation: false, and drop ALL capabilities."
+        },
+        {
+          "id": "val-cks-pod-running",
+          "description": "Verified Pod secure-vault reaches Running status",
+          "type": "pod_status_running",
+          "name": "secure-vault",
+          "namespace": "sec-restricted",
+          "remediation": "Ensure Pod secure-vault starts cleanly."
+        }
+      ],
+      "solutionCommands": [
+        "kubectl create namespace sec-restricted",
+        "kubectl label namespace sec-restricted pod-security.kubernetes.io/enforce=restricted",
+        "echo -e \"apiVersion: v1\\nkind: Pod\\nmetadata:\\n  name: secure-vault\\n  namespace: sec-restricted\\nspec:\\n  securityContext:\\n    runAsNonRoot: true\\n    runAsUser: 10001\\n  containers:\\n  - name: vault\\n    image: cgr.dev/chainguard/static:latest\\n    command: [\\\"sh\\\", \\\"-c\\\", \\\"sleep 3600\\\"]\\n    securityContext:\\n      allowPrivilegeEscalation: false\\n      readOnlyRootFilesystem: true\\n      capabilities:\\n        drop:\\n        - ALL\" > /home/learner/secure-vault.yaml",
+        "kubectl apply -f /home/learner/secure-vault.yaml",
+        "kubectl get pod secure-vault -n sec-restricted"
+      ],
+      "troubleshootingGuide": "Verify namespace sec-restricted is labeled with pod-security.kubernetes.io/enforce=restricted, and Pod secure-vault sets runAsNonRoot: true, allowPrivilegeEscalation: false, and drop: ['ALL']."
+    },
+    {
+      "id": "lab-cks-02-falco-runtime-security",
+      "title": "Falco Behavioral Threat Detection & Container Runtime Isolation",
+      "difficulty": "Intermediate",
+      "durationMinutes": 20,
+      "xpReward": 175,
+      "scenario": "Deploy an intrusion detection policy and monitor container runtime events in namespace sec-runtime. Execute a Falco simulation audit to detect unauthorized interactive shells, and apply an immutable isolation NetworkPolicy quarantine-policy restricting egress traffic from compromised pods.",
+      "productionContext": "Real-time threat detection allows security operations centers (SOC) to identify active attackers within seconds of container compromise before lateral movement occurs.",
+      "prerequisites": [
+        "lab-cks-01-pod-security-standards"
+      ],
+      "objectives": [
+        "Create namespace sec-runtime for runtime threat monitoring",
+        "Deploy suspicious-workload in sec-runtime",
+        "Execute falco threat inspection command",
+        "Apply isolation NetworkPolicy quarantine-policy isolating suspicious workloads"
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Create Runtime Namespace",
+          "instruction": "Create namespace `sec-runtime` using `kubectl create namespace sec-runtime`.",
+          "commandHint": "kubectl create namespace sec-runtime"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Deploy Suspicious Workload",
+          "instruction": "Deploy `suspicious-workload` with 1 replica in `sec-runtime`.",
+          "commandHint": "kubectl create deployment suspicious-workload --image=nginx:1.27-alpine -n sec-runtime --replicas=1"
+        },
+        {
+          "stepNumber": 3,
+          "title": "Run Falco Behavioral Audit",
+          "instruction": "Execute runtime behavioral audit using `falco --version`.",
+          "commandHint": "falco --version"
+        },
+        {
+          "stepNumber": 4,
+          "title": "Apply Quarantine NetworkPolicy",
+          "instruction": "Create `/home/learner/quarantine.yaml` isolating `suspicious-workload` from network egress and apply it.",
+          "commandHint": "echo -e \"...\" > /home/learner/quarantine.yaml && kubectl apply -f /home/learner/quarantine.yaml"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "val-cks-ns-runtime",
+          "description": "Created sec-runtime namespace",
+          "type": "resource_exists",
+          "kind": "Namespace",
+          "name": "sec-runtime",
+          "remediation": "Run 'kubectl create namespace sec-runtime'."
+        },
+        {
+          "id": "val-cks-dep-suspicious",
+          "description": "Deployed suspicious-workload in sec-runtime",
+          "type": "resource_exists",
+          "kind": "Deployment",
+          "name": "suspicious-workload",
+          "namespace": "sec-runtime",
+          "remediation": "Run 'kubectl create deployment suspicious-workload --image=nginx:1.27-alpine -n sec-runtime --replicas=1'."
+        },
+        {
+          "id": "val-cks-falco-exec",
+          "description": "Executed Falco behavioral threat inspection",
+          "type": "command_executed",
+          "commandSubstring": "falco",
+          "remediation": "Run 'falco --version'."
+        },
+        {
+          "id": "val-cks-netpol-quarantine",
+          "description": "Applied quarantine NetworkPolicy isolating compromised workload",
+          "type": "resource_exists",
+          "kind": "NetworkPolicy",
+          "name": "quarantine-policy",
+          "namespace": "sec-runtime",
+          "remediation": "Apply NetworkPolicy quarantine-policy in namespace sec-runtime."
+        }
+      ],
+      "solutionCommands": [
+        "kubectl create namespace sec-runtime",
+        "kubectl create deployment suspicious-workload --image=nginx:1.27-alpine -n sec-runtime --replicas=1",
+        "falco --version",
+        "echo -e \"apiVersion: networking.k8s.io/v1\\nkind: NetworkPolicy\\nmetadata:\\n  name: quarantine-policy\\n  namespace: sec-runtime\\nspec:\\n  podSelector:\\n    matchLabels:\\n      app: suspicious-workload\\n  policyTypes:\\n  - Ingress\\n  - Egress\" > /home/learner/quarantine.yaml",
+        "kubectl apply -f /home/learner/quarantine.yaml"
+      ],
+      "troubleshootingGuide": "Ensure namespace sec-runtime exists, deploy suspicious-workload, run falco --version, and apply quarantine-policy NetworkPolicy."
+    }
+  ],
+  "assessmentQuestions": [
+    {
+      "id": "q-cks-01",
+      "question": "Which Linux kernel feature does Falco utilize to inspect system calls and detect anomalous runtime container behavior with minimal CPU overhead?",
+      "options": [
+        "(Recommended) Extended Berkeley Packet Filter (eBPF) tracepoints and kernel probes.",
+        "Systemd cgroups v1 freeze subsystem.",
+        "Iptables NAT masquerading rules.",
+        "POSIX filesystem chroot sandboxing."
+      ],
+      "correctIndex": 0,
+      "explanation": "Falco leverages modern eBPF kernel probes to attach to system call tracepoints directly in kernel space, filtering events asynchronously with sub-millisecond latency and near-zero host CPU overhead."
+    },
+    {
+      "id": "q-cks-02",
+      "question": "Under the Kubernetes Pod Security Standard (PSA) 'restricted' profile, which capability configuration is mandatory for all container securityContext definitions?",
+      "options": [
+        "(Recommended) Containers must drop all capabilities by configuring capabilities.drop: ['ALL'], only optionally re-adding NET_BIND_SERVICE if needed.",
+        "Containers must add SYS_ADMIN capability to allow kernel logging.",
+        "Containers are forbidden from modifying capabilities and must leave the list empty.",
+        "Containers must drop only NET_ADMIN capability while retaining all others."
+      ],
+      "correctIndex": 0,
+      "explanation": "The restricted Pod Security Standard strictly enforces least privilege by requiring all containers to drop ALL capabilities (capabilities.drop: ['ALL']). Only NET_BIND_SERVICE may optionally be re-added if binding to unprivileged ports."
+    }
+  ]
+}
