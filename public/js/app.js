@@ -29,6 +29,9 @@
     overview: null,
     activeLab: null,
     activeIncident: null,
+    activeIncidentCategory: 'all',
+    incidentStartTime: null,
+    incidentTimerInterval: null,
     activeArch: {
       name: 'Multi-AZ Amazon EKS GitOps Production Platform',
       nodes: [],
@@ -2190,33 +2193,397 @@
     `;
   }
 
+  const INCIDENT_CATEGORY_CONFIG = [
+    { id: 'all', name: 'All Scenarios', icon: '🚨' },
+    { id: 'website_down', name: 'Ingress & 503', icon: '🌐' },
+    { id: 'pod_restarting', name: 'Pod CrashLoop', icon: '📦' },
+    { id: 'slow_app', name: 'CFS Throttling', icon: '⏳' },
+    { id: 'dns_outage', name: 'DNS Blackhole', icon: '🔍' },
+    { id: 'iam_outage', name: 'Cloud IAM / IRSA', icon: '🔑' },
+    { id: 'storage_outage', name: 'Storage & PVC', icon: '💾' },
+    { id: 'networking_outage', name: 'Zero-Trust Net', icon: '🛡️' },
+    { id: 'node_outage', name: 'Node / etcd', icon: '🖥️' }
+  ];
+
+  function formatStopwatchDigits(totalSeconds) {
+    const s = Math.max(0, Math.floor(Number(totalSeconds) || 0));
+    const hrs = String(Math.floor(s / 3600)).padStart(2, '0');
+    const mins = String(Math.floor((s % 3600) / 60)).padStart(2, '0');
+    const secs = String(s % 60).padStart(2, '0');
+    return `${hrs}:${mins}:${secs}`;
+  }
+
+  function startMttrTimer(startTimestamp) {
+    stopMttrTimer();
+    state.incidentStartTime = startTimestamp || Date.now();
+    const timerEl = document.getElementById('inc-mttr-stopwatch');
+    if (timerEl) {
+      timerEl.textContent = '00:00:00';
+    }
+    state.incidentTimerInterval = setInterval(() => {
+      const elapsedSec = Math.floor((Date.now() - state.incidentStartTime) / 1000);
+      const el = document.getElementById('inc-mttr-stopwatch');
+      if (el) {
+        el.textContent = formatStopwatchDigits(elapsedSec);
+      }
+    }, 1000);
+  }
+
+  function stopMttrTimer() {
+    if (state.incidentTimerInterval) {
+      clearInterval(state.incidentTimerInterval);
+      state.incidentTimerInterval = null;
+    }
+    const elapsedSec = state.incidentStartTime ? Math.max(1, Math.floor((Date.now() - state.incidentStartTime) / 1000)) : 0;
+    return formatStopwatchDigits(elapsedSec);
+  }
+
+  function generateRedMetrics(incident) {
+    const cat = incident ? (incident.category || 'website_down') : 'website_down';
+    const id = incident ? incident.id : '';
+
+    let rateBaseline = 2450;
+    let rateOutage = 45;
+    let rateUnit = 'req/s';
+    let rateDelta = '-98.2%';
+    let rateStatus = 'status-danger';
+
+    let errorBaseline = 0.02;
+    let errorOutage = 99.4;
+    let errorUnit = '% 5xx';
+    let errorDelta = '+99.38%';
+    let errorStatus = 'status-danger';
+
+    let durBaseline = 35;
+    let durOutage = 3450;
+    let durUnit = 'ms P99';
+    let durDelta = '+3,415ms';
+    let durStatus = 'status-danger';
+
+    if (cat === 'slow_app' || id.includes('throttling') || id.includes('slow')) {
+      rateBaseline = 1800;
+      rateOutage = 950;
+      rateDelta = '-47.2%';
+      rateStatus = 'status-warning';
+
+      errorBaseline = 0.1;
+      errorOutage = 38.6;
+      errorDelta = '+38.5%';
+      errorStatus = 'status-warning';
+
+      durBaseline = 45;
+      durOutage = 4850;
+      durDelta = '+4,805ms (CFS throttle)';
+      durStatus = 'status-danger';
+    } else if (cat === 'dns_outage' || id.includes('coredns')) {
+      rateBaseline = 5200;
+      rateOutage = 0;
+      rateDelta = '-100.0% (NXDOMAIN)';
+      rateStatus = 'status-danger';
+
+      errorBaseline = 0.0;
+      errorOutage = 100.0;
+      errorDelta = '+100.0% NXDOMAIN';
+      errorStatus = 'status-danger';
+
+      durBaseline = 2;
+      durOutage = 5000;
+      durDelta = '+4,998ms (Timeout)';
+      durStatus = 'status-danger';
+    } else if (cat === 'node_outage' || id.includes('node') || id.includes('etcd')) {
+      rateBaseline = 3200;
+      rateOutage = 1600;
+      rateDelta = '-50.0% (Node down)';
+      rateStatus = 'status-danger';
+
+      errorBaseline = 0.02;
+      errorOutage = 48.2;
+      errorDelta = '+48.2%';
+      errorStatus = 'status-warning';
+
+      durBaseline = 28;
+      durOutage = 1840;
+      durDelta = '+1,812ms';
+      durStatus = 'status-warning';
+    } else if (cat === 'storage_outage' || id.includes('pvc')) {
+      rateBaseline = 850;
+      rateOutage = 0;
+      rateDelta = '-100.0% (DB pending)';
+      rateStatus = 'status-danger';
+
+      errorBaseline = 0.0;
+      errorOutage = 100.0;
+      errorDelta = '+100.0% Conn Refused';
+      errorStatus = 'status-danger';
+
+      durBaseline = 15;
+      durOutage = 30000;
+      durDelta = 'Connection Timeout';
+      durStatus = 'status-danger';
+    } else if (cat === 'iam_outage' || id.includes('iam')) {
+      rateBaseline = 420;
+      rateOutage = 0;
+      rateDelta = '-100.0% (S3 access denied)';
+      rateStatus = 'status-danger';
+
+      errorBaseline = 0.0;
+      errorOutage = 100.0;
+      errorDelta = '100% 403 Forbidden';
+      errorStatus = 'status-danger';
+
+      durBaseline = 85;
+      durOutage = 92;
+      durDelta = '+7ms (Fast reject)';
+      durStatus = 'status-warning';
+    }
+
+    const ratePoints = [];
+    const errorPoints = [];
+    const durPoints = [];
+
+    for (let i = 0; i < 14; i++) {
+      const x = Math.round((i / 13) * 160);
+      const isOutage = i >= 7;
+
+      let ry;
+      if (!isOutage) {
+        ry = 8 + (i % 3) * 2;
+      } else {
+        const progress = (i - 7) / 6;
+        ry = 8 + Math.round(progress * 22) + ((i % 2) ? 1 : -1);
+      }
+      ratePoints.push(`${x},${Math.max(2, Math.min(34, ry))}`);
+
+      let ey;
+      if (!isOutage) {
+        ey = 33 - (i % 2);
+      } else {
+        const progress = Math.min(1, ((i - 6) / 2));
+        ey = Math.round(33 - progress * 28) + ((i % 2) ? 1 : 0);
+      }
+      errorPoints.push(`${x},${Math.max(2, Math.min(34, ey))}`);
+
+      let dy;
+      if (!isOutage) {
+        dy = 28 + (i % 2) * 2;
+      } else {
+        const progress = Math.min(1, ((i - 6) / 3));
+        dy = Math.round(28 - progress * 23) + ((i % 3) - 1);
+      }
+      durPoints.push(`${x},${Math.max(2, Math.min(34, dy))}`);
+    }
+
+    return {
+      rate: {
+        label: 'Rate (Throughput)',
+        current: `${rateOutage.toLocaleString()} ${rateUnit}`,
+        baseline: `${rateBaseline.toLocaleString()} ${rateUnit}`,
+        delta: rateDelta,
+        status: rateStatus,
+        points: ratePoints.join(' '),
+        stroke: '#38BDF8',
+        gradientId: 'spark-grad-rate'
+      },
+      errors: {
+        label: 'Errors (HTTP 5xx / Failures)',
+        current: `${errorOutage}%`,
+        baseline: `${errorBaseline}%`,
+        delta: errorDelta,
+        status: errorStatus,
+        points: errorPoints.join(' '),
+        stroke: '#EF4444',
+        gradientId: 'spark-grad-err'
+      },
+      duration: {
+        label: 'Duration (P99 Latency)',
+        current: `${durOutage.toLocaleString()} ${durUnit}`,
+        baseline: `${durBaseline} ${durUnit}`,
+        delta: durDelta,
+        status: durStatus,
+        points: durPoints.join(' '),
+        stroke: '#A855F7',
+        gradientId: 'spark-grad-dur'
+      }
+    };
+  }
+
+  function renderRedSparklines(incident) {
+    const container = document.getElementById('inc-red-sparklines');
+    if (!container) return;
+    const metrics = generateRedMetrics(incident);
+
+    container.innerHTML = `
+      <div class="red-sparkline-card">
+        <div class="red-card-header">
+          <span class="red-card-label">${metrics.rate.label}</span>
+          <span class="red-card-val ${metrics.rate.status}">${metrics.rate.current}</span>
+        </div>
+        <svg viewBox="0 0 160 36" class="red-sparkline-svg" aria-hidden="true">
+          <defs>
+            <linearGradient id="${metrics.rate.gradientId}" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="${metrics.rate.stroke}" stop-opacity="0.35"/>
+              <stop offset="100%" stop-color="${metrics.rate.stroke}" stop-opacity="0"/>
+            </linearGradient>
+          </defs>
+          <line x1="0" y1="18" x2="160" y2="18" class="red-sparkline-baseline" />
+          <polygon points="0,36 ${metrics.rate.points} 160,36" fill="url(#${metrics.rate.gradientId})" />
+          <polyline points="${metrics.rate.points}" fill="none" stroke="${metrics.rate.stroke}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+        <div class="red-card-sub">
+          <span>Baseline: ${metrics.rate.baseline}</span>
+          <span style="color:#f87171; font-weight:600;">${metrics.rate.delta}</span>
+        </div>
+      </div>
+
+      <div class="red-sparkline-card">
+        <div class="red-card-header">
+          <span class="red-card-label">${metrics.errors.label}</span>
+          <span class="red-card-val ${metrics.errors.status}">${metrics.errors.current}</span>
+        </div>
+        <svg viewBox="0 0 160 36" class="red-sparkline-svg" aria-hidden="true">
+          <defs>
+            <linearGradient id="${metrics.errors.gradientId}" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="${metrics.errors.stroke}" stop-opacity="0.35"/>
+              <stop offset="100%" stop-color="${metrics.errors.stroke}" stop-opacity="0"/>
+            </linearGradient>
+          </defs>
+          <line x1="0" y1="18" x2="160" y2="18" class="red-sparkline-baseline" />
+          <polygon points="0,36 ${metrics.errors.points} 160,36" fill="url(#${metrics.errors.gradientId})" />
+          <polyline points="${metrics.errors.points}" fill="none" stroke="${metrics.errors.stroke}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+        <div class="red-card-sub">
+          <span>Baseline: ${metrics.errors.baseline}</span>
+          <span style="color:#f87171; font-weight:600;">${metrics.errors.delta}</span>
+        </div>
+      </div>
+
+      <div class="red-sparkline-card">
+        <div class="red-card-header">
+          <span class="red-card-label">${metrics.duration.label}</span>
+          <span class="red-card-val ${metrics.duration.status}">${metrics.duration.current}</span>
+        </div>
+        <svg viewBox="0 0 160 36" class="red-sparkline-svg" aria-hidden="true">
+          <defs>
+            <linearGradient id="${metrics.duration.gradientId}" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="${metrics.duration.stroke}" stop-opacity="0.35"/>
+              <stop offset="100%" stop-color="${metrics.duration.stroke}" stop-opacity="0"/>
+            </linearGradient>
+          </defs>
+          <line x1="0" y1="18" x2="160" y2="18" class="red-sparkline-baseline" />
+          <polygon points="0,36 ${metrics.duration.points} 160,36" fill="url(#${metrics.duration.gradientId})" />
+          <polyline points="${metrics.duration.points}" fill="none" stroke="${metrics.duration.stroke}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+        <div class="red-card-sub">
+          <span>Baseline: ${metrics.duration.baseline}</span>
+          <span style="color:#f87171; font-weight:600;">${metrics.duration.delta}</span>
+        </div>
+      </div>
+    `;
+  }
+
+  function renderIncidentCategoryBar() {
+    const bar = document.getElementById('incidents-category-bar');
+    if (!bar || !state.overview) return;
+    const incidents = state.overview.incidents || [];
+
+    bar.innerHTML = INCIDENT_CATEGORY_CONFIG.map((cat) => {
+      const count = cat.id === 'all'
+        ? incidents.length
+        : incidents.filter((i) => i.category === cat.id).length;
+      if (cat.id !== 'all' && count === 0) return '';
+      const isActive = (state.activeIncidentCategory || 'all') === cat.id;
+      return `
+        <button class="inc-cat-btn ${isActive ? 'active' : ''}" data-cat-id="${cat.id}" type="button">
+          <span>${cat.icon}</span>
+          <span>${cat.name}</span>
+          <span class="inc-cat-count">${count}</span>
+        </button>
+      `;
+    }).join('');
+
+    bar.querySelectorAll('.inc-cat-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        state.activeIncidentCategory = btn.dataset.catId;
+        renderIncidentCategoryBar();
+        renderIncidents();
+      });
+    });
+  }
+
   function renderIncidents() {
     const grid = document.getElementById('incidents-grid');
     if (!grid || !state.overview) return;
+
+    // Toggle Standby Banner vs Active Incident HUD
+    const standbyBanner = document.getElementById('incident-standby-banner');
+    const activeBanner = document.getElementById('active-incident-banner');
+    const fleetStatusPill = document.getElementById('inc-fleet-status-pill');
+
+    if (state.activeIncident) {
+      if (standbyBanner) standbyBanner.style.display = 'none';
+      if (activeBanner) activeBanner.style.display = 'block';
+      if (fleetStatusPill) {
+        fleetStatusPill.className = 'badge sev1';
+        fleetStatusPill.innerHTML = `
+          <span class="pulse-firing" style="margin-right:6px;"></span>
+          1 Active Outage (${(state.activeIncident.severity || 'SEV-1').split(' ')[0]})
+        `;
+      }
+    } else {
+      if (standbyBanner) standbyBanner.style.display = 'block';
+      if (activeBanner) activeBanner.style.display = 'none';
+      if (fleetStatusPill) {
+        fleetStatusPill.className = 'badge badge-emerald';
+        fleetStatusPill.innerHTML = `
+          <span class="status-dot-emerald" style="width:7px; height:7px; border-radius:50%; background:#10B981; display:inline-block; margin-right:6px; box-shadow:0 0 8px #10B981;"></span>
+          Fleet Normal
+        `;
+      }
+    }
+
+    renderIncidentCategoryBar();
+
     const runs = (state.overview.learner && state.overview.learner.incidents) || [];
     const resolvedSet = new Set(runs.filter((r) => r.status === 'resolved').map((r) => r.incident_id));
+    const allIncidents = state.overview.incidents || [];
+    const filterCat = state.activeIncidentCategory || 'all';
+    const filtered = filterCat === 'all'
+      ? allIncidents
+      : allIncidents.filter((inc) => inc.category === filterCat);
 
-    grid.innerHTML = (state.overview.incidents || [])
-      .map((inc) => {
-        const isResolved = resolvedSet.has(inc.id);
-        return `
-          <div class="card">
-            <div class="card-header">
-              <div>
-                <span class="badge sev1">${inc.severity}</span>
-                <h3 class="card-title" style="margin-top:0.35rem;">${inc.title}</h3>
-              </div>
-              ${isResolved ? '<span class="badge completed">Resolved</span>' : `<span class="badge">+${inc.xpReward} XP</span>`}
+    grid.innerHTML = filtered.map((inc) => {
+      const isResolved = resolvedSet.has(inc.id);
+      const isCurrentlyActive = state.activeIncident && state.activeIncident.id === inc.id;
+      const isSev1 = (inc.severity || '').includes('SEV-1');
+      const categoryLabel = (INCIDENT_CATEGORY_CONFIG.find((c) => c.id === inc.category) || {}).name || inc.category || 'Outage';
+
+      return `
+        <div class="incident-card card ${isCurrentlyActive ? 'is-active' : ''}" data-incident-id="${inc.id}">
+          <div class="inc-card-header">
+            <div class="inc-card-badges">
+              <span class="badge ${isSev1 ? 'sev1' : 'badge-amber'}">${inc.severity}</span>
+              <span class="badge" style="background:rgba(255,255,255,0.06); font-size:0.7rem;">${categoryLabel}</span>
             </div>
-            <p style="font-size:0.82rem; color:#fca5a5;">${inc.alertSummary}</p>
-            <p style="font-size:0.8rem; color:var(--text-secondary);">${inc.customerImpact}</p>
-            <div style="margin-top:auto; padding-top:0.5rem;">
-              <button class="btn btn-danger start-incident-btn" data-inc-id="${inc.id}" type="button">Inject Outage &amp; Command Incident</button>
-            </div>
+            ${isResolved
+              ? '<span class="badge completed" title="Verified Resolved">Resolved ✓</span>'
+              : `<span class="badge" style="color:var(--accent-cyan); border-color:rgba(56,189,248,0.3);">+${inc.xpReward} XP</span>`
+            }
           </div>
-        `;
-      })
-      .join('');
+          <h3 class="inc-card-title">${inc.title}</h3>
+          <p class="inc-card-alert">${inc.alertSummary}</p>
+          <p class="inc-card-impact">${inc.customerImpact}</p>
+          <div class="inc-card-meta">
+            <span>⏱️ ~${inc.estimatedMttrMinutes || 10}m Target MTTR</span>
+            <span>🏷️ ${inc.domainId || 'sre'}</span>
+          </div>
+          <div class="inc-card-footer">
+            <button class="btn ${isCurrentlyActive ? 'btn-warning' : 'btn-danger'} start-incident-btn" data-inc-id="${inc.id}" type="button">
+              ${isCurrentlyActive ? 'Active Incident (Command HUD)' : 'Inject Outage &amp; Command Incident'}
+            </button>
+          </div>
+        </div>
+      `;
+    }).join('');
 
     grid.querySelectorAll('.start-incident-btn').forEach((btn) => {
       btn.addEventListener('click', () => startIncident(btn.dataset.incId));
@@ -2226,18 +2593,67 @@
   async function startIncident(incidentId) {
     const data = await apiCall(`/api/incidents/${incidentId}/start`, { method: 'POST' });
     state.activeIncident = data.incident;
+
+    // Start live MTTR stopwatch
+    startMttrTimer(Date.now());
+
+    // Switch HUD visibility
+    const standbyBanner = document.getElementById('incident-standby-banner');
     const banner = document.getElementById('active-incident-banner');
-    banner.style.display = 'flex';
-    document.getElementById('inc-active-sev').textContent = data.incident.severity;
-    document.getElementById('inc-active-title').textContent = data.incident.title;
-    document.getElementById('inc-active-alert').textContent = data.incident.alertSummary;
-    document.getElementById('inc-active-impact').textContent = `Impact: ${data.incident.customerImpact}`;
-    document.getElementById('inc-active-hints').innerHTML =
-      '<strong>Diagnostic Clues:</strong><br/>' +
-      data.incident.diagnosticHints.map((h) => `• ${h}`).join('<br/>');
-    document.getElementById('inc-verification-output').innerHTML = '';
+    if (standbyBanner) standbyBanner.style.display = 'none';
+    if (banner) banner.style.display = 'block';
+
+    const sevEl = document.getElementById('inc-active-sev');
+    const isSev1 = (data.incident.severity || '').includes('SEV-1');
+    if (sevEl) {
+      sevEl.textContent = data.incident.severity;
+      sevEl.className = `badge ${isSev1 ? 'sev1' : 'badge-amber'}`;
+    }
+
+    const titleEl = document.getElementById('inc-active-title');
+    if (titleEl) titleEl.textContent = data.incident.title;
+
+    const alertEl = document.getElementById('inc-active-alert');
+    if (alertEl) alertEl.textContent = data.incident.alertSummary;
+
+    const impactEl = document.getElementById('inc-active-impact');
+    if (impactEl) impactEl.textContent = `Customer Impact: ${data.incident.customerImpact}`;
+
+    const hintsEl = document.getElementById('inc-active-hints');
+    if (hintsEl) {
+      const symptoms = data.incident.symptoms || [];
+      const clues = data.incident.diagnosticHints || [];
+      hintsEl.innerHTML = `
+        <div style="margin-bottom:0.6rem;">
+          <strong style="color:var(--text-primary); font-size:0.82rem;">Observed Outage Symptoms:</strong>
+          <ul style="margin:0.25rem 0 0.5rem 1.25rem; padding:0;">
+            ${symptoms.map((s) => `<li>${s}</li>`).join('')}
+          </ul>
+        </div>
+        <div>
+          <strong style="color:var(--text-primary); font-size:0.82rem;">SRE Triage Hints &amp; Recommended Investigation:</strong>
+          <ul style="margin:0.25rem 0 0.25rem 1.25rem; padding:0;">
+            ${clues.map((c) => `<li>${c}</li>`).join('')}
+          </ul>
+        </div>
+      `;
+    }
+
+    // Render Simulated Prometheus RED Sparklines
+    renderRedSparklines(data.incident);
+
+    // Clear verification output
+    const verOut = document.getElementById('inc-verification-output');
+    if (verOut) verOut.innerHTML = '';
+
+    // Topology and terminal
     renderClusterTopology(data.clusterState);
     appendTerminalLine(`=== [ALERT] INJECTED PRODUCTION INCIDENT: ${data.incident.title} ===`);
+    appendTerminalLine(`[PAGERDUTY] ${data.incident.alertSummary}`);
+    appendTerminalLine(`[WAR ROOM] Live MTTR Stopwatch initiated. Diagnose with 'kubectl' in workbench.`);
+
+    // Refresh incidents catalog to reflect active state
+    renderIncidents();
   }
 
   const NODE_TYPE_ICONS = {
@@ -3575,40 +3991,87 @@
     });
 
     // Incident actions
-    document.getElementById('btn-inc-open-workbench').addEventListener('click', () => {
-      switchView('view-workbench');
-    });
-    document.getElementById('btn-inc-verify').addEventListener('click', async () => {
-      if (!state.activeIncident) return;
-      const res = await apiCall(`/api/incidents/${state.activeIncident.id}/verify`, { method: 'POST' });
-      const outEl = document.getElementById('inc-verification-output');
-      outEl.innerHTML = `
-        <div class="validation-item ${res.passed ? 'pass' : 'fail'}" style="margin-top:0.5rem;">
-          <strong>${res.passed ? 'INCIDENT RESOLVED!' : 'Outage Still Active'}</strong> (${res.passedCount}/${res.totalCount} recovery checks passing)
-        </div>
-      `;
-      if (res.learner) {
-        state.overview.learner = res.learner;
-        updateHeaderTelemetry();
-        renderIncidents();
-      }
-    });
-    document.getElementById('btn-inc-solve').addEventListener('click', async () => {
-      if (!state.activeIncident) return;
-      const res = await apiCall(`/api/incidents/${state.activeIncident.id}/solve`, { method: 'POST' });
-      renderClusterTopology(res.clusterState);
-      const outEl = document.getElementById('inc-verification-output');
-      outEl.innerHTML = `
-        <div class="validation-item pass" style="margin-top:0.5rem;">
-          <strong>INCIDENT REMEDIATED (100%):</strong> Executed <code>${(res.commandOutputs || []).map((c) => c.command).join(' && ')}</code>
-        </div>
-      `;
-      if (res.learner) {
-        state.overview.learner = res.learner;
-        updateHeaderTelemetry();
-        renderIncidents();
-      }
-    });
+    const btnOpenWb = document.getElementById('btn-inc-open-workbench');
+    if (btnOpenWb) {
+      btnOpenWb.addEventListener('click', () => {
+        switchView('view-workbench');
+      });
+    }
+
+    const btnVerifyInc = document.getElementById('btn-inc-verify');
+    if (btnVerifyInc) {
+      btnVerifyInc.addEventListener('click', async () => {
+        if (!state.activeIncident) return;
+        const res = await apiCall(`/api/incidents/${state.activeIncident.id}/verify`, { method: 'POST' });
+        const outEl = document.getElementById('inc-verification-output');
+        if (outEl) {
+          if (res.passed) {
+            const finalMttr = stopMttrTimer();
+            outEl.innerHTML = `
+              <div class="validation-item pass" style="margin-top:0.75rem; padding:1rem; border-radius:8px; background:rgba(16,185,129,0.12); border:1px solid rgba(16,185,129,0.4);">
+                <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem;">
+                  <strong style="color:#34d399; font-size:1.05rem;">🎉 PRODUCTION INCIDENT RESOLVED &amp; VERIFIED!</strong>
+                  <span class="badge completed">MTTR: ${finalMttr}</span>
+                </div>
+                <p style="margin:0.35rem 0 0.25rem 0; font-size:0.84rem; color:var(--text-secondary);">
+                  All ${res.passedCount}/${res.totalCount} recovery verification checks passed with zero downtime regressions.
+                  Awarded <strong>+${state.activeIncident.xpReward} XP</strong> to your SRE Reliability profile.
+                </p>
+              </div>
+            `;
+            appendTerminalLine(`=== [RECOVERY VERIFIED] Incident ${state.activeIncident.id} resolved in ${finalMttr}! (+${state.activeIncident.xpReward} XP) ===`);
+          } else {
+            outEl.innerHTML = `
+              <div class="validation-item fail" style="margin-top:0.75rem; padding:1rem; border-radius:8px; background:rgba(239,68,68,0.12); border:1px solid rgba(239,68,68,0.4);">
+                <strong style="color:#f87171; font-size:0.95rem;">⚠️ OUTAGE STILL ACTIVE: ${res.passedCount}/${res.totalCount} recovery checks passing</strong>
+                <p style="margin:0.35rem 0 0 0; font-size:0.82rem; color:var(--text-secondary);">
+                  Cluster state still exhibits production failure conditions. Review diagnostic clues and runbook hints above.
+                </p>
+              </div>
+            `;
+            appendTerminalLine(`=== [VERIFY FAILED] Outage still active: ${res.passedCount}/${res.totalCount} checks passing ===`);
+          }
+        }
+        if (res.learner) {
+          state.overview.learner = res.learner;
+          updateHeaderTelemetry();
+          renderIncidents();
+        }
+      });
+    }
+
+    const btnSolveInc = document.getElementById('btn-inc-solve');
+    if (btnSolveInc) {
+      btnSolveInc.addEventListener('click', async () => {
+        if (!state.activeIncident) return;
+        const res = await apiCall(`/api/incidents/${state.activeIncident.id}/solve`, { method: 'POST' });
+        const finalMttr = stopMttrTimer();
+        renderClusterTopology(res.clusterState);
+        const outEl = document.getElementById('inc-verification-output');
+        if (outEl) {
+          outEl.innerHTML = `
+            <div class="validation-item pass" style="margin-top:0.75rem; padding:1rem; border-radius:8px; background:rgba(16,185,129,0.12); border:1px solid rgba(16,185,129,0.4);">
+              <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem;">
+                <strong style="color:#34d399; font-size:1.05rem;">🔧 INCIDENT REMEDIATED &amp; RESTORED (100%):</strong>
+                <span class="badge completed">MTTR: ${finalMttr}</span>
+              </div>
+              <p style="margin:0.35rem 0 0.5rem 0; font-size:0.84rem; color:var(--text-secondary);">
+                Automated SRE walkthrough executed official runbook commands:
+              </p>
+              <div style="background:rgba(0,0,0,0.5); padding:0.5rem 0.75rem; border-radius:6px; font-family:var(--font-mono, monospace); font-size:0.8rem; color:var(--accent-cyan);">
+                ${(res.commandOutputs || []).map((c) => `<div>$ ${c.command}</div>`).join('')}
+              </div>
+            </div>
+          `;
+        }
+        appendTerminalLine(`=== [AUTOMATED REMEDIATION] Executed incident solution runbook. Fleet restored. ===`);
+        if (res.learner) {
+          state.overview.learner = res.learner;
+          updateHeaderTelemetry();
+          renderIncidents();
+        }
+      });
+    }
 
     // Architecture Designer actions
     document.getElementById('btn-arch-deploy').addEventListener('click', async () => {
@@ -3822,6 +4285,17 @@
       validateActiveLab,
       solveActiveLab,
       setupResizableWorkbench
+    };
+    window.KubeLabsWarRoom = {
+      formatStopwatchDigits,
+      startMttrTimer,
+      stopMttrTimer,
+      generateRedMetrics,
+      renderRedSparklines,
+      renderIncidentCategoryBar,
+      renderIncidents,
+      startIncident,
+      INCIDENT_CATEGORY_CONFIG
     };
   }
 

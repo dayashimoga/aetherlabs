@@ -285,6 +285,18 @@ class MultiCliDispatcher {
         syncStatus: 'Synced',
         healthStatus: 'Healthy',
         syncPolicy: 'Automated'
+      },
+      {
+        name: 'guestbook',
+        namespace: 'argocd',
+        destNamespace: 'default',
+        project: 'default',
+        repo: 'https://github.com/argoproj/argocd-example-apps.git',
+        targetRevision: 'HEAD',
+        path: 'guestbook',
+        syncStatus: 'Synced',
+        healthStatus: 'Healthy',
+        syncPolicy: 'Manual'
       }
     ];
 
