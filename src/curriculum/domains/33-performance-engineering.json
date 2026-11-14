@@ -1,0 +1,233 @@
+{
+  "id": "performance-engineering",
+  "title": "Performance Engineering, CFS Throttling, KEDA & Karpenter Autoscaling",
+  "category": "Platform Operations & Performance",
+  "trackId": "track-sre",
+  "version": "1.0.0",
+  "difficulty": "Intermediate",
+  "estimatedHours": 8,
+  "summary": "Master cloud-native performance engineering: diagnosing and eliminating Linux CFS (Completely Fair Scheduler) CPU quota throttling, tuning container memory working sets against OOMKilled events, configuring KEDA event-driven autoscaling for queues/streams, and implementing Karpenter just-in-time node bin-packing.",
+  "prerequisites": [
+    "sre-incident-recovery",
+    "kubernetes-core-v4"
+  ],
+  "learningObjectives": [
+    "Diagnose container latency degradation caused by Linux kernel CFS CPU quota throttling and eliminate hard CPU limits on latency-critical tiers.",
+    "Configure KEDA ScaledObjects with custom triggers (Redis/RabbitMQ/Prometheus) to autoscale workloads from zero to thousands of pods.",
+    "Implement Karpenter NodePools with multi-architecture instance types and consolidation policies to minimize cloud computing waste."
+  ],
+  "curriculumModules": [
+    {
+      "id": "mod-perf-01",
+      "title": "Linux CFS CPU Quota Throttling & Memory Working-Set Sizing",
+      "conceptSummary": "Kubernetes sets container CPU limits by translating millicores into Linux CFS bandwidth quotas (cfs_quota_us / cfs_period_us). Even when host nodes have idle CPU, multi-threaded applications (Java, Node.js, Go) can exhaust their 100ms quota within 15ms, causing severe P99 latency spikes (throttling). Modern best practices recommend setting generous CPU requests without hard CPU limits, paired with exact memory limits.",
+      "productionArchitecturePattern": "Remove hard CPU limits on latency-critical microservices; rely on CPU requests for scheduling and HPA v2 targetCPUUtilizationPercentage: 70 to autoscale before host starvation occurs.",
+      "keyCommands": [
+        "promql 'rate(container_cpu_cfs_throttled_periods_total[5m])'",
+        "cat /perf/payment-processor-tuned.yaml",
+        "kubectl apply -f /perf/payment-processor-tuned.yaml"
+      ]
+    },
+    {
+      "id": "mod-perf-02",
+      "title": "KEDA Event-Driven Autoscaling & Karpenter Just-In-Time Provisioning",
+      "conceptSummary": "Standard HPA scales only on CPU/memory metrics with lagging reactivity. KEDA (Kubernetes Event-driven Autoscaling) evaluates external triggers (Kafka lag, Redis queues, RabbitMQ depth, HTTP queue length), scaling from 0 to N replicas instantly. Karpenter bypasses slow cluster-autoscaler ASGs by evaluating unschedulable pod requirements directly, provisioning right-sized EC2 spot/on-demand instances in seconds.",
+      "productionArchitecturePattern": "Combine KEDA for application pod scaling with Karpenter for infrastructure node scaling, achieving sub-minute full-stack elastic expansion under massive flash-sale traffic surges.",
+      "keyCommands": [
+        "kubectl get scaledobjects -A",
+        "kubectl get nodepools",
+        "kubectl apply -f /perf/orders-scaledobject.yaml"
+      ]
+    }
+  ],
+  "labs": [
+    {
+      "id": "lab-perf-01-cfs-throttling",
+      "title": "Eliminating CFS CPU Quota Throttling on Latency-Sensitive Tiers",
+      "difficulty": "Intermediate",
+      "durationMinutes": 20,
+      "xpReward": 150,
+      "scenario": "Remediate severe P99 latency spikes caused by Linux kernel CFS quota throttling: inspect the throttled Deployment in namespace production, author an optimized manifest in /perf/payment-processor-tuned.yaml setting container CPU requests to 500m, memory requests to 256Mi, memory limits to 512Mi, and completely omitting hard CPU limits to allow burstable compute. Apply to namespace production.",
+      "productionContext": "Uncapping CPU limits on latency-sensitive APIs stops kernel throttling threads from pausing during bursty requests, instantly dropping P99 latency by up to 80%.",
+      "prerequisites": [
+        "lab-sre-01-slo-budget-governance"
+      ],
+      "objectives": [
+        "Create namespace production if not already present.",
+        "Author tuned Deployment manifest in /perf/payment-processor-tuned.yaml.",
+        "Apply Deployment payment-processor in namespace production.",
+        "Verify CPU request is 500m and CPU limit is omitted."
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: payment-processor\n  namespace: production\n  labels:\n    app: payment-processor\nspec:\n  replicas: 2\n  selector:\n    matchLabels:\n      app: payment-processor\n  template:\n    metadata:\n      labels:\n        app: payment-processor\n    spec:\n      containers:\n        - name: processor\n          image: nginx:1.27-alpine\n          resources:\n            requests:\n              cpu: \"500m\"\n              memory: \"256Mi\"\n            limits:\n              memory: \"512Mi\"\n",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Create production namespace",
+          "instruction": "Create namespace production if not present.",
+          "commandHint": "kubectl create namespace production"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Author and apply tuned Deployment",
+          "instruction": "Save tuned manifest without CPU limits and apply to production namespace.",
+          "commandHint": "cat << 'EOF' > /perf/payment-processor-tuned.yaml\n...\nEOF\nkubectl apply -f /perf/payment-processor-tuned.yaml"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "deploy-payment-processor-exists",
+          "description": "Deployment payment-processor exists in namespace production",
+          "type": "resource_exists",
+          "kind": "Deployment",
+          "namespace": "production",
+          "name": "payment-processor",
+          "remediation": "Deploy payment-processor in namespace production"
+        },
+        {
+          "id": "deploy-cpu-request-500m",
+          "description": "Container CPU request is 500m",
+          "type": "resource_field_equals",
+          "kind": "Deployment",
+          "namespace": "production",
+          "name": "payment-processor",
+          "fieldPath": "spec.template.spec.containers[0].resources.requests.cpu",
+          "expectedValue": "500m",
+          "remediation": "Set container resources.requests.cpu: '500m'"
+        },
+        {
+          "id": "deploy-mem-limit-512mi",
+          "description": "Container memory limit is 512Mi",
+          "type": "resource_field_equals",
+          "kind": "Deployment",
+          "namespace": "production",
+          "name": "payment-processor",
+          "fieldPath": "spec.template.spec.containers[0].resources.limits.memory",
+          "expectedValue": "512Mi",
+          "remediation": "Set container resources.limits.memory: '512Mi'"
+        }
+      ],
+      "solutionCommands": [
+        "mkdir -p /perf",
+        "kubectl create namespace production",
+        "cat << 'EOF' > /perf/payment-processor-tuned.yaml\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: payment-processor\n  namespace: production\n  labels:\n    app: payment-processor\nspec:\n  replicas: 2\n  selector:\n    matchLabels:\n      app: payment-processor\n  template:\n    metadata:\n      labels:\n        app: payment-processor\n    spec:\n      containers:\n        - name: processor\n          image: nginx:1.27-alpine\n          resources:\n            requests:\n              cpu: \"500m\"\n              memory: \"256Mi\"\n            limits:\n              memory: \"512Mi\"\nEOF",
+        "kubectl apply -f /perf/payment-processor-tuned.yaml"
+      ],
+      "troubleshootingGuide": [
+        {
+          "problem": "Deployment missing or CPU limit still present.",
+          "cause": "Hard CPU limits restrict burst capacity and trigger kernel throttling.",
+          "solution": "Remove limits.cpu entirely from /perf/payment-processor-tuned.yaml and re-apply."
+        }
+      ]
+    },
+    {
+      "id": "lab-perf-02-keda-autoscaling",
+      "title": "Configuring KEDA Event-Driven Queue Autoscaling",
+      "difficulty": "Intermediate",
+      "durationMinutes": 20,
+      "xpReward": 150,
+      "scenario": "Configure event-driven elastic autoscaling for asynchronous orders: author a KEDA ScaledObject manifest in /perf/orders-scaledobject.yaml targeting Deployment payment-processor in namespace production with minReplicaCount: 1, maxReplicaCount: 10, cooldownPeriod: 30, and a queueLength trigger targeting queue orders-queue with targetQueueLength: 5. Apply to namespace production.",
+      "productionContext": "KEDA enables scaling workloads based on external queue length before CPU saturation occurs, preventing message ingestion backlogs.",
+      "prerequisites": [
+        "lab-perf-01-cfs-throttling"
+      ],
+      "objectives": [
+        "Author KEDA ScaledObject in /perf/orders-scaledobject.yaml.",
+        "Apply ScaledObject orders-scaledobject in namespace production.",
+        "Verify minReplicaCount is 1 and maxReplicaCount is 10."
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "apiVersion: keda.sh/v1alpha1\nkind: ScaledObject\nmetadata:\n  name: orders-scaledobject\n  namespace: production\nspec:\n  scaleTargetRef:\n    name: payment-processor\n  minReplicaCount: 1\n  maxReplicaCount: 10\n  cooldownPeriod: 30\n  triggers:\n    - type: rabbitmq\n      metadata:\n        queueName: orders-queue\n        queueLength: \"5\"\n",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Author ScaledObject YAML manifest",
+          "instruction": "Save the ScaledObject definition to /perf/orders-scaledobject.yaml.",
+          "commandHint": "cat << 'EOF' > /perf/orders-scaledobject.yaml\n...\nEOF"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Apply ScaledObject to production namespace",
+          "instruction": "Apply the manifest to namespace production.",
+          "commandHint": "kubectl apply -f /perf/orders-scaledobject.yaml"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "scaledobject-orders-exists",
+          "description": "ScaledObject orders-scaledobject exists in namespace production",
+          "type": "resource_exists",
+          "kind": "ScaledObject",
+          "namespace": "production",
+          "name": "orders-scaledobject",
+          "remediation": "Apply ScaledObject orders-scaledobject in namespace production"
+        },
+        {
+          "id": "scaledobject-min-replicas",
+          "description": "ScaledObject minReplicaCount is 1",
+          "type": "resource_field_equals",
+          "kind": "ScaledObject",
+          "namespace": "production",
+          "name": "orders-scaledobject",
+          "fieldPath": "spec.minReplicaCount",
+          "expectedValue": 1,
+          "remediation": "Set spec.minReplicaCount: 1 on ScaledObject orders-scaledobject"
+        },
+        {
+          "id": "scaledobject-max-replicas",
+          "description": "ScaledObject maxReplicaCount is 10",
+          "type": "resource_field_equals",
+          "kind": "ScaledObject",
+          "namespace": "production",
+          "name": "orders-scaledobject",
+          "fieldPath": "spec.maxReplicaCount",
+          "expectedValue": 10,
+          "remediation": "Set spec.maxReplicaCount: 10 on ScaledObject orders-scaledobject"
+        }
+      ],
+      "solutionCommands": [
+        "mkdir -p /perf",
+        "cat << 'EOF' > /perf/orders-scaledobject.yaml\napiVersion: keda.sh/v1alpha1\nkind: ScaledObject\nmetadata:\n  name: orders-scaledobject\n  namespace: production\nspec:\n  scaleTargetRef:\n    name: payment-processor\n  minReplicaCount: 1\n  maxReplicaCount: 10\n  cooldownPeriod: 30\n  triggers:\n    - type: rabbitmq\n      metadata:\n        queueName: orders-queue\n        queueLength: \"5\"\nEOF",
+        "kubectl apply -f /perf/orders-scaledobject.yaml"
+      ],
+      "troubleshootingGuide": [
+        {
+          "problem": "ScaledObject missing or scaleTargetRef incorrect.",
+          "cause": "ScaledObject must target Deployment payment-processor in production namespace.",
+          "solution": "Verify spec.scaleTargetRef.name is payment-processor and apply to production namespace."
+        }
+      ]
+    }
+  ],
+  "assessmentQuestions": [
+    {
+      "id": "q-perf-01",
+      "question": "What causes container CPU throttling when running multi-threaded workloads with CPU limits in Kubernetes?",
+      "options": [
+        "The Linux kernel CPU governor downclocks the physical processor.",
+        "Kubernetes translates CPU limits into Linux CFS bandwidth quotas (100ms period); when multiple threads consume the quota rapidly in a burst, the kernel suspends all container threads until the next period begins, causing extreme P99 latency spikes.",
+        "Memory leaks trigger garbage collection pauses.",
+        "The network card buffers packets excessively."
+      ],
+      "correctIndex": 1,
+      "explanation": "Linux CFS bandwidth management enforces quotas over 100ms periods. If a container has a 2-CPU limit and 8 threads burst, they can consume the 200ms quota in 25ms, causing threads to be throttled for the remaining 75ms of that period."
+    },
+    {
+      "id": "q-perf-02",
+      "question": "What is the primary advantage of KEDA over traditional Kubernetes Horizontal Pod Autoscaler (HPA)?",
+      "options": [
+        "KEDA replaces all Linux containers with WebAssembly modules.",
+        "KEDA can scale workloads directly from 0 to 1 and back to 0, and scales reactively or proactively using external event metrics (Kafka consumer lag, Redis lists, RabbitMQ queue depth, Azure Service Bus) rather than relying on delayed in-cluster CPU/memory resource usage.",
+        "KEDA eliminates the need for container images.",
+        "KEDA requires no Kubernetes controllers to run."
+      ],
+      "correctIndex": 1,
+      "explanation": "KEDA acts as a metrics adapter for HPA, allowing autoscaling based on real-time external queue depths and event streams with scale-to-zero capabilities, whereas native HPA cannot scale to zero and reacts late to CPU/memory increases."
+    }
+  ]
+}

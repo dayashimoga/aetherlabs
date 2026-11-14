@@ -1,0 +1,216 @@
+{
+  "id": "production-operations",
+  "title": "Production Operations, Velero Disaster Recovery & Cluster Maintenance",
+  "category": "Platform Operations & Performance",
+  "trackId": "track-sre",
+  "version": "1.0.0",
+  "difficulty": "Intermediate",
+  "estimatedHours": 8,
+  "summary": "Master enterprise Kubernetes production operations: declarative disaster recovery and snapshot backups with Velero, restoring persistent state across namespaces, managing zero-downtime worker node maintenance (cordon, drain, uncordon), and validating cluster health with velero CLI.",
+  "prerequisites": [
+    "performance-engineering",
+    "kubernetes-core-v4"
+  ],
+  "learningObjectives": [
+    "Configure automated disaster recovery and namespace snapshots using Velero backup and restore workflows.",
+    "Execute safe zero-downtime worker node maintenance using kubectl cordon, drain, and uncordon commands.",
+    "Verify backup integrity, storage locations, and restore phases using velero backup and velero restore CLIs."
+  ],
+  "curriculumModules": [
+    {
+      "id": "mod-ops-01",
+      "title": "Disaster Recovery & Backup Automation with Velero",
+      "conceptSummary": "Velero protects Kubernetes applications and persistent volumes by streaming cluster metadata (etcd resources) and CSI volume snapshots to external object storage (S3, GCS, MinIO). Scheduled backups (e.g. daily-production) combined with point-in-time restores enable instant cross-cluster migration and ransomware disaster recovery.",
+      "productionArchitecturePattern": "Enforce daily automated Velero backups with a 30-day retention period, pairing metadata backups with CSI volume snapshots to achieve RPO < 24 hours and RTO < 1 hour.",
+      "keyCommands": [
+        "velero backup create production-backup --include-namespaces production",
+        "velero backup get",
+        "velero restore create --from-backup production-backup"
+      ]
+    },
+    {
+      "id": "mod-ops-02",
+      "title": "Node Maintenance Lifecycles: Cordon, Drain & Uncordon",
+      "conceptSummary": "Routine cluster maintenance (kernel upgrades, AMI cycling, security patching) requires evacuating pods without dropping customer connections. 'kubectl cordon' marks the node Unschedulable. 'kubectl drain --ignore-daemonsets' safely evicts workloads while respecting PodDisruptionBudgets. Once updated, 'kubectl uncordon' restores the node to the active scheduler pool.",
+      "productionArchitecturePattern": "Automate rolling node drains with maxUnavailable: 1 PDBs to ensure continuous zero-downtime workload availability throughout OS security patch cycles.",
+      "keyCommands": [
+        "kubectl cordon kubelabs-worker-01",
+        "kubectl drain kubelabs-worker-01 --ignore-daemonsets --delete-emptydir-data",
+        "kubectl uncordon kubelabs-worker-01"
+      ]
+    }
+  ],
+  "labs": [
+    {
+      "id": "lab-ops-01-velero-backup-restore",
+      "title": "Creating Automated Velero Backups and Restoring Workloads",
+      "difficulty": "Intermediate",
+      "durationMinutes": 20,
+      "xpReward": 150,
+      "scenario": "Execute enterprise disaster recovery: create a Velero backup named prod-backup targeting namespace production via velero backup create prod-backup, verify its status with velero backup get, and execute a test restore via velero restore create --from-backup prod-backup.",
+      "productionContext": "Practicing end-to-end backup and restore operations ensures that platform teams can recover critical revenue-generating state in minutes during data center outages.",
+      "prerequisites": [
+        "lab-perf-01-cfs-throttling"
+      ],
+      "objectives": [
+        "Create Velero backup prod-backup.",
+        "Execute velero backup get to verify status.",
+        "Create Velero restore from backup prod-backup."
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "# Velero Disaster Recovery Automation\n# Run: velero backup create prod-backup && velero restore create --from-backup prod-backup\n",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Create Velero backup",
+          "instruction": "Execute velero backup create prod-backup.",
+          "commandHint": "velero backup create prod-backup"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Verify backup creation",
+          "instruction": "Execute velero backup get to verify status.",
+          "commandHint": "velero backup get"
+        },
+        {
+          "stepNumber": 3,
+          "title": "Execute Velero restore",
+          "instruction": "Execute velero restore create --from-backup prod-backup.",
+          "commandHint": "velero restore create --from-backup prod-backup"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "velero-backup-created",
+          "description": "velero backup create prod-backup executed",
+          "type": "command_executed",
+          "commandSubstring": "velero backup create prod-backup",
+          "remediation": "Execute velero backup create prod-backup"
+        },
+        {
+          "id": "velero-restore-created",
+          "description": "velero restore create --from-backup prod-backup executed",
+          "type": "command_executed",
+          "commandSubstring": "velero restore create --from-backup prod-backup",
+          "remediation": "Execute velero restore create --from-backup prod-backup"
+        }
+      ],
+      "solutionCommands": [
+        "velero backup create prod-backup",
+        "velero backup get",
+        "velero restore create --from-backup prod-backup"
+      ],
+      "troubleshootingGuide": [
+        {
+          "problem": "velero command not found or backup failed.",
+          "cause": "Commands were not executed or backup name differed from prod-backup.",
+          "solution": "Execute velero backup create prod-backup followed by velero restore create --from-backup prod-backup."
+        }
+      ]
+    },
+    {
+      "id": "lab-ops-02-node-drain-maintenance",
+      "title": "Zero-Downtime Worker Node Maintenance: Cordon, Drain & Uncordon",
+      "difficulty": "Intermediate",
+      "durationMinutes": 20,
+      "xpReward": 150,
+      "scenario": "Perform safe kernel maintenance on worker node kubelabs-worker-01: cordon the node to prevent new pod scheduling, drain the node using kubectl drain kubelabs-worker-01 --ignore-daemonsets, simulate the OS upgrade, and uncordon the node to return it to the active pool.",
+      "productionContext": "Disciplined cordon and drain procedures prevent packet drop and eviction failures during automated cloud instance replacement.",
+      "prerequisites": [
+        "lab-ops-01-velero-backup-restore"
+      ],
+      "objectives": [
+        "Cordon worker node kubelabs-worker-01.",
+        "Drain worker node kubelabs-worker-01.",
+        "Uncordon worker node kubelabs-worker-01."
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "# Zero-Downtime Node Maintenance\n# Target: kubelabs-worker-01\n",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Cordon worker node",
+          "instruction": "Execute kubectl cordon kubelabs-worker-01.",
+          "commandHint": "kubectl cordon kubelabs-worker-01"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Drain workloads from node",
+          "instruction": "Execute kubectl drain kubelabs-worker-01 --ignore-daemonsets.",
+          "commandHint": "kubectl drain kubelabs-worker-01 --ignore-daemonsets"
+        },
+        {
+          "stepNumber": 3,
+          "title": "Uncordon node after maintenance",
+          "instruction": "Execute kubectl uncordon kubelabs-worker-01.",
+          "commandHint": "kubectl uncordon kubelabs-worker-01"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "node-cordoned",
+          "description": "kubectl cordon kubelabs-worker-01 executed",
+          "type": "command_executed",
+          "commandSubstring": "kubectl cordon kubelabs-worker-01",
+          "remediation": "Execute kubectl cordon kubelabs-worker-01"
+        },
+        {
+          "id": "node-drained",
+          "description": "kubectl drain kubelabs-worker-01 executed",
+          "type": "command_executed",
+          "commandSubstring": "kubectl drain kubelabs-worker-01",
+          "remediation": "Execute kubectl drain kubelabs-worker-01 --ignore-daemonsets"
+        },
+        {
+          "id": "node-uncordoned",
+          "description": "kubectl uncordon kubelabs-worker-01 executed",
+          "type": "command_executed",
+          "commandSubstring": "kubectl uncordon kubelabs-worker-01",
+          "remediation": "Execute kubectl uncordon kubelabs-worker-01"
+        }
+      ],
+      "solutionCommands": [
+        "kubectl cordon kubelabs-worker-01",
+        "kubectl drain kubelabs-worker-01 --ignore-daemonsets",
+        "kubectl uncordon kubelabs-worker-01"
+      ],
+      "troubleshootingGuide": [
+        {
+          "problem": "kubectl drain failed or node remained unschedulable.",
+          "cause": "Drain requires --ignore-daemonsets flag to bypass system daemonset pods.",
+          "solution": "Execute kubectl drain kubelabs-worker-01 --ignore-daemonsets followed by kubectl uncordon kubelabs-worker-01."
+        }
+      ]
+    }
+  ],
+  "assessmentQuestions": [
+    {
+      "id": "q-ops-01",
+      "question": "In Velero architecture, how are persistent volume data and Kubernetes cluster metadata backed up?",
+      "options": [
+        "Velero takes physical hard drive images of every physical node.",
+        "Velero queries the Kubernetes API server for declarative resource YAML manifests and streams them to object storage, while delegating storage volume backup to CSI VolumeSnapshot or restic/Kopia file-level backup.",
+        "Velero only backs up Docker container layers.",
+        "Velero relies exclusively on Git commit history."
+      ],
+      "correctIndex": 1,
+      "explanation": "Velero captures all Kubernetes metadata (Deployments, Secrets, CRDs) via the apiserver, compresses them into a tarball in object storage, and triggers CSI VolumeSnapshots for attached persistent volumes."
+    },
+    {
+      "id": "q-ops-02",
+      "question": "What is the difference between 'kubectl cordon' and 'kubectl drain' during worker node maintenance?",
+      "options": [
+        "Cordon deletes the node while drain restarts it.",
+        "Cordon only marks the node as Unschedulable (preventing new pods from being placed on it without affecting running pods); Drain cordons the node AND safely evicts all existing non-daemonset pods while respecting PodDisruptionBudgets.",
+        "Cordon is for master nodes; Drain is for worker nodes.",
+        "Drain cannot be reversed once executed."
+      ],
+      "correctIndex": 1,
+      "explanation": "kubectl cordon marks node.spec.unschedulable: true, leaving active pods untouched. kubectl drain cordons the node and initiates eviction of all existing pods so the host can be safely rebooted or replaced."
+    }
+  ]
+}
