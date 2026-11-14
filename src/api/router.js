@@ -194,8 +194,10 @@ class ApiRouter {
     const traceId = (req.headers && req.headers['x-trace-id']) || crypto.randomBytes(16).toString('hex');
     const spanId = crypto.randomBytes(8).toString('hex');
     const traceparent = `00-${traceId}-${spanId}-01`;
-    res.setHeader('X-Trace-Id', traceId);
-    res.setHeader('Traceparent', traceparent);
+    if (typeof res.setHeader === 'function') {
+      res.setHeader('X-Trace-Id', traceId);
+      res.setHeader('Traceparent', traceparent);
+    }
 
     try {
       this.requestCount += 1;
@@ -203,23 +205,25 @@ class ApiRouter {
       const pathname = parsedUrl.pathname;
       const method = req.method.toUpperCase();
 
-      res.on('finish', () => {
-        const durationMs = Math.round((performance.now() - startTime) * 100) / 100;
-        this.totalLatencyMs += durationMs;
-        if (res.statusCode >= 500) this.errorCount += 1;
-        this.recentTraces.push({
-          traceId,
-          spanId,
-          method,
-          pathname,
-          statusCode: res.statusCode,
-          durationMs,
-          timestamp: new Date().toISOString()
+      if (typeof res.on === 'function') {
+        res.on('finish', () => {
+          const durationMs = Math.round((performance.now() - startTime) * 100) / 100;
+          this.totalLatencyMs += durationMs;
+          if (res.statusCode >= 500) this.errorCount += 1;
+          this.recentTraces.push({
+            traceId,
+            spanId,
+            method,
+            pathname,
+            statusCode: res.statusCode,
+            durationMs,
+            timestamp: new Date().toISOString()
+          });
+          if (this.recentTraces.length > 100) {
+            this.recentTraces.shift();
+          }
         });
-        if (this.recentTraces.length > 100) {
-          this.recentTraces.shift();
-        }
-      });
+      }
 
       // Prometheus metrics endpoint
       if (method === 'GET' && pathname === '/metrics') {
@@ -912,6 +916,58 @@ class ApiRouter {
       const body = await readJsonBody(req);
       const verification = this.certifications.verifyCertificate(body.certId, body.signature);
       return sendJson(res, 200, verification);
+    }
+
+    // Performance Certification Simulators
+    if (method === 'GET' && pathname === '/api/certifications/performance/exams') {
+      return sendJson(res, 200, {
+        exams: this.certifications.listPerformanceExams()
+      });
+    }
+
+    const perfExamGetMatch = pathname.match(/^\/api\/certifications\/performance\/exams\/([a-z0-9-]+)$/);
+    if (method === 'GET' && perfExamGetMatch) {
+      const exam = this.certifications.getPerformanceExamForClient(perfExamGetMatch[1]);
+      if (!exam) {
+        return sendJson(res, 404, { error: { code: 'EXAM_NOT_FOUND', message: `Performance exam ${perfExamGetMatch[1]} not found` } });
+      }
+      return sendJson(res, 200, exam);
+    }
+
+    const perfExamStartMatch = pathname.match(/^\/api\/certifications\/performance\/exams\/([a-z0-9-]+)\/start$/);
+    if (method === 'POST' && perfExamStartMatch) {
+      const exam = this.certifications.getPerformanceExam(perfExamStartMatch[1]);
+      if (!exam) {
+        return sendJson(res, 404, { error: { code: 'EXAM_NOT_FOUND', message: `Performance exam ${perfExamStartMatch[1]} not found` } });
+      }
+      const started = this.certifications.startPerformanceExam(exam.id, session.cluster, session.vfs);
+      session.activeExamId = exam.id;
+      session.activeContextType = 'exam';
+      return sendJson(res, 200, {
+        ...started,
+        contextType: 'exam',
+        message: `Started hands-on performance certification exam simulator "${exam.title}"`
+      });
+    }
+
+    const perfExamGradeMatch = pathname.match(/^\/api\/certifications\/performance\/exams\/([a-z0-9-]+)\/grade$/);
+    if (method === 'POST' && perfExamGradeMatch) {
+      const body = await readJsonBody(req);
+      const exam = this.certifications.getPerformanceExam(perfExamGradeMatch[1]);
+      if (!exam) {
+        return sendJson(res, 404, { error: { code: 'EXAM_NOT_FOUND', message: `Performance exam ${perfExamGradeMatch[1]} not found` } });
+      }
+      const report = this.certifications.gradePerformanceExam({
+        examId: exam.id,
+        virtualCluster: session.cluster,
+        commandHistory: session.terminal.commandHistory,
+        vfs: session.vfs,
+        learnerName: body.learnerName || 'Cloud-Native Engineer'
+      });
+      return sendJson(res, 200, {
+        ...report,
+        learner: this.db.getProfile()
+      });
     }
 
     // 9. 11-Agent Framework Live Audit
