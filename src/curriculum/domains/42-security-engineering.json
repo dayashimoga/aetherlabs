@@ -1,0 +1,274 @@
+{
+  "id": "security-engineering",
+  "title": "Security Engineering, Zero-Trust Architecture & SPIFFE/SPIRE Workload Identity",
+  "category": "Platform Engineering & Security",
+  "trackId": "track-devsecops",
+  "version": "1.0.0",
+  "difficulty": "Advanced",
+  "estimatedHours": 8,
+  "summary": "Master cloud-native security engineering and Zero-Trust architecture: implementing cryptographic workload identity with SPIFFE/SPIRE (spiffe://), IAM Roles for Service Accounts (IRSA) federation, kernel-level eBPF runtime security tracing with Cilium Tetragon, in-kernel syscall filtering (sys_execve), and automated zero-trust egress posture.",
+  "prerequisites": [
+    "platform-engineering",
+    "devsecops-pipeline"
+  ],
+  "learningObjectives": [
+    "Architect zero-trust cryptographic workload identity using SPIFFE/SPIRE SVID federation and AWS IAM Roles for Service Accounts (IRSA).",
+    "Configure kernel-level eBPF runtime execution policies with Cilium Tetragon to detect and block unauthorized binaries and syscall execution.",
+    "Implement defense-in-depth zero-trust security postures eliminating static shared credentials across multi-tenant microservices."
+  ],
+  "curriculumModules": [
+    {
+      "id": "mod-seceng-01",
+      "title": "Cryptographic Workload Identity, SPIFFE/SPIRE & Cloud IAM Federation",
+      "conceptSummary": "Zero-trust architecture rejects network-perimeter security in favor of verifiable cryptographic identity. The Secure Production Identity Framework for Everyone (SPIFFE) defines standard SPIFFE IDs (spiffe://<trust-domain>/ns/<namespace>/sa/<serviceaccount>) and X.509 SVID credentials issued dynamically by SPIRE agents. Combined with cloud IAM federation (such as AWS IRSA / EKS Pod Identity), Kubernetes ServiceAccounts assume cloud IAM roles via OpenID Connect (OIDC) tokens, eliminating long-lived static API secrets.",
+      "productionArchitecturePattern": "Federate short-lived SPIFFE SVIDs and AWS IRSA annotations to authenticate microservices dynamically against cloud databases and external vaults without hardcoded keys.",
+      "keyCommands": [
+        "spire-server entry create -spiffeID spiffe://prod.kubelabs.io/ns/production/sa/payment-service-sa -parentID spiffe://prod.kubelabs.io/spire/agent/k8s",
+        "kubectl apply -f /security/spiffe-workload-identity.yaml"
+      ]
+    },
+    {
+      "id": "mod-seceng-02",
+      "title": "Kernel-Level eBPF Runtime Security & Cilium Tetragon Tracing Policies",
+      "conceptSummary": "Traditional runtime security agents relying on ptrace or userspace auditd hooks impose high CPU overhead and suffer from race conditions (TOCTOU). Cilium Tetragon executes directly inside Linux kernel eBPF probes (kprobes, tracepoints, LSM hooks) to intercept system calls like sys_execve, sys_socket, and sys_open before execution finishes. Tetragon TracingPolicy manifests enforce in-kernel process termination (SIGKILL) when unauthorized binaries (such as netcat, nmap, or curl) execute inside high-security containers.",
+      "productionArchitecturePattern": "Deploy declarative Cilium Tetragon TracingPolicy CRDs enforcing kernel-level sys_execve syscall filtering to block interactive reverse-shell utilities in production pods.",
+      "keyCommands": [
+        "kubectl apply -f /security/tetragon-policy.yaml",
+        "tetra getevents -o compact"
+      ]
+    }
+  ],
+  "labs": [
+    {
+      "id": "lab-seceng-01-spiffe-identity-federation",
+      "title": "Zero-Trust SPIFFE/SPIRE Workload Identity & AWS IRSA ServiceAccount Federation",
+      "difficulty": "Advanced",
+      "durationMinutes": 20,
+      "xpReward": 150,
+      "scenario": "Configure zero-trust cryptographic workload identity for the payment service. Author a SPIFFE/SPIRE workload identity ConfigMap in /security/spiffe-workload-identity.yaml named spiffe-workload-identity in namespace production with data keys: trustDomain: 'prod.kubelabs.io', spiffeId: 'spiffe://prod.kubelabs.io/ns/production/sa/payment-service-sa', and svidTtlMinutes: '60'. In addition, author an AWS IRSA ServiceAccount payment-service-sa in namespace production annotated with eks.amazonaws.com/role-arn: 'arn:aws:iam::123456789012:role/payment-workload-role'. Apply both manifests to namespace production.",
+      "productionContext": "Zero-trust architecture mandates that workloads establish mutual TLS and access cloud resources using ephemeral, cryptographically verifiable identities rather than persistent bearer tokens or long-lived static AWS secret keys.",
+      "prerequisites": [
+        "lab-plat-01-backstage-catalog"
+      ],
+      "objectives": [
+        "Create namespace production if not present.",
+        "Author manifest /security/spiffe-workload-identity.yaml defining ConfigMap spiffe-workload-identity and ServiceAccount payment-service-sa.",
+        "Configure ConfigMap data keys trustDomain, spiffeId, and svidTtlMinutes.",
+        "Annotate ServiceAccount with eks.amazonaws.com/role-arn.",
+        "Apply manifests to namespace production."
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: spiffe-workload-identity\n  namespace: production\ndata:\n  trustDomain: \"prod.kubelabs.io\"\n  spiffeId: \"spiffe://prod.kubelabs.io/ns/production/sa/payment-service-sa\"\n  svidTtlMinutes: \"60\"\n---\napiVersion: v1\nkind: ServiceAccount\nmetadata:\n  name: payment-service-sa\n  namespace: production\n  annotations:\n    eks.amazonaws.com/role-arn: \"arn:aws:iam::123456789012:role/payment-workload-role\"\n",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Create production namespace",
+          "instruction": "Create namespace production if not present.",
+          "commandHint": "kubectl create namespace production"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Author SPIFFE and IRSA manifest",
+          "instruction": "Author manifest /security/spiffe-workload-identity.yaml defining ConfigMap spiffe-workload-identity and ServiceAccount payment-service-sa.",
+          "commandHint": "cat << 'EOF' > /security/spiffe-workload-identity.yaml\n...\nEOF"
+        },
+        {
+          "stepNumber": 3,
+          "title": "Apply manifest to production",
+          "instruction": "Apply the manifest to namespace production.",
+          "commandHint": "kubectl apply -f /security/spiffe-workload-identity.yaml"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "cm-spiffe-exists",
+          "description": "ConfigMap spiffe-workload-identity exists in namespace production",
+          "type": "resource_exists",
+          "kind": "ConfigMap",
+          "namespace": "production",
+          "name": "spiffe-workload-identity",
+          "remediation": "Apply ConfigMap spiffe-workload-identity in namespace production"
+        },
+        {
+          "id": "cm-spiffe-trust-domain",
+          "description": "ConfigMap data.trustDomain is prod.kubelabs.io",
+          "type": "resource_field_equals",
+          "kind": "ConfigMap",
+          "namespace": "production",
+          "name": "spiffe-workload-identity",
+          "fieldPath": "data.trustDomain",
+          "expectedValue": "prod.kubelabs.io",
+          "remediation": "Set trustDomain: \"prod.kubelabs.io\" in ConfigMap spiffe-workload-identity"
+        },
+        {
+          "id": "cm-spiffe-id",
+          "description": "ConfigMap data.spiffeId is spiffe://prod.kubelabs.io/ns/production/sa/payment-service-sa",
+          "type": "resource_field_equals",
+          "kind": "ConfigMap",
+          "namespace": "production",
+          "name": "spiffe-workload-identity",
+          "fieldPath": "data.spiffeId",
+          "expectedValue": "spiffe://prod.kubelabs.io/ns/production/sa/payment-service-sa",
+          "remediation": "Set spiffeId: \"spiffe://prod.kubelabs.io/ns/production/sa/payment-service-sa\" in ConfigMap spiffe-workload-identity"
+        },
+        {
+          "id": "sa-irsa-exists",
+          "description": "ServiceAccount payment-service-sa exists in namespace production",
+          "type": "resource_exists",
+          "kind": "ServiceAccount",
+          "namespace": "production",
+          "name": "payment-service-sa",
+          "remediation": "Apply ServiceAccount payment-service-sa in namespace production"
+        },
+        {
+          "id": "sa-irsa-role-arn",
+          "description": "ServiceAccount payment-service-sa is annotated with eks.amazonaws.com/role-arn",
+          "type": "resource_field_equals",
+          "kind": "ServiceAccount",
+          "namespace": "production",
+          "name": "payment-service-sa",
+          "fieldPath": "metadata.annotations['eks.amazonaws.com/role-arn']",
+          "expectedValue": "arn:aws:iam::123456789012:role/payment-workload-role",
+          "remediation": "Annotate ServiceAccount payment-service-sa with eks.amazonaws.com/role-arn: \"arn:aws:iam::123456789012:role/payment-workload-role\""
+        }
+      ],
+      "solutionCommands": [
+        "kubectl create namespace production",
+        "cat << 'EOF' > /security/spiffe-workload-identity.yaml\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: spiffe-workload-identity\n  namespace: production\ndata:\n  trustDomain: \"prod.kubelabs.io\"\n  spiffeId: \"spiffe://prod.kubelabs.io/ns/production/sa/payment-service-sa\"\n  svidTtlMinutes: \"60\"\n---\napiVersion: v1\nkind: ServiceAccount\nmetadata:\n  name: payment-service-sa\n  namespace: production\n  annotations:\n    eks.amazonaws.com/role-arn: \"arn:aws:iam::123456789012:role/payment-workload-role\"\nEOF",
+        "kubectl apply -f /security/spiffe-workload-identity.yaml"
+      ],
+      "troubleshootingGuide": [
+        {
+          "problem": "ConfigMap or ServiceAccount missing or fields mismatch.",
+          "cause": "ConfigMap must declare trustDomain and spiffeId, and ServiceAccount must have role-arn annotation.",
+          "solution": "Apply /security/spiffe-workload-identity.yaml to namespace production."
+        }
+      ]
+    },
+    {
+      "id": "lab-seceng-02-tetragon-ebpf-policy",
+      "title": "Kernel-Level eBPF Runtime Security Policy with Cilium Tetragon",
+      "difficulty": "Advanced",
+      "durationMinutes": 25,
+      "xpReward": 175,
+      "scenario": "Enforce real-time kernel-level runtime protection against reverse shells. Author manifest /security/tetragon-policy.yaml containing a Cilium TracingPolicy named block-unauthorized-binaries in namespace production. Configure spec.kprobes with call: sys_execve, syscall: true, and an action: Sigkill on matching binaries /bin/netcat and /usr/bin/nc. Next, deploy a Deployment named secure-vault-client in namespace production running 2 replicas with image vault-client:v1.0. Apply both manifests to namespace production.",
+      "productionContext": "eBPF Tetragon operates inside Linux kernel tracepoints and kprobes, providing sub-millisecond in-kernel process termination (Sigkill) on unauthorized execution attempts without depending on slow userspace log scrapers.",
+      "prerequisites": [
+        "lab-seceng-01-spiffe-identity-federation"
+      ],
+      "objectives": [
+        "Create namespace production if not present.",
+        "Author manifest /security/tetragon-policy.yaml defining TracingPolicy block-unauthorized-binaries and Deployment secure-vault-client.",
+        "Configure TracingPolicy to intercept sys_execve with Sigkill.",
+        "Deploy secure-vault-client with 2 replicas in namespace production.",
+        "Apply manifests to namespace production."
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "apiVersion: cilium.io/v1alpha1\nkind: TracingPolicy\nmetadata:\n  name: block-unauthorized-binaries\n  namespace: production\nspec:\n  kprobes:\n    - call: \"sys_execve\"\n      syscall: true\n      args:\n        - index: 0\n          type: \"string\"\n      selectors:\n        - matchArgs:\n            - index: 0\n              operator: \"In\"\n              values:\n                - \"/bin/netcat\"\n                - \"/usr/bin/nc\"\n          matchActions:\n            - action: \"Sigkill\"\n---\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: secure-vault-client\n  namespace: production\nspec:\n  replicas: 2\n  selector:\n    matchLabels:\n      app: secure-vault-client\n  template:\n    metadata:\n      labels:\n        app: secure-vault-client\n    spec:\n      containers:\n        - name: client\n          image: vault-client:v1.0\n",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Create production namespace",
+          "instruction": "Create namespace production if not present.",
+          "commandHint": "kubectl create namespace production"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Author Tetragon TracingPolicy and Deployment",
+          "instruction": "Author manifest /security/tetragon-policy.yaml defining TracingPolicy block-unauthorized-binaries and Deployment secure-vault-client.",
+          "commandHint": "cat << 'EOF' > /security/tetragon-policy.yaml\n...\nEOF"
+        },
+        {
+          "stepNumber": 3,
+          "title": "Apply manifest to production",
+          "instruction": "Apply manifest to namespace production.",
+          "commandHint": "kubectl apply -f /security/tetragon-policy.yaml"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "tp-tetragon-exists",
+          "description": "TracingPolicy block-unauthorized-binaries exists in namespace production",
+          "type": "resource_exists",
+          "kind": "TracingPolicy",
+          "namespace": "production",
+          "name": "block-unauthorized-binaries",
+          "remediation": "Apply TracingPolicy block-unauthorized-binaries in namespace production"
+        },
+        {
+          "id": "tp-kprobe-call",
+          "description": "TracingPolicy intercepts syscall sys_execve",
+          "type": "resource_field_equals",
+          "kind": "TracingPolicy",
+          "namespace": "production",
+          "name": "block-unauthorized-binaries",
+          "fieldPath": "spec.kprobes[0].call",
+          "expectedValue": "sys_execve",
+          "remediation": "Set spec.kprobes[0].call to \"sys_execve\" in TracingPolicy block-unauthorized-binaries"
+        },
+        {
+          "id": "deploy-vault-exists",
+          "description": "Deployment secure-vault-client exists in namespace production",
+          "type": "resource_exists",
+          "kind": "Deployment",
+          "namespace": "production",
+          "name": "secure-vault-client",
+          "remediation": "Deploy secure-vault-client in namespace production"
+        },
+        {
+          "id": "deploy-vault-replicas",
+          "description": "Deployment secure-vault-client has 2 replicas",
+          "type": "resource_field_equals",
+          "kind": "Deployment",
+          "namespace": "production",
+          "name": "secure-vault-client",
+          "fieldPath": "spec.replicas",
+          "expectedValue": 2,
+          "remediation": "Scale Deployment secure-vault-client to 2 replicas"
+        }
+      ],
+      "solutionCommands": [
+        "kubectl create namespace production",
+        "cat << 'EOF' > /security/tetragon-policy.yaml\napiVersion: cilium.io/v1alpha1\nkind: TracingPolicy\nmetadata:\n  name: block-unauthorized-binaries\n  namespace: production\nspec:\n  kprobes:\n    - call: \"sys_execve\"\n      syscall: true\n      args:\n        - index: 0\n          type: \"string\"\n      selectors:\n        - matchArgs:\n            - index: 0\n              operator: \"In\"\n              values:\n                - \"/bin/netcat\"\n                - \"/usr/bin/nc\"\n          matchActions:\n            - action: \"Sigkill\"\n---\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: secure-vault-client\n  namespace: production\nspec:\n  replicas: 2\n  selector:\n    matchLabels:\n      app: secure-vault-client\n  template:\n    metadata:\n      labels:\n        app: secure-vault-client\n    spec:\n      containers:\n        - name: client\n          image: vault-client:v1.0\nEOF",
+        "kubectl apply -f /security/tetragon-policy.yaml"
+      ],
+      "troubleshootingGuide": [
+        {
+          "problem": "TracingPolicy or Deployment missing or configuration incorrect.",
+          "cause": "TracingPolicy must target sys_execve with Sigkill, and Deployment must run 2 replicas.",
+          "solution": "Apply /security/tetragon-policy.yaml to namespace production."
+        }
+      ]
+    }
+  ],
+  "assessmentQuestions": [
+    {
+      "id": "q-seceng-01",
+      "question": "In a cloud-native Zero-Trust architecture, why is cryptographic SPIFFE/SPIRE workload identity superior to static IAM access keys or bearer tokens?",
+      "options": [
+        "SPIFFE SVIDs allow pods to bypass cluster network policies.",
+        "SPIFFE provides short-lived, automatically rotated, cryptographically signed X.509 or JWT identities issued dynamically based on verifiable platform attestation (node & pod metadata), eliminating persistent static credentials and enabling seamless cross-cloud/OIDC federation.",
+        "SPIFFE encrypts all Linux kernel binaries on the worker nodes.",
+        "SPIFFE completely disables DNS inside the Kubernetes cluster."
+      ],
+      "correctIndex": 1,
+      "explanation": "SPIFFE/SPIRE eliminates static secrets by establishing short-lived, verifiable cryptographic SVIDs based on workload attestation, allowing automated mutual TLS and seamless cloud IAM role federation (such as AWS IRSA) without long-lived credentials."
+    },
+    {
+      "id": "q-seceng-02",
+      "question": "How does Cilium Tetragon eBPF-based runtime security achieve synchronous in-kernel enforcement compared to traditional userspace audit agents like Falco?",
+      "options": [
+        "Tetragon pauses all cluster nodes for 10 seconds to analyze logs before resuming.",
+        "Tetragon instruments Linux kernel kprobes, tracepoints, and LSM hooks directly via eBPF bytecode, allowing it to inspect syscall arguments (such as sys_execve) and immediately terminate malicious processes (Sigkill) synchronously in kernel space before execution completes, preventing TOCTOU race conditions and user-space bypasses.",
+        "Tetragon runs exclusively as a browser extension on developer workstations.",
+        "Tetragon modifies the Linux kernel source code and reboots the server during every pod restart."
+      ],
+      "correctIndex": 1,
+      "explanation": "Because Tetragon runs via eBPF probes inside the kernel itself, it can enforce actions like Sigkill synchronously on syscall entry/exit, eliminating Time-of-Check to Time-of-Use (TOCTOU) windows and avoiding the CPU overhead of userspace context switching."
+    }
+  ]
+}
