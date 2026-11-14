@@ -144,6 +144,10 @@
                 "fieldPath": { "type": "string" },
                 "expectedValue": {},
                 "commandSubstring": { "type": "string" },
+                "path": { "type": "string" },
+                "expectedContent": { "type": "string" },
+                "pattern": { "type": "string" },
+                "isRegex": { "type": "boolean" },
                 "remediation": { "type": "string" }
               }
             }

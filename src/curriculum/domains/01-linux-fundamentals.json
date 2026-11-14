@@ -1,0 +1,185 @@
+{
+  "id": "linux-fundamentals",
+  "title": "Linux Fundamentals & Command-Line Streaming Pipelines",
+  "category": "Foundations",
+  "trackId": "track-foundations",
+  "version": "4.0.0",
+  "difficulty": "Beginner",
+  "estimatedHours": 6,
+  "summary": "Master Linux POSIX filesystem navigation, file permissions (octal and symbolic), ownership, stream redirections, and multi-stage text processing pipelines with grep, sed, awk, cut, and sort.",
+  "prerequisites": [],
+  "learningObjectives": [
+    "Navigate Linux directory hierarchies and audit file permissions using octal and symbolic modes.",
+    "Construct high-throughput POSIX streaming pipelines using grep, sed, awk, tr, cut, sort, and uniq.",
+    "Direct standard streams using POSIX redirections (stdout, stderr, append, pipes) to capture diagnostics."
+  ],
+  "curriculumModules": [
+    {
+      "id": "mod-linux-01",
+      "title": "Linux Filesystem Hierarchy & POSIX File Security",
+      "conceptSummary": "POSIX permissions govern read, write, and execute permissions across user, group, and others. Critical system and Kubernetes configuration files must be locked down to prevent privilege escalation.",
+      "productionArchitecturePattern": "Enforce the principle of least privilege on node filesystems: restrict sensitive configuration files like /etc/kubernetes/admin.conf to 0600 root-only ownership and verify umask defaults.",
+      "keyCommands": [
+        "ls -la",
+        "chmod 600 /etc/kubernetes/admin.conf",
+        "chown root:root /etc/kubernetes/admin.conf",
+        "chmod 600 /home/learner/.kube/config"
+      ]
+    },
+    {
+      "id": "mod-linux-02",
+      "title": "POSIX Streaming Pipelines & Text Manipulation Engines",
+      "conceptSummary": "UNIX stream architecture connects stdout to stdin across distinct utilities via pipes (|), allowing rapid log parsing and pattern filtering without writing intermediate disk files.",
+      "productionArchitecturePattern": "Construct robust triage one-liners using grep -E for error filtering, awk for field extraction, and sort | uniq -c for frequency distribution analysis in live incident response.",
+      "keyCommands": [
+        "head -n 5 /var/log/nginx/access.log",
+        "grep \" 500 \" /var/log/nginx/access.log | awk '{print $1}' | sort | uniq -c > /home/learner/offenders.txt",
+        "wc -l /home/learner/offenders.txt"
+      ]
+    }
+  ],
+  "labs": [
+    {
+      "id": "lab-linux-01-permissions",
+      "title": "Linux Filesystem Permissions & Security Hardening",
+      "difficulty": "Beginner",
+      "durationMinutes": 20,
+      "xpReward": 150,
+      "scenario": "A security compliance audit flagged inappropriate permissions and ownership on critical Kubernetes configuration files. You must harden permissions and enforce strict access controls on /etc/kubernetes/admin.conf and /home/learner/.kube/config.",
+      "productionContext": "Exposing admin kubeconfig credentials with world-readable permissions allows unprivileged host processes to compromise the entire Kubernetes cluster.",
+      "prerequisites": [],
+      "objectives": [
+        "Inspect file permissions on /etc/kubernetes/admin.conf using ls -la",
+        "Harden /etc/kubernetes/admin.conf to mode 0600 owned by root:root",
+        "Configure /home/learner/.kube/config to mode 0600"
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Inspect File Permissions",
+          "instruction": "Run `ls -la /etc/kubernetes/admin.conf` to check current mode and ownership.",
+          "commandHint": "ls -la /etc/kubernetes/admin.conf"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Harden Cluster Admin Kubeconfig",
+          "instruction": "Set permissions on `/etc/kubernetes/admin.conf` to `0600` and ensure ownership is `root:root`.",
+          "commandHint": "chmod 600 /etc/kubernetes/admin.conf && chown root:root /etc/kubernetes/admin.conf"
+        },
+        {
+          "stepNumber": 3,
+          "title": "Secure Learner User Kubeconfig",
+          "instruction": "Set permissions on `/home/learner/.kube/config` to `0600`.",
+          "commandHint": "chmod 600 /home/learner/.kube/config"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "val-linux-perm-01",
+          "description": "Executed chmod command to harden kubeconfig permissions",
+          "type": "command_executed",
+          "commandSubstring": "chmod 600",
+          "remediation": "Run `chmod 600 /etc/kubernetes/admin.conf` and `chmod 600 /home/learner/.kube/config`."
+        },
+        {
+          "id": "val-linux-perm-02",
+          "description": "Executed chown command to ensure root ownership",
+          "type": "command_executed",
+          "commandSubstring": "chown root:root",
+          "remediation": "Run `chown root:root /etc/kubernetes/admin.conf`."
+        }
+      ],
+      "solutionCommands": [
+        "ls -la /etc/kubernetes/admin.conf",
+        "chmod 600 /etc/kubernetes/admin.conf",
+        "chown root:root /etc/kubernetes/admin.conf",
+        "chmod 600 /home/learner/.kube/config"
+      ],
+      "troubleshootingGuide": "Ensure you run `chmod 600` on both kubeconfigs and `chown root:root` on `/etc/kubernetes/admin.conf`."
+    },
+    {
+      "id": "lab-linux-01-text-pipelines",
+      "title": "POSIX Streaming Pipelines & Access Log Analysis",
+      "difficulty": "Beginner",
+      "durationMinutes": 25,
+      "xpReward": 150,
+      "scenario": "Production ingress access logs in /var/log/nginx/access.log show intermittent 5xx spikes. You must construct a POSIX pipeline using grep, awk, sort, and uniq to isolate HTTP 500 error counts, and write the offending client IP summary to /home/learner/offenders.txt.",
+      "productionContext": "Streaming POSIX text processing pipelines allow SREs to triage multi-gigabyte log anomalies instantaneously without external tooling dependencies.",
+      "prerequisites": ["lab-linux-01-permissions"],
+      "objectives": [
+        "Inspect the raw access log structure using head -n 5 /var/log/nginx/access.log",
+        "Extract 500 errors, aggregate unique offending IPs, and redirect output to /home/learner/offenders.txt"
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Sample Access Log",
+          "instruction": "Inspect the first 5 lines of `/var/log/nginx/access.log`.",
+          "commandHint": "head -n 5 /var/log/nginx/access.log"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Aggregate HTTP 500 Offenders",
+          "instruction": "Filter lines with HTTP 500 status, extract client IP, count unique occurrences, and write to `/home/learner/offenders.txt`.",
+          "commandHint": "grep \" 500 \" /var/log/nginx/access.log | awk '{print $1}' | sort | uniq -c > /home/learner/offenders.txt"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "val-linux-pipe-01",
+          "description": "Constructed grep and awk pipeline for log filtering",
+          "type": "command_executed",
+          "commandSubstring": "grep \" 500 \"",
+          "remediation": "Run `grep \" 500 \" /var/log/nginx/access.log | awk '{print $1}' | sort | uniq -c > /home/learner/offenders.txt`."
+        },
+        {
+          "id": "val-linux-pipe-02",
+          "description": "Offending client IP report written to /home/learner/offenders.txt",
+          "type": "vfs_file_contains",
+          "path": "/home/learner/offenders.txt",
+          "expectedContent": "192.168.1.105",
+          "remediation": "Ensure output is redirected to `/home/learner/offenders.txt` using `>`."
+        }
+      ],
+      "solutionCommands": [
+        "head -n 5 /var/log/nginx/access.log",
+        "grep \" 500 \" /var/log/nginx/access.log | awk '{print $1}' | sort | uniq -c > /home/learner/offenders.txt"
+      ],
+      "troubleshootingGuide": "Verify that `/home/learner/offenders.txt` contains the client IP `192.168.1.105` generated by the stream pipeline."
+    }
+  ],
+  "assessmentQuestions": [
+    {
+      "id": "q-linux-fund-01",
+      "question": "What numeric octal mode represents -rw-r----- (read/write for owner, read-only for group, no permissions for others)?",
+      "options": [
+        "640",
+        "750",
+        "644",
+        "600"
+      ],
+      "correctIndex": 0,
+      "explanation": "Owner read (4) + write (2) = 6. Group read (4) = 4. Others none (0) = 0. Thus 640."
+    },
+    {
+      "id": "q-linux-fund-02",
+      "question": "Which POSIX operator redirects both standard output (stdout) and standard error (stderr) to a target file?",
+      "options": [
+        "&> (or > file 2>&1)",
+        "2>",
+        ">>",
+        "<"
+      ],
+      "correctIndex": 0,
+      "explanation": "&> or > file 2>&1 merges file descriptor 2 (stderr) into descriptor 1 (stdout) and redirects both streams into the destination file."
+    }
+  ]
+}

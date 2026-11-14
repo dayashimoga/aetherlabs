@@ -655,7 +655,7 @@
       badge: 'Tier 1: Foundations',
       summary: 'Linux kernel isolation primitives (cgroups v2, namespaces), OCI container runtime mechanics, and cloud-native L4/L7 TCP/IP networking.',
       certTarget: 'CCNFA / LFCS',
-      domainIds: ['linux-fundamentals', 'containers-runtime', 'cloud-networking']
+      domainIds: ['linux-fundamentals', 'linux-admin', 'containers-runtime', 'cloud-networking']
     },
     {
       tier: 2,
@@ -727,6 +727,7 @@
 
   const DOMAIN_ICONS = {
     'linux-fundamentals': '🐧',
+    'linux-admin': '⚙️',
     'containers-runtime': '🐳',
     'cloud-networking': '🌐',
     'cncf-packaging': '📦',

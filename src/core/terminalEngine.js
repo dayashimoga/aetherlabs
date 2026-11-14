@@ -630,20 +630,26 @@ class TerminalEngine {
     let history = [];
 
     const isVirtualCluster = clusterOrOptions && (typeof clusterOrOptions.applyManifest === 'function' || clusterOrOptions.state);
+    const extractVfs = (cand) => {
+      if (!cand) return null;
+      if (typeof cand.normalizePath === 'function') return cand;
+      if (cand.vfs && typeof cand.vfs.normalizePath === 'function') return cand.vfs;
+      return cand;
+    };
 
     if (isVirtualCluster) {
       cluster = clusterOrOptions;
-      vfs = maybeVfs || clusterOrOptions.vfs || null;
+      vfs = extractVfs(maybeVfs) || extractVfs(clusterOrOptions.vfs) || null;
       graph = clusterOrOptions.graph || null;
     } else if (clusterOrOptions && typeof clusterOrOptions === 'object') {
       cluster = clusterOrOptions.cluster || null;
-      vfs = clusterOrOptions.vfs || maybeVfs || null;
+      vfs = extractVfs(clusterOrOptions.vfs) || extractVfs(maybeVfs) || null;
       graph = clusterOrOptions.graph || null;
       env = clusterOrOptions.env || {};
       history = clusterOrOptions.history || [];
     } else {
       cluster = clusterOrOptions;
-      vfs = maybeVfs;
+      vfs = extractVfs(maybeVfs);
     }
 
     this.cluster = cluster;
@@ -1007,6 +1013,27 @@ class TerminalEngine {
       return { exitCode: res.exitCode, output: '', command: trimmed };
     }
 
+    // Support multi-stage pipeline execution via PipelineDriver
+    if (this.pipelineDriver && trimmed.includes('|') && !trimmed.includes('<<')) {
+      const res = this.pipelineDriver.execute(trimmed, {
+        cwd: this.cwd,
+        env: this.env,
+        vfs: this.vfs,
+        ...options
+      });
+      this.cwd = this.pipelineDriver.cwd || this.cwd;
+      this.env = { ...this.env, ...this.pipelineDriver.env, PWD: this.cwd };
+      const out = (res.stdout || '') + (res.stderr || '');
+      return {
+        exitCode: res.code !== undefined ? res.code : 0,
+        code: res.code !== undefined ? res.code : 0,
+        output: out.replace(/\n$/, ''),
+        stdout: res.stdout || '',
+        stderr: res.stderr || '',
+        command: trimmed
+      };
+    }
+
     // Support pipe to grep (`| grep <pattern>`)
     let grepPattern = null;
     let mainCommand = trimmed;
@@ -1177,6 +1204,26 @@ class TerminalEngine {
       case 'traceroute':
       case 'nc':
       case 'netcat':
+      case 'head':
+      case 'tail':
+      case 'grep':
+      case 'awk':
+      case 'sed':
+      case 'sort':
+      case 'uniq':
+      case 'wc':
+      case 'cut':
+      case 'tr':
+      case 'tee':
+      case 'pvcreate':
+      case 'pvs':
+      case 'pvdisplay':
+      case 'vgcreate':
+      case 'vgs':
+      case 'vgdisplay':
+      case 'lvcreate':
+      case 'lvs':
+      case 'lvdisplay':
         return this.handleLinuxAndNet(bin, args, options);
       default:
         return {
@@ -2985,6 +3032,44 @@ class TerminalEngine {
           break;
         case 'id':
           res = { stdout: 'uid=1000(learner) gid=1000(learner) groups=1000(learner),27(sudo),999(docker)\n', stderr: '', code: 0 };
+          break;
+        case 'pvcreate':
+          res = this.multiCli.handlePvcreate({ argv });
+          break;
+        case 'pvs':
+        case 'pvdisplay':
+          res = this.multiCli.handlePvs();
+          break;
+        case 'vgcreate':
+          res = this.multiCli.handleVgcreate({ argv });
+          break;
+        case 'vgs':
+        case 'vgdisplay':
+          res = this.multiCli.handleVgs();
+          break;
+        case 'lvcreate':
+          res = this.multiCli.handleLvcreate({ argv });
+          break;
+        case 'lvs':
+        case 'lvdisplay':
+          res = this.multiCli.handleLvs();
+          break;
+        case 'head':
+        case 'tail':
+        case 'grep':
+        case 'awk':
+        case 'sed':
+        case 'sort':
+        case 'uniq':
+        case 'wc':
+        case 'cut':
+        case 'tr':
+        case 'tee':
+          if (this.pipelineDriver) {
+            res = this.pipelineDriver.execute([bin, ...args].join(' '), { cwd: this.cwd, env: this.env, vfs: this.vfs, ...options });
+          } else {
+            res = { stdout: '', stderr: '', code: 0 };
+          }
           break;
         default:
           res = { stdout: 'Linux kubelabs-node 6.8.0-40-generic x86_64 GNU/Linux\n', stderr: '', code: 0 };

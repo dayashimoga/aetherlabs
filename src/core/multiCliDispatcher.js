@@ -351,6 +351,14 @@ class MultiCliDispatcher {
       'vm.max_map_count': '262144',
       'fs.inotify.max_user_watches': '524288'
     };
+    this.lvm = {
+      pvs: {
+        '/dev/sdb1': { pv: '/dev/sdb1', vg: '', fmt: 'lvm2', attr: 'a--', psize: '100.00g', pfree: '100.00g' }
+      },
+      vgs: {},
+      lvs: {}
+    };
+    this.netnsList = ['cni-0a1b2c3d4e (id: 0)', 'cni-9f8e7d6c5b (id: 1)'];
     this.simulatedContainers = [
       { id: 'a1b2c3d4e5f6', name: 'k8s_kube-apiserver', image: 'registry.k8s.io/kube-apiserver:v1.31.0', status: 'Up 2 days', ports: '6443/tcp', command: '"kube-apiserver --..."', created: '2 days ago' },
       { id: 'b2c3d4e5f6a1', name: 'k8s_etcd', image: 'registry.k8s.io/etcd:3.5.15-0', status: 'Up 2 days', ports: '2379-2380/tcp', command: '"etcd --..."', created: '2 days ago' },
@@ -566,6 +574,15 @@ class MultiCliDispatcher {
     pipelineDriver.registerCommand('journalctl', this.handleJournalctl.bind(this));
     pipelineDriver.registerCommand('sysctl', this.handleSysctl.bind(this));
     pipelineDriver.registerCommand('unshare', this.handleUnshare.bind(this));
+    pipelineDriver.registerCommand('pvcreate', this.handlePvcreate.bind(this));
+    pipelineDriver.registerCommand('pvs', this.handlePvs.bind(this));
+    pipelineDriver.registerCommand('pvdisplay', this.handlePvs.bind(this));
+    pipelineDriver.registerCommand('vgcreate', this.handleVgcreate.bind(this));
+    pipelineDriver.registerCommand('vgs', this.handleVgs.bind(this));
+    pipelineDriver.registerCommand('vgdisplay', this.handleVgs.bind(this));
+    pipelineDriver.registerCommand('lvcreate', this.handleLvcreate.bind(this));
+    pipelineDriver.registerCommand('lvs', this.handleLvs.bind(this));
+    pipelineDriver.registerCommand('lvdisplay', this.handleLvs.bind(this));
     pipelineDriver.registerCommand('top', this.handleTop.bind(this));
     pipelineDriver.registerCommand('df', this.handleDf.bind(this));
     pipelineDriver.registerCommand('free', this.handleFree.bind(this));
@@ -644,6 +661,15 @@ class MultiCliDispatcher {
       journalctl: this.handleJournalctl.bind(this),
       sysctl: this.handleSysctl.bind(this),
       unshare: this.handleUnshare.bind(this),
+      pvcreate: this.handlePvcreate.bind(this),
+      pvs: this.handlePvs.bind(this),
+      pvdisplay: this.handlePvs.bind(this),
+      vgcreate: this.handleVgcreate.bind(this),
+      vgs: this.handleVgs.bind(this),
+      vgdisplay: this.handleVgs.bind(this),
+      lvcreate: this.handleLvcreate.bind(this),
+      lvs: this.handleLvs.bind(this),
+      lvdisplay: this.handleLvs.bind(this),
       top: this.handleTop.bind(this),
       df: this.handleDf.bind(this),
       free: this.handleFree.bind(this),
@@ -5468,13 +5494,28 @@ spec:
     if (sub === 'netns') {
       const action = argv[2] || 'list';
       if (action === 'list') {
+        const list = this.netnsList || ['cni-0a1b2c3d4e (id: 0)', 'cni-9f8e7d6c5b (id: 1)'];
         return {
-          stdout: 'cni-0a1b2c3d4e (id: 0)\ncni-9f8e7d6c5b (id: 1)\n',
+          stdout: list.join('\n') + '\n',
           stderr: '',
           code: 0
         };
       }
-      if (action === 'add' || action === 'del' || action === 'delete') {
+      if (action === 'add') {
+        const nsName = argv[3];
+        if (!this.netnsList) {
+          this.netnsList = ['cni-0a1b2c3d4e (id: 0)', 'cni-9f8e7d6c5b (id: 1)'];
+        }
+        if (nsName && !this.netnsList.some((n) => n.startsWith(nsName))) {
+          this.netnsList.push(`${nsName} (id: ${this.netnsList.length})`);
+        }
+        return { stdout: '', stderr: '', code: 0 };
+      }
+      if (action === 'del' || action === 'delete') {
+        const nsName = argv[3];
+        if (this.netnsList && nsName) {
+          this.netnsList = this.netnsList.filter((n) => !n.startsWith(nsName));
+        }
         return { stdout: '', stderr: '', code: 0 };
       }
       if (action === 'exec') {
@@ -5695,21 +5736,159 @@ spec:
   handleJournalctl({ argv = [] }) {
     let unit = 'kubelet';
     let linesCount = 50;
+    let priority = 'info';
     for (let i = 1; i < argv.length; i++) {
       if ((argv[i] === '-u' || argv[i] === '--unit') && i + 1 < argv.length) {
         unit = argv[++i].replace(/\.service$/, '');
       } else if ((argv[i] === '-n' || argv[i] === '--lines') && i + 1 < argv.length) {
         linesCount = parseInt(argv[++i], 10) || 50;
+      } else if ((argv[i] === '-p' || argv[i] === '--priority') && i + 1 < argv.length) {
+        priority = argv[++i];
       }
     }
 
-    const logs = [
-      `Nov 12 10:00:00 kubelabs-node ${unit}[1420]: I1112 10:00:00.123456 server.go:412] "Starting ${unit}" version="v1.31.0"`,
-      `Nov 12 10:00:01 kubelabs-node ${unit}[1420]: I1112 10:00:01.234567 daemon.go:345] "Initializing subsystem runtime socket"`,
-      `Nov 12 10:00:02 kubelabs-node ${unit}[1420]: I1112 10:00:02.345678 status_manager.go:78] "Successfully registered status with cluster"`,
-      `Nov 12 10:00:03 kubelabs-node ${unit}[1420]: I1112 10:00:03.456789 manager.go:90] "Syncing state loop completed successfully"`
-    ];
+    let logs;
+    if (priority === 'err' || priority === '3' || priority === 'error') {
+      logs = [
+        `Nov 14 08:30:10 kubelabs-node ${unit}[1420]: E1114 08:30:10.112233 grpc: conn.reset by peer /run/${unit}/${unit}.sock`,
+        `Nov 14 08:30:11 kubelabs-node ${unit}[1420]: E1114 08:30:11.223344 client.go:189] "Failed to connect to runtime service" err="connection refused"`,
+        `Nov 14 08:30:12 kubelabs-node ${unit}[1420]: E1114 08:30:12.334455 server.go:420] "Node status sync failed" error="rpc error: code = Unavailable desc = transport is closing"`
+      ];
+    } else {
+      logs = [
+        `Nov 14 08:00:00 kubelabs-node ${unit}[1420]: I1114 08:00:00.123456 server.go:412] "Starting ${unit}" version="v1.31.0"`,
+        `Nov 14 08:00:01 kubelabs-node ${unit}[1420]: I1114 08:00:01.234567 daemon.go:345] "Initializing subsystem runtime socket"`,
+        `Nov 14 08:00:02 kubelabs-node ${unit}[1420]: I1114 08:00:02.345678 status_manager.go:78] "Successfully registered status with cluster"`,
+        `Nov 14 08:00:03 kubelabs-node ${unit}[1420]: I1114 08:00:03.456789 manager.go:90] "Syncing state loop completed successfully"`
+      ];
+    }
     return { stdout: logs.slice(0, linesCount).join('\n') + '\n', stderr: '', code: 0 };
+  }
+
+  handlePvcreate({ argv = [] }) {
+    const dev = argv.slice(1).find((a) => !a.startsWith('-'));
+    if (!dev) {
+      return { stdout: '', stderr: 'pvcreate: missing device operand\n', code: 1 };
+    }
+    this.lvm.pvs[dev] = {
+      pv: dev,
+      vg: '',
+      fmt: 'lvm2',
+      attr: 'a--',
+      psize: '100.00g',
+      pfree: '100.00g'
+    };
+    return { stdout: `  Physical volume "${dev}" successfully created.\n`, stderr: '', code: 0 };
+  }
+
+  handlePvs() {
+    const pvsList = Object.values(this.lvm.pvs);
+    const header = '  PV         VG       Fmt  Attr PSize   PFree  \n';
+    if (pvsList.length === 0) {
+      return { stdout: header, stderr: '', code: 0 };
+    }
+    const rows = pvsList.map((p) => {
+      const pv = (p.pv || '').padEnd(10);
+      const vg = (p.vg || '').padEnd(8);
+      const fmt = (p.fmt || 'lvm2').padEnd(4);
+      const attr = (p.attr || 'a--').padEnd(5);
+      const psize = (p.psize || '100.00g').padEnd(8);
+      const pfree = (p.pfree || '100.00g');
+      return `  ${pv} ${vg} ${fmt} ${attr} ${psize} ${pfree}`;
+    });
+    return { stdout: header + rows.join('\n') + '\n', stderr: '', code: 0 };
+  }
+
+  handleVgcreate({ argv = [] }) {
+    const nonFlags = argv.slice(1).filter((a) => !a.startsWith('-'));
+    if (nonFlags.length < 2) {
+      return { stdout: '', stderr: 'vgcreate: missing volume group or device operand\n', code: 1 };
+    }
+    const vg = nonFlags[0];
+    const devs = nonFlags.slice(1);
+    for (const d of devs) {
+      if (this.lvm.pvs[d]) {
+        this.lvm.pvs[d].vg = vg;
+      }
+    }
+    this.lvm.vgs[vg] = {
+      vg,
+      numPv: devs.length,
+      numLv: 0,
+      attr: 'wz--n-',
+      vsize: '100.00g',
+      vfree: '100.00g',
+      devs
+    };
+    return { stdout: `  Volume group "${vg}" successfully created\n`, stderr: '', code: 0 };
+  }
+
+  handleVgs() {
+    const vgsList = Object.values(this.lvm.vgs);
+    const header = '  VG       #PV #LV #SN Attr   VSize   VFree  \n';
+    if (vgsList.length === 0) {
+      return { stdout: header, stderr: '', code: 0 };
+    }
+    const rows = vgsList.map((v) => {
+      const vg = (v.vg || '').padEnd(8);
+      const numPv = String(v.numPv || 1).padStart(3);
+      const numLv = String(v.numLv || 0).padStart(3);
+      const numSn = '  0';
+      const attr = (v.attr || 'wz--n-').padEnd(6);
+      const vsize = (v.vsize || '100.00g').padStart(7);
+      const vfree = (v.vfree || '100.00g').padStart(7);
+      return `  ${vg} ${numPv} ${numLv} ${numSn} ${attr} ${vsize} ${vfree}`;
+    });
+    return { stdout: header + rows.join('\n') + '\n', stderr: '', code: 0 };
+  }
+
+  handleLvcreate({ argv = [] }) {
+    let size = '20.00g';
+    let lvName = 'lvol0';
+    let vgName = '';
+
+    for (let i = 1; i < argv.length; i++) {
+      if ((argv[i] === '-L' || argv[i] === '--size') && i + 1 < argv.length) {
+        size = argv[++i];
+      } else if ((argv[i] === '-n' || argv[i] === '--name') && i + 1 < argv.length) {
+        lvName = argv[++i];
+      } else if (!argv[i].startsWith('-')) {
+        vgName = argv[i];
+      }
+    }
+
+    if (!vgName) {
+      return { stdout: '', stderr: 'lvcreate: missing volume group name operand\n', code: 1 };
+    }
+
+    this.lvm.lvs[lvName] = {
+      lv: lvName,
+      vg: vgName,
+      attr: '-wi-a-----',
+      lsize: size.toLowerCase().endsWith('g') ? size : `${size}g`
+    };
+
+    if (this.lvm.vgs[vgName]) {
+      this.lvm.vgs[vgName].numLv++;
+    }
+
+    return { stdout: `  Logical volume "${lvName}" created.\n`, stderr: '', code: 0 };
+  }
+
+  handleLvs() {
+    const lvsList = Object.values(this.lvm.lvs);
+    const header = '  LV            VG       Attr       LSize \n';
+    if (lvsList.length === 0) {
+      return { stdout: header, stderr: '', code: 0 };
+    }
+    const rows = lvsList.map((l) => {
+      const lv = (l.lv || '').padEnd(13);
+      const vg = (l.vg || '').padEnd(8);
+      const attr = (l.attr || '-wi-a-----').padEnd(10);
+      const lsize = (l.lsize || '20.00g').padStart(6);
+      return `  ${lv} ${vg} ${attr} ${lsize}`;
+    });
+    return { stdout: header + rows.join('\n') + '\n', stderr: '', code: 0 };
   }
 
   handleSysctl({ argv = [] }) {

@@ -1,0 +1,212 @@
+{
+  "id": "linux-admin",
+  "title": "Linux Administration, Cgroups v2 & Systemd Internals",
+  "category": "Foundations",
+  "trackId": "track-foundations",
+  "version": "4.0.0",
+  "difficulty": "Intermediate",
+  "estimatedHours": 8,
+  "summary": "Master Linux systemd service lifecycles, journalctl log diagnostics, cgroups v2 resource accounting, kernel namespaces isolation, sysctl network tuning, and LVM storage volume management.",
+  "prerequisites": ["linux-fundamentals"],
+  "learningObjectives": [
+    "Manage systemd service lifecycles (start, stop, restart, status, enable) and analyze journalctl logs.",
+    "Inspect and enforce Linux cgroups v2 CPU and memory resource ceilings under /sys/fs/cgroup/.",
+    "Isolate processes using Linux kernel namespaces (PID, NET, MNT, UTS, IPC) via unshare and ip netns.",
+    "Tune kernel networking parameters using sysctl and manage storage with LVM physical, volume, and logical groups."
+  ],
+  "curriculumModules": [
+    {
+      "id": "mod-linux-admin-01",
+      "title": "Systemd Service Architecture & Cgroups v2 Resource Governance",
+      "conceptSummary": "Systemd acts as PID 1, managing unit dependencies and resource slices. Cgroups v2 organizes processes into a unified hierarchy with cpu.max, memory.max, and io.max controllers under /sys/fs/cgroup/.",
+      "productionArchitecturePattern": "Place kubelet and containerd in dedicated systemd resource slices (system.slice) with hard CPU and memory ceilings to prevent application bursts in kubepods.slice from starving node daemons.",
+      "keyCommands": [
+        "systemctl status kubelet",
+        "systemctl restart containerd",
+        "journalctl -u containerd -p err",
+        "echo \"200000 100000\" > /sys/fs/cgroup/system.slice/kubelet.service/cpu.max"
+      ]
+    },
+    {
+      "id": "mod-linux-admin-02",
+      "title": "Kernel Namespaces, Sysctl Tuning & LVM Volume Management",
+      "conceptSummary": "Linux namespaces partition global kernel resources into isolated workspaces. Sysctl adjusts runtime kernel parameters, and LVM aggregates physical disks into scalable volume groups and logical partitions.",
+      "productionArchitecturePattern": "Persist net.ipv4.ip_forward=1 in /etc/sysctl.d/ for CNI packet routing, and configure dedicated LVM logical volumes for /var/lib/containerd to avoid root filesystem exhaustion.",
+      "keyCommands": [
+        "sysctl -w net.ipv4.ip_forward=1",
+        "ip netns add netns-worker",
+        "pvcreate /dev/sdb1",
+        "vgcreate vg_k8s /dev/sdb1",
+        "lvcreate -L 20G -n lv_containerd vg_k8s"
+      ]
+    }
+  ],
+  "labs": [
+    {
+      "id": "lab-linux-02-systemd-cgroups",
+      "title": "Systemd Unit Lifecycle, Journalctl Diagnostics & Cgroups v2 Throttling",
+      "difficulty": "Intermediate",
+      "durationMinutes": 25,
+      "xpReward": 175,
+      "scenario": "The node's container runtime daemon (containerd) is reporting degraded state and kubelet is throwing connection errors. You must inspect journalctl error logs, restart containerd, verify kubelet systemd service health, and configure cgroups v2 CPU quotas under /sys/fs/cgroup/system.slice/kubelet.service/cpu.max.",
+      "productionContext": "Node daemon stability directly impacts cluster scheduling; diagnosing systemd units via journalctl and bounding CPU consumption with cgroups v2 ensures high node reliability.",
+      "prerequisites": ["lab-linux-01-permissions"],
+      "objectives": [
+        "Inspect recent error logs for containerd using journalctl -u containerd -p err",
+        "Restart containerd and verify kubelet status using systemctl",
+        "Configure cgroups v2 CPU max ceiling on kubelet service"
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Diagnose Containerd Daemon Errors",
+          "instruction": "Inspect error logs for `containerd` using `journalctl -u containerd -p err`.",
+          "commandHint": "journalctl -u containerd -p err"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Restart Container Runtime & Verify Kubelet",
+          "instruction": "Restart the `containerd` service and verify `kubelet` status using systemctl.",
+          "commandHint": "systemctl restart containerd && systemctl status kubelet"
+        },
+        {
+          "stepNumber": 3,
+          "title": "Configure Cgroups v2 CPU Quota",
+          "instruction": "Set the CPU quota for kubelet to 2 cores per 100ms period (200000 100000) under `/sys/fs/cgroup/system.slice/kubelet.service/cpu.max`.",
+          "commandHint": "echo \"200000 100000\" > /sys/fs/cgroup/system.slice/kubelet.service/cpu.max"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "val-linux-sysd-01",
+          "description": "Executed journalctl error log inspection",
+          "type": "command_executed",
+          "commandSubstring": "journalctl -u containerd -p err",
+          "remediation": "Run `journalctl -u containerd -p err` to inspect runtime errors."
+        },
+        {
+          "id": "val-linux-sysd-02",
+          "description": "Restarted containerd systemd service",
+          "type": "command_executed",
+          "commandSubstring": "systemctl restart containerd",
+          "remediation": "Run `systemctl restart containerd`."
+        },
+        {
+          "id": "val-linux-cgroup-01",
+          "description": "Configured cgroups v2 CPU ceiling for kubelet service",
+          "type": "vfs_file_contains",
+          "path": "/sys/fs/cgroup/system.slice/kubelet.service/cpu.max",
+          "expectedContent": "200000 100000",
+          "remediation": "Run `echo \"200000 100000\" > /sys/fs/cgroup/system.slice/kubelet.service/cpu.max`."
+        }
+      ],
+      "solutionCommands": [
+        "journalctl -u containerd -p err",
+        "systemctl restart containerd",
+        "systemctl status kubelet",
+        "echo \"200000 100000\" > /sys/fs/cgroup/system.slice/kubelet.service/cpu.max"
+      ],
+      "troubleshootingGuide": "Ensure you run `journalctl -u containerd -p err`, `systemctl restart containerd`, and write `200000 100000` to `/sys/fs/cgroup/system.slice/kubelet.service/cpu.max`."
+    },
+    {
+      "id": "lab-linux-02-namespaces-sysctl",
+      "title": "Linux Kernel Namespaces Isolation, Sysctl Tuning & LVM Volume Provisioning",
+      "difficulty": "Intermediate",
+      "durationMinutes": 30,
+      "xpReward": 175,
+      "scenario": "A new worker node must be hardened for Kubernetes container networking. You must persist IPv4 packet forwarding in sysctl, create an isolated network namespace, and initialize an LVM logical volume for container runtime storage.",
+      "productionContext": "Kubernetes worker nodes require IPv4 packet forwarding enabled in the Linux kernel and dedicated volume storage pools to support container images and volume mounts.",
+      "prerequisites": ["lab-linux-02-systemd-cgroups"],
+      "objectives": [
+        "Enable IPv4 packet forwarding using sysctl -w net.ipv4.ip_forward=1",
+        "Create an isolated network namespace netns-worker and verify with ip netns list",
+        "Initialize LVM physical volume, volume group, and logical volume lv_containerd"
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Tune Kernel IPv4 Forwarding",
+          "instruction": "Enable IPv4 packet forwarding using `sysctl -w net.ipv4.ip_forward=1`.",
+          "commandHint": "sysctl -w net.ipv4.ip_forward=1"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Create Network Namespace",
+          "instruction": "Provision a new isolated network namespace named `netns-worker`.",
+          "commandHint": "ip netns add netns-worker"
+        },
+        {
+          "stepNumber": 3,
+          "title": "Initialize LVM Storage",
+          "instruction": "Initialize physical volume `/dev/sdb1`, create volume group `vg_k8s`, and allocate a 20GB logical volume `lv_containerd`.",
+          "commandHint": "pvcreate /dev/sdb1 && vgcreate vg_k8s /dev/sdb1 && lvcreate -L 20G -n lv_containerd vg_k8s"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "val-linux-sysctl-01",
+          "description": "Enabled IPv4 packet forwarding via sysctl",
+          "type": "command_executed",
+          "commandSubstring": "sysctl -w net.ipv4.ip_forward=1",
+          "remediation": "Run `sysctl -w net.ipv4.ip_forward=1`."
+        },
+        {
+          "id": "val-linux-netns-01",
+          "description": "Created isolated network namespace netns-worker",
+          "type": "command_executed",
+          "commandSubstring": "ip netns add netns-worker",
+          "remediation": "Run `ip netns add netns-worker`."
+        },
+        {
+          "id": "val-linux-lvm-01",
+          "description": "Provisioned LVM logical volume lv_containerd",
+          "type": "command_executed",
+          "commandSubstring": "lvcreate -L 20G -n lv_containerd vg_k8s",
+          "remediation": "Run `pvcreate /dev/sdb1`, `vgcreate vg_k8s /dev/sdb1`, and `lvcreate -L 20G -n lv_containerd vg_k8s`."
+        }
+      ],
+      "solutionCommands": [
+        "sysctl -w net.ipv4.ip_forward=1",
+        "ip netns add netns-worker",
+        "pvcreate /dev/sdb1",
+        "vgcreate vg_k8s /dev/sdb1",
+        "lvcreate -L 20G -n lv_containerd vg_k8s"
+      ],
+      "troubleshootingGuide": "Ensure you enable forwarding via sysctl, create the network namespace `netns-worker`, and execute `lvcreate -L 20G -n lv_containerd vg_k8s`."
+    }
+  ],
+  "assessmentQuestions": [
+    {
+      "id": "q-linux-adm-01",
+      "question": "What is the primary difference between Linux cgroups v1 and cgroups v2?",
+      "options": [
+        "Cgroups v2 implements a unified single-hierarchy tree where each process belongs to exactly one cgroup",
+        "Cgroups v2 only supports memory limits and removes CPU accounting",
+        "Cgroups v2 requires root privileges for all container runtimes",
+        "Cgroups v2 is managed exclusively via iptables rather than systemd"
+      ],
+      "correctIndex": 0,
+      "explanation": "Cgroups v2 replaces the multiple orthogonal controller hierarchies of v1 with a single unified hierarchy, eliminating controller resource deadlock and enabling proper co-ordinated writeback throttling."
+    },
+    {
+      "id": "q-linux-adm-02",
+      "question": "Which Linux namespace isolates the system hostname and domain name?",
+      "options": [
+        "UTS Namespace",
+        "PID Namespace",
+        "MNT Namespace",
+        "NET Namespace"
+      ],
+      "correctIndex": 0,
+      "explanation": "The UTS (UNIX Timesharing System) namespace isolates hostnames and NIS domain names, allowing each container to have its own distinct hostname (e.g., matching the Pod name)."
+    }
+  ]
+}

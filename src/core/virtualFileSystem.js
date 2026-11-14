@@ -663,11 +663,43 @@ class VirtualFileSystem {
     this.mkdir('/bin');
     this.mkdir('/etc/kubernetes/manifests');
     this.mkdir('/etc/kubernetes/pki');
+    this.mkdir('/etc/sysctl.d');
     this.mkdir('/var/lib/etcd');
     this.mkdir('/var/log/pods');
+    this.mkdir('/var/log/nginx');
+    this.mkdir('/sys/fs/cgroup/system.slice/kubelet.service');
+    this.mkdir('/sys/fs/cgroup/system.slice/containerd.service');
     this.mkdir('/root/.kube');
     this.mkdir('/home/learner/.kube');
     this.mkdir('/tmp', { mode: 0o1777 });
+
+    // Linux cgroups v2 resource hierarchy
+    this.writeFile('/sys/fs/cgroup/cpu.max', 'max 100000\n', { mode: 0o644, uid: 0, gid: 0 });
+    this.writeFile('/sys/fs/cgroup/memory.max', 'max\n', { mode: 0o644, uid: 0, gid: 0 });
+    this.writeFile('/sys/fs/cgroup/cgroup.procs', '1\n2\n100\n1420\n', { mode: 0o644, uid: 0, gid: 0 });
+    this.writeFile('/sys/fs/cgroup/system.slice/kubelet.service/cpu.max', 'max 100000\n', { mode: 0o644, uid: 0, gid: 0 });
+    this.writeFile('/sys/fs/cgroup/system.slice/kubelet.service/memory.max', '2147483648\n', { mode: 0o644, uid: 0, gid: 0 });
+    this.writeFile('/sys/fs/cgroup/system.slice/containerd.service/cpu.max', 'max 100000\n', { mode: 0o644, uid: 0, gid: 0 });
+    this.writeFile('/sys/fs/cgroup/system.slice/containerd.service/memory.max', '1073741824\n', { mode: 0o644, uid: 0, gid: 0 });
+
+    // Linux kernel sysctl CRI defaults
+    this.writeFile(
+      '/etc/sysctl.d/99-kubernetes-cri.conf',
+      'net.bridge.bridge-nf-call-iptables = 1\nnet.ipv4.ip_forward = 1\nnet.bridge.bridge-nf-call-ip6tables = 1\n',
+      { mode: 0o644, uid: 0, gid: 0 }
+    );
+
+    // Production Access Log Sample for Streaming Pipelines
+    this.writeFile(
+      '/var/log/nginx/access.log',
+      '192.168.1.10 - - [14/Nov/2026:08:00:01 +0000] "GET /api/v1/health HTTP/1.1" 200 45 "-" "curl/7.88.1"\n' +
+      '192.168.1.105 - - [14/Nov/2026:08:00:15 +0000] "POST /api/v1/checkout HTTP/1.1" 500 128 "-" "Mozilla/5.0"\n' +
+      '192.168.1.105 - - [14/Nov/2026:08:00:18 +0000] "POST /api/v1/checkout HTTP/1.1" 500 128 "-" "Mozilla/5.0"\n' +
+      '192.168.1.42 - - [14/Nov/2026:08:01:22 +0000] "GET /index.html HTTP/1.1" 200 2340 "-" "Mozilla/5.0"\n' +
+      '192.168.1.105 - - [14/Nov/2026:08:01:45 +0000] "POST /api/v1/checkout HTTP/1.1" 500 128 "-" "Mozilla/5.0"\n' +
+      '192.168.1.99 - - [14/Nov/2026:08:02:10 +0000] "GET /api/v1/items HTTP/1.1" 200 892 "-" "curl/7.88.1"\n',
+      { mode: 0o644, uid: 0, gid: 0 }
+    );
 
     // Host & DNS Configuration
     this.writeFile(

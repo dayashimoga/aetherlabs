@@ -100,7 +100,8 @@
     'kubectl', 'k', 'helm', 'kustomize', 'docker', 'crictl', 'argocd', 'flux',
     'istioctl', 'linkerd', 'tofu', 'terraform', 'aws', 'az', 'gcloud',
     'trivy', 'falco', 'cosign', 'k8sgpt', 'aiops', 'promql', 'logql', 'velero',
-    'etcdctl', 'kubeadm', 'systemctl', 'journalctl', 'sysctl',
+    'etcdctl', 'kubeadm', 'systemctl', 'journalctl', 'sysctl', 'unshare',
+    'pvcreate', 'pvs', 'pvdisplay', 'vgcreate', 'vgs', 'vgdisplay', 'lvcreate', 'lvs', 'lvdisplay',
     'ip', 'iptables', 'ss', 'dig', 'nslookup', 'curl', 'ping', 'traceroute', 'nc',
     'git', 'cat', 'ls', 'cd', 'mkdir', 'rm', 'cp', 'mv', 'chmod', 'chown', 'ln',
     'find', 'grep', 'awk', 'sed', 'jq', 'env', 'export', 'alias', 'echo', 'clear', 'pwd'
