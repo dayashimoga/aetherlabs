@@ -1440,6 +1440,617 @@ const INCIDENT_SCENARIOS = [
   }
 ];
 
+const EXPANDED_INCIDENT_SCENARIOS = [
+  {
+    "id": "inc-16-istio-mtls-strict-drop",
+    "title": "SEV-1: Service Mesh Strict mTLS Traffic Drop (Missing Sidecar)",
+    "severity": "SEV-1 (P0)",
+    "domainId": "istio-service-mesh",
+    "estimatedMttrMinutes": 10,
+    "xpReward": 300,
+    "alertSummary": "PagerDuty Alert: Connection reset (ECONNRESET) between payment-ingress and billing-svc in mesh-prod.",
+    "customerImpact": "Checkout API fails to communicate with billing service due to strict mutual TLS handshake rejection.",
+    "symptoms": [
+      "In mesh-prod, PeerAuthentication default enforces mode STRICT.",
+      "Caller pod does not present an Istio client certificate, resulting in TCP handshake terminations."
+    ],
+    "diagnosticHints": [
+      "Inspect PeerAuthentication mode in mesh-prod: kubectl get peerauthentication -n mesh-prod.",
+      "Temporarily relax mode to PERMISSIVE to restore traffic while sidecars are deployed."
+    ],
+    "initialClusterState": {
+      "resources": [
+        {
+          "apiVersion": "security.istio.io/v1beta1",
+          "kind": "PeerAuthentication",
+          "metadata": { "name": "default", "namespace": "mesh-prod" },
+          "spec": { "mtls": { "mode": "STRICT" } }
+        },
+        {
+          "apiVersion": "v1",
+          "kind": "Service",
+          "metadata": { "name": "billing-svc", "namespace": "mesh-prod" },
+          "spec": { "selector": { "app": "billing-api" }, "ports": [{ "port": 8080 }] }
+        }
+      ]
+    },
+    "validationRules": [
+      {
+        "id": "inc-16-r1",
+        "description": "PeerAuthentication mesh-prod/default mtls mode is PERMISSIVE",
+        "type": "resource_field_equals",
+        "kind": "PeerAuthentication",
+        "name": "default",
+        "namespace": "mesh-prod",
+        "fieldPath": "spec.mtls.mode",
+        "expectedValue": "PERMISSIVE",
+        "remediation": "Patch PeerAuthentication default to PERMISSIVE in namespace mesh-prod"
+      }
+    ],
+    "solutionCommands": [
+      "kubectl patch peerauthentication default -n mesh-prod -p '{\"spec\":{\"mtls\":{\"mode\":\"PERMISSIVE\"}}}'"
+    ],
+    "category": "networking_outage"
+  },
+  {
+    "id": "inc-17-linkerd-retry-budget-exhaustion",
+    "title": "SEV-2: Linkerd ServiceProfile Retry Storm Rejection",
+    "severity": "SEV-2 (P1)",
+    "domainId": "linkerd-service-mesh",
+    "estimatedMttrMinutes": 10,
+    "xpReward": 250,
+    "alertSummary": "PagerDuty Alert: HTTP 504 Gateway Timeout spike during downstream rolling restart.",
+    "customerImpact": "Intermittent transient network errors fail immediately instead of retrying, causing user-facing 500 errors.",
+    "symptoms": [
+      "Linkerd proxy logs show retry budget zeroed out.",
+      "ServiceProfile retryBudget specifies retryRatio: 0."
+    ],
+    "diagnosticHints": [
+      "Check ServiceProfile retryBudget in mesh-prod namespace.",
+      "Adjust retryRatio to 0.2 to allow up to 20% retry overhead."
+    ],
+    "initialClusterState": {
+      "resources": [
+        {
+          "apiVersion": "linkerd.io/v1alpha2",
+          "kind": "ServiceProfile",
+          "metadata": { "name": "payment-service.mesh-prod.svc.cluster.local", "namespace": "mesh-prod" },
+          "spec": {
+            "retryBudget": {
+              "retryRatio": 0.0,
+              "minRetriesPerSecond": 0
+            }
+          }
+        }
+      ]
+    },
+    "validationRules": [
+      {
+        "id": "inc-17-r1",
+        "description": "ServiceProfile retryBudget retryRatio is 0.2",
+        "type": "resource_field_equals",
+        "kind": "ServiceProfile",
+        "name": "payment-service.mesh-prod.svc.cluster.local",
+        "namespace": "mesh-prod",
+        "fieldPath": "spec.retryBudget.retryRatio",
+        "expectedValue": 0.2,
+        "remediation": "Patch ServiceProfile retryRatio to 0.2 in namespace mesh-prod"
+      }
+    ],
+    "solutionCommands": [
+      "kubectl patch serviceprofile payment-service.mesh-prod.svc.cluster.local -n mesh-prod -p '{\"spec\":{\"retryBudget\":{\"retryRatio\":0.2}}}'"
+    ],
+    "category": "slow_app"
+  },
+  {
+    "id": "inc-18-prometheus-rule-syntax-error",
+    "title": "SEV-2: Prometheus Operator Rule Evaluation Interval Invalid",
+    "severity": "SEV-2 (P1)",
+    "domainId": "prometheus-monitoring",
+    "estimatedMttrMinutes": 10,
+    "xpReward": 250,
+    "alertSummary": "PagerDuty Alert: PrometheusRuleGroupFailedEvaluation in namespace monitoring.",
+    "customerImpact": "Alertmanager does not receive alerts for core microservices due to invalid evaluation interval.",
+    "symptoms": [
+      "Prometheus logs report invalid rule evaluation interval 0s.",
+      "PrometheusRule core-api-alerts has invalid interval."
+    ],
+    "diagnosticHints": [
+      "Inspect PrometheusRule definition in monitoring namespace.",
+      "Patch spec.interval to 15s."
+    ],
+    "initialClusterState": {
+      "resources": [
+        {
+          "apiVersion": "monitoring.coreos.com/v1",
+          "kind": "PrometheusRule",
+          "metadata": { "name": "core-api-alerts", "namespace": "monitoring" },
+          "spec": {
+            "interval": "0s",
+            "groups": [
+              {
+                "name": "core.rules",
+                "rules": [
+                  {
+                    "alert": "HighErrorRate",
+                    "expr": "job:http_errors:rate5m"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "validationRules": [
+      {
+        "id": "inc-18-r1",
+        "description": "PrometheusRule interval is 15s",
+        "type": "resource_field_equals",
+        "kind": "PrometheusRule",
+        "name": "core-api-alerts",
+        "namespace": "monitoring",
+        "fieldPath": "spec.interval",
+        "expectedValue": "15s",
+        "remediation": "Patch PrometheusRule interval to 15s"
+      }
+    ],
+    "solutionCommands": [
+      "kubectl patch prometheusrule core-api-alerts -n monitoring -p '{\"spec\":{\"interval\":\"15s\"}}'"
+    ],
+    "category": "slow_app"
+  },
+  {
+    "id": "inc-19-keda-scaledobject-auth-failure",
+    "title": "SEV-1: KEDA ScaledObject Trigger Starvation Under Queue Spike",
+    "severity": "SEV-1 (P0)",
+    "domainId": "performance-engineering",
+    "estimatedMttrMinutes": 10,
+    "xpReward": 300,
+    "alertSummary": "PagerDuty Alert: RabbitMQ message backlog exceeding 50,000 items while worker pods remain at 0 replicas.",
+    "customerImpact": "Background transactions are stalled; asynchronous order processing queue is backing up.",
+    "symptoms": [
+      "Deployment order-processor is at 0 replicas.",
+      "ScaledObject minReplicaCount is 0 and fails to scale up."
+    ],
+    "diagnosticHints": [
+      "Inspect ScaledObject order-processor-scaler in namespace production.",
+      "Scale the worker deployment manually and set ScaledObject minReplicaCount to 5."
+    ],
+    "initialClusterState": {
+      "resources": [
+        {
+          "apiVersion": "keda.sh/v1alpha1",
+          "kind": "ScaledObject",
+          "metadata": { "name": "order-processor-scaler", "namespace": "production" },
+          "spec": {
+            "scaleTargetRef": { "name": "order-processor" },
+            "minReplicaCount": 0,
+            "maxReplicaCount": 50
+          }
+        },
+        {
+          "apiVersion": "apps/v1",
+          "kind": "Deployment",
+          "metadata": { "name": "order-processor", "namespace": "production" },
+          "spec": {
+            "replicas": 0,
+            "selector": { "matchLabels": { "app": "order-processor" } },
+            "template": {
+              "metadata": { "labels": { "app": "order-processor" } },
+              "spec": { "containers": [{ "name": "worker", "image": "order-worker:v1" }] }
+            }
+          }
+        }
+      ]
+    },
+    "validationRules": [
+      {
+        "id": "inc-19-r1",
+        "description": "ScaledObject minReplicaCount is 5",
+        "type": "resource_field_equals",
+        "kind": "ScaledObject",
+        "name": "order-processor-scaler",
+        "namespace": "production",
+        "fieldPath": "spec.minReplicaCount",
+        "expectedValue": 5,
+        "remediation": "Patch ScaledObject minReplicaCount to 5"
+      },
+      {
+        "id": "inc-19-r2",
+        "description": "Deployment order-processor has at least 5 replicas",
+        "type": "resource_field_equals",
+        "kind": "Deployment",
+        "name": "order-processor",
+        "namespace": "production",
+        "fieldPath": "spec.replicas",
+        "expectedValue": 5,
+        "remediation": "Scale Deployment order-processor to 5 replicas"
+      }
+    ],
+    "solutionCommands": [
+      "kubectl patch scaledobject order-processor-scaler -n production -p '{\"spec\":{\"minReplicaCount\":5}}\'",
+      "kubectl scale deployment order-processor -n production --replicas=5"
+    ],
+    "category": "slow_app"
+  },
+  {
+    "id": "inc-20-velero-backup-dr-mismatch",
+    "title": "SEV-1: Disaster Recovery Velero Backup Target Unavailable",
+    "severity": "SEV-1 (P0)",
+    "domainId": "production-operations",
+    "estimatedMttrMinutes": 10,
+    "xpReward": 300,
+    "alertSummary": "PagerDuty Alert: Velero BackupStorageLocationUnavailable in namespace velero.",
+    "customerImpact": "Automated disaster recovery backups are failing; production RPO SLA of 1 hour is violated.",
+    "symptoms": [
+      "Velero BackupStorageLocation default reports phase Unavailable.",
+      "S3 bucket name in spec is set to invalid-backup-bucket."
+    ],
+    "diagnosticHints": [
+      "Check BackupStorageLocation spec in namespace velero.",
+      "Patch objectStorage.bucket to prod-backups-bucket and set phase to Available."
+    ],
+    "initialClusterState": {
+      "resources": [
+        {
+          "apiVersion": "velero.io/v1",
+          "kind": "BackupStorageLocation",
+          "metadata": { "name": "default", "namespace": "velero" },
+          "spec": {
+            "provider": "aws",
+            "objectStorage": { "bucket": "invalid-backup-bucket", "prefix": "backups" }
+          },
+          "status": { "phase": "Unavailable" }
+        }
+      ]
+    },
+    "validationRules": [
+      {
+        "id": "inc-20-r1",
+        "description": "BackupStorageLocation default bucket is prod-backups-bucket",
+        "type": "resource_field_equals",
+        "kind": "BackupStorageLocation",
+        "name": "default",
+        "namespace": "velero",
+        "fieldPath": "spec.objectStorage.bucket",
+        "expectedValue": "prod-backups-bucket",
+        "remediation": "Set objectStorage.bucket to prod-backups-bucket"
+      },
+      {
+        "id": "inc-20-r2",
+        "description": "BackupStorageLocation default status.phase is Available",
+        "type": "resource_field_equals",
+        "kind": "BackupStorageLocation",
+        "name": "default",
+        "namespace": "velero",
+        "fieldPath": "status.phase",
+        "expectedValue": "Available",
+        "remediation": "Ensure BackupStorageLocation phase is Available"
+      }
+    ],
+    "solutionCommands": [
+      "kubectl patch backupstoragelocation default -n velero -p '{\"spec\":{\"objectStorage\":{\"bucket\":\"prod-backups-bucket\"}},\"status\":{\"phase\":\"Available\"}}\'"
+    ],
+    "category": "storage_outage"
+  },
+  {
+    "id": "inc-21-apf-flowschema-drop",
+    "title": "SEV-1: API Priority & Fairness (APF) Rate Limiting Dropping Admin Operations",
+    "severity": "SEV-1 (P0)",
+    "domainId": "k8s-production-operations",
+    "estimatedMttrMinutes": 10,
+    "xpReward": 300,
+    "alertSummary": "PagerDuty Alert: Kubernetes API server returning HTTP 429 to platform automation agents.",
+    "customerImpact": "Deployment scripts and incident response commands are throttled by API Priority and Fairness.",
+    "symptoms": [
+      "FlowSchema admin-governance-flow maps to low-priority queue unmatched-low-priority.",
+      "High queue drop rate on API server."
+    ],
+    "diagnosticHints": [
+      "Inspect FlowSchema: kubectl get flowschema admin-governance-flow -o yaml.",
+      "Patch priorityLevelConfiguration to workload-high."
+    ],
+    "initialClusterState": {
+      "resources": [
+        {
+          "apiVersion": "flowcontrol.apiserver.k8s.io/v1",
+          "kind": "FlowSchema",
+          "metadata": { "name": "admin-governance-flow" },
+          "spec": {
+            "priorityLevelConfiguration": { "name": "unmatched-low-priority" }
+          }
+        }
+      ]
+    },
+    "validationRules": [
+      {
+        "id": "inc-21-r1",
+        "description": "FlowSchema priorityLevelConfiguration is workload-high",
+        "type": "resource_field_equals",
+        "kind": "FlowSchema",
+        "name": "admin-governance-flow",
+        "namespace": "default",
+        "fieldPath": "spec.priorityLevelConfiguration.name",
+        "expectedValue": "workload-high",
+        "remediation": "Patch FlowSchema priorityLevelConfiguration to workload-high"
+      }
+    ],
+    "solutionCommands": [
+      "kubectl patch flowschema admin-governance-flow -p '{\"spec\":{\"priorityLevelConfiguration\":{\"name\":\"workload-high\"}}}\'"
+    ],
+    "category": "node_outage"
+  },
+  {
+    "id": "inc-22-cilium-clustermesh-partition",
+    "title": "SEV-1: Multi-Cluster Cilium ClusterMesh Network Partition",
+    "severity": "SEV-1 (P0)",
+    "domainId": "multi-cluster-management",
+    "estimatedMttrMinutes": 10,
+    "xpReward": 300,
+    "alertSummary": "PagerDuty Alert: Cilium ClusterMesh heartbeat lost between primary and secondary clusters.",
+    "customerImpact": "Cross-cluster global service routing is partitioned; traffic fails over to degraded local instances.",
+    "symptoms": [
+      "Cilium ClusterMesh secret has corrupt encryption key.",
+      "Cilium status reports ClusterMesh disconnected."
+    ],
+    "diagnosticHints": [
+      "Check Secret clustermesh-secret in kube-system namespace.",
+      "Update data.key to valid-clustermesh-key."
+    ],
+    "initialClusterState": {
+      "resources": [
+        {
+          "apiVersion": "v1",
+          "kind": "Secret",
+          "metadata": { "name": "clustermesh-secret", "namespace": "kube-system" },
+          "data": { "key": "corrupted-mesh-key" }
+        }
+      ]
+    },
+    "validationRules": [
+      {
+        "id": "inc-22-r1",
+        "description": "Secret clustermesh-secret data.key is valid-clustermesh-key",
+        "type": "resource_field_equals",
+        "kind": "Secret",
+        "name": "clustermesh-secret",
+        "namespace": "kube-system",
+        "fieldPath": "data.key",
+        "expectedValue": "valid-clustermesh-key",
+        "remediation": "Patch Secret clustermesh-secret with valid-clustermesh-key"
+      }
+    ],
+    "solutionCommands": [
+      "kubectl patch secret clustermesh-secret -n kube-system -p '{\"data\":{\"key\":\"valid-clustermesh-key\"}}\'"
+    ],
+    "category": "networking_outage"
+  },
+  {
+    "id": "inc-23-tetragon-ebpf-kill-loop",
+    "title": "SEV-1: Tetragon eBPF Policy Terminating Critical Microservice Pod",
+    "severity": "SEV-1 (P0)",
+    "domainId": "security-engineering",
+    "estimatedMttrMinutes": 10,
+    "xpReward": 300,
+    "alertSummary": "PagerDuty Alert: Payment service pod repeatedly receiving SIGKILL from kernel eBPF probe.",
+    "customerImpact": "Payment transactions fail; payment-service pods are killed instantaneously on process start.",
+    "symptoms": [
+      "Kernel logs report: Tetragon Sigkill executed on node binary.",
+      "TracingPolicy runtime-protection matchArgs includes /usr/bin/node by mistake."
+    ],
+    "diagnosticHints": [
+      "Inspect TracingPolicy runtime-protection in production namespace.",
+      "Remove /usr/bin/node and restore matchArgs to /bin/netcat and /usr/bin/nc, then scale payment-service to 2 replicas."
+    ],
+    "initialClusterState": {
+      "resources": [
+        {
+          "apiVersion": "cilium.io/v1alpha1",
+          "kind": "TracingPolicy",
+          "metadata": { "name": "runtime-protection", "namespace": "production" },
+          "spec": {
+            "kprobes": [
+              {
+                "call": "sys_execve",
+                "selectors": [
+                  {
+                    "matchArgs": [
+                      {
+                        "index": 0,
+                        "values": ["/usr/bin/node", "/bin/netcat"]
+                      }
+                    ],
+                    "matchActions": [{ "action": "Sigkill" }]
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "apiVersion": "apps/v1",
+          "kind": "Deployment",
+          "metadata": { "name": "payment-service", "namespace": "production" },
+          "spec": {
+            "replicas": 0,
+            "selector": { "matchLabels": { "app": "payment-service" } },
+            "template": {
+              "metadata": { "labels": { "app": "payment-service" } },
+              "spec": { "containers": [{ "name": "node-app", "image": "payment-service:v2" }] }
+            }
+          }
+        }
+      ]
+    },
+    "validationRules": [
+      {
+        "id": "inc-23-r1",
+        "description": "TracingPolicy runtime-protection targets /bin/netcat",
+        "type": "resource_field_equals",
+        "kind": "TracingPolicy",
+        "name": "runtime-protection",
+        "namespace": "production",
+        "fieldPath": "spec.kprobes[0].selectors[0].matchArgs[0].values[0]",
+        "expectedValue": "/bin/netcat",
+        "remediation": "Patch TracingPolicy to target /bin/netcat"
+      },
+      {
+        "id": "inc-23-r2",
+        "description": "Deployment payment-service has 2 replicas",
+        "type": "resource_field_equals",
+        "kind": "Deployment",
+        "name": "payment-service",
+        "namespace": "production",
+        "fieldPath": "spec.replicas",
+        "expectedValue": 2,
+        "remediation": "Scale Deployment payment-service to 2 replicas"
+      }
+    ],
+    "solutionCommands": [
+      "kubectl patch tracingpolicy runtime-protection -n production -p '{\"spec\":{\"kprobes\":[{\"call\":\"sys_execve\",\"selectors\":[{\"matchArgs\":[{\"values\":[\"/bin/netcat\",\"/usr/bin/nc\"]}]}]}]}}'",
+      "kubectl scale deployment payment-service -n production --replicas=2"
+    ],
+    "category": "pod_restarting"
+  },
+  {
+    "id": "inc-24-cqrs-projection-lag-staleness",
+    "title": "SEV-2: CQRS Read Model Event Consumer Crash & Stale Projections",
+    "severity": "SEV-2 (P1)",
+    "domainId": "cloud-architecture-patterns",
+    "estimatedMttrMinutes": 10,
+    "xpReward": 250,
+    "alertSummary": "PagerDuty Alert: Materialized read view lag exceeding 4 hours on order projections.",
+    "customerImpact": "User dashboards display outdated order statuses; read model projection workers are down.",
+    "symptoms": [
+      "Deployment order-projector is at 0 replicas.",
+      "ConfigMap cqrs-event-stream-spec status is lagging."
+    ],
+    "diagnosticHints": [
+      "Inspect ConfigMap cqrs-event-stream-spec and Deployment order-projector in production namespace.",
+      "Set status to reconciled and scale order-projector to 3 replicas."
+    ],
+    "initialClusterState": {
+      "resources": [
+        {
+          "apiVersion": "v1",
+          "kind": "ConfigMap",
+          "metadata": { "name": "cqrs-event-stream-spec", "namespace": "production" },
+          "data": { "status": "lagging", "streamName": "order-events" }
+        },
+        {
+          "apiVersion": "apps/v1",
+          "kind": "Deployment",
+          "metadata": { "name": "order-projector", "namespace": "production" },
+          "spec": {
+            "replicas": 0,
+            "selector": { "matchLabels": { "app": "order-projector" } },
+            "template": {
+              "metadata": { "labels": { "app": "order-projector" } },
+              "spec": { "containers": [{ "name": "projector", "image": "order-projector:v1" }] }
+            }
+          }
+        }
+      ]
+    },
+    "validationRules": [
+      {
+        "id": "inc-24-r1",
+        "description": "ConfigMap cqrs-event-stream-spec status is reconciled",
+        "type": "resource_field_equals",
+        "kind": "ConfigMap",
+        "name": "cqrs-event-stream-spec",
+        "namespace": "production",
+        "fieldPath": "data.status",
+        "expectedValue": "reconciled",
+        "remediation": "Patch ConfigMap status to reconciled"
+      },
+      {
+        "id": "inc-24-r2",
+        "description": "Deployment order-projector has 3 replicas",
+        "type": "resource_field_equals",
+        "kind": "Deployment",
+        "name": "order-projector",
+        "namespace": "production",
+        "fieldPath": "spec.replicas",
+        "expectedValue": 3,
+        "remediation": "Scale Deployment order-projector to 3 replicas"
+      }
+    ],
+    "solutionCommands": [
+      "kubectl patch configmap cqrs-event-stream-spec -n production -p '{\"data\":{\"status\":\"reconciled\"}}'",
+      "kubectl scale deployment order-projector -n production --replicas=3"
+    ],
+    "category": "slow_app"
+  },
+  {
+    "id": "inc-25-landing-zone-quota-exhaustion",
+    "title": "SEV-1: Enterprise Multi-Tenant Namespace Quota Exhaustion",
+    "severity": "SEV-1 (P0)",
+    "domainId": "enterprise-architecture",
+    "estimatedMttrMinutes": 10,
+    "xpReward": 300,
+    "alertSummary": "PagerDuty Alert: ResourceQuota exceeded in namespace enterprise-governance.",
+    "customerImpact": "Emergency security hotfix pods cannot be scheduled due to namespace compute exhaustion.",
+    "symptoms": [
+      "ResourceQuota enterprise-governance-quota caps requests.cpu at 1000m.",
+      "Pods fail admission with exceeded quota."
+    ],
+    "diagnosticHints": [
+      "Inspect ResourceQuota in namespace enterprise-governance.",
+      "Patch requests.cpu to 8000m and requests.memory to 16Gi."
+    ],
+    "initialClusterState": {
+      "resources": [
+        {
+          "apiVersion": "v1",
+          "kind": "ResourceQuota",
+          "metadata": { "name": "enterprise-governance-quota", "namespace": "enterprise-governance" },
+          "spec": {
+            "hard": {
+              "requests.cpu": "1000m",
+              "requests.memory": "2Gi"
+            }
+          }
+        }
+      ]
+    },
+    "validationRules": [
+      {
+        "id": "inc-25-r1",
+        "description": "ResourceQuota requests.cpu is 8000m",
+        "type": "resource_field_equals",
+        "kind": "ResourceQuota",
+        "name": "enterprise-governance-quota",
+        "namespace": "enterprise-governance",
+        "fieldPath": "spec.hard['requests.cpu']",
+        "expectedValue": "8000m",
+        "remediation": "Patch ResourceQuota requests.cpu to 8000m"
+      },
+      {
+        "id": "inc-25-r2",
+        "description": "ResourceQuota requests.memory is 16Gi",
+        "type": "resource_field_equals",
+        "kind": "ResourceQuota",
+        "name": "enterprise-governance-quota",
+        "namespace": "enterprise-governance",
+        "fieldPath": "spec.hard['requests.memory']",
+        "expectedValue": "16Gi",
+        "remediation": "Patch ResourceQuota requests.memory to 16Gi"
+      }
+    ],
+    "solutionCommands": [
+      "kubectl patch resourcequota enterprise-governance-quota -n enterprise-governance -p '{\"spec\":{\"hard\":{\"requests.cpu\":\"8000m\",\"requests.memory\":\"16Gi\"}}}'"
+    ],
+    "category": "node_outage"
+  }
+];
+
+const V4_CHAOS_WAR_ROOM_INCIDENTS = Object.freeze([
+  ...INCIDENT_SCENARIOS,
+  ...EXPANDED_INCIDENT_SCENARIOS
+]);
+
 let ValidationEngine;
 try {
   ValidationEngine = require('./validationEngine').ValidationEngine;
@@ -1450,8 +2061,32 @@ try {
 class IncidentEngine {
   constructor(validationEngine = null, options = {}) {
     this.validationEngine = validationEngine || (ValidationEngine ? new ValidationEngine() : null);
-    this.scenarios = options.scenarios || INCIDENT_SCENARIOS;
+    this.scenarios = options.scenarios || (options.expanded ? V4_CHAOS_WAR_ROOM_INCIDENTS : INCIDENT_SCENARIOS);
+    this.warRoomScenarios = options.warRoomScenarios || V4_CHAOS_WAR_ROOM_INCIDENTS;
     this.stopwatches = new Map();
+  }
+
+  getWarRoomScenarios() {
+    return this.warRoomScenarios;
+  }
+
+  listWarRoomIncidents(category = null) {
+    let list = this.warRoomScenarios;
+    if (category) {
+      const normalized = this._normalizeCategory(category);
+      list = list.filter((inc) => this._normalizeCategory(inc.category) === normalized);
+    }
+    return list.map((inc) => ({
+      id: inc.id,
+      title: inc.title,
+      category: inc.category,
+      severity: inc.severity,
+      domainId: inc.domainId,
+      estimatedMttrMinutes: inc.estimatedMttrMinutes,
+      xpReward: inc.xpReward,
+      alertSummary: inc.alertSummary,
+      customerImpact: inc.customerImpact
+    }));
   }
 
   _normalizeCategory(cat) {
@@ -1479,7 +2114,11 @@ class IncidentEngine {
   }
 
   getIncident(incidentId) {
-    return this.scenarios.find((inc) => inc.id === incidentId) || null;
+    return (
+      this.scenarios.find((inc) => inc.id === incidentId) ||
+      this.warRoomScenarios.find((inc) => inc.id === incidentId) ||
+      null
+    );
   }
 
   getIncidentsByCategory(category) {
@@ -1542,9 +2181,11 @@ class IncidentEngine {
       startedAt: record.startedAt,
       stoppedAt: record.stoppedAt,
       elapsedMs: record.elapsedMs,
+      durationMs: record.elapsedMs,
       elapsedFormatted,
       achievedMttr,
-      estimatedMttrMinutes: estimatedMinutes
+      estimatedMttrMinutes: estimatedMinutes,
+      active: record.active
     };
   }
 
@@ -1560,6 +2201,7 @@ class IncidentEngine {
       startedAt: record.startedAt,
       stoppedAt: record.stoppedAt,
       elapsedMs,
+      durationMs: elapsedMs,
       elapsedFormatted: minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`,
       active: record.active
     };
@@ -1620,6 +2262,8 @@ class IncidentEngine {
 module.exports = {
   IncidentEngine,
   INCIDENT_SCENARIOS,
+  EXPANDED_INCIDENT_SCENARIOS,
+  V4_CHAOS_WAR_ROOM_INCIDENTS,
   CATEGORY_WEBSITE_DOWN,
   CATEGORY_POD_RESTARTING,
   CATEGORY_SLOW_APP,

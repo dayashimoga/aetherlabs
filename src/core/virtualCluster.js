@@ -152,7 +152,16 @@ const KIND_ALIASES = {
   dbclusters: 'DatabaseCluster',
   tracingpolicy: 'TracingPolicy',
   tracingpolicies: 'TracingPolicy',
-  tp: 'TracingPolicy'
+  tp: 'TracingPolicy',
+  scaledobject: 'ScaledObject',
+  scaledobjects: 'ScaledObject',
+  so: 'ScaledObject',
+  backupstoragelocation: 'BackupStorageLocation',
+  backupstoragelocations: 'BackupStorageLocation',
+  bsl: 'BackupStorageLocation',
+  serviceprofile: 'ServiceProfile',
+  serviceprofiles: 'ServiceProfile',
+  sp: 'ServiceProfile'
 };
 
 const CLUSTER_SCOPED_KINDS = new Set([

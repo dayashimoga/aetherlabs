@@ -106,7 +106,22 @@ const KIND_ALIASES = {
   tp: 'TracingPolicy',
   inferenceservice: 'InferenceService',
   inferenceservices: 'InferenceService',
-  isvc: 'InferenceService'
+  isvc: 'InferenceService',
+  scaledobject: 'ScaledObject',
+  scaledobjects: 'ScaledObject',
+  so: 'ScaledObject',
+  backupstoragelocation: 'BackupStorageLocation',
+  backupstoragelocations: 'BackupStorageLocation',
+  bsl: 'BackupStorageLocation',
+  serviceprofile: 'ServiceProfile',
+  serviceprofiles: 'ServiceProfile',
+  sp: 'ServiceProfile',
+  pa: 'PeerAuthentication',
+  peerauthentication: 'PeerAuthentication',
+  peerauthentications: 'PeerAuthentication',
+  promrule: 'PrometheusRule',
+  prometheusrule: 'PrometheusRule',
+  prometheusrules: 'PrometheusRule'
 };
 
 const CLUSTER_SCOPED_KINDS = new Set([
