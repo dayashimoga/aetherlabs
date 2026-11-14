@@ -1,0 +1,231 @@
+{
+  "id": "prometheus-monitoring",
+  "title": "Prometheus Monitoring, ServiceMonitors, PromQL & Alerting Rules",
+  "category": "Observability & SRE",
+  "trackId": "track-sre",
+  "version": "1.0.0",
+  "difficulty": "Intermediate",
+  "estimatedHours": 8,
+  "summary": "Master production Prometheus monitoring with the Prometheus Operator: authoring declarative ServiceMonitors for automated target discovery, crafting multi-vector PromQL rate, histogram, and percentile queries, defining PrometheusRule alerts with duration gates, and verifying rule syntax with promtool.",
+  "prerequisites": [
+    "observability-core",
+    "kubernetes-core-v4"
+  ],
+  "learningObjectives": [
+    "Configure declarative target scraping across Kubernetes workloads using Prometheus Operator ServiceMonitors.",
+    "Formulate high-performance PromQL queries using rate, irate, histogram_quantile, and label matching.",
+    "Author PrometheusRule alerting resources with severity labels and validate syntax using promtool check rules."
+  ],
+  "curriculumModules": [
+    {
+      "id": "mod-prom-01",
+      "title": "Prometheus Architecture, Scrape Targets & ServiceMonitors",
+      "conceptSummary": "Prometheus utilizes a pull-based metrics collection model, scraping HTTP /metrics endpoints exposed by instrumented workloads at configured intervals. In Kubernetes, the Prometheus Operator abstracts target registration into declarative ServiceMonitor and PodMonitor Custom Resources (CRDs), dynamically discovering endpoints via label selectors.",
+      "productionArchitecturePattern": "Deploy the Prometheus Operator with dedicated ServiceMonitors per microservice, using selector.matchLabels to decouple monitoring configuration from application deployment lifecycles.",
+      "keyCommands": [
+        "kubectl get servicemonitors -A",
+        "kubectl apply -f /monitoring/payment-servicemonitor.yaml",
+        "promtool check rules /monitoring/payment-alerts.yaml"
+      ]
+    },
+    {
+      "id": "mod-prom-02",
+      "title": "Advanced PromQL & Production Alerting with PrometheusRule",
+      "conceptSummary": "PromQL is a functional query language operating on instant vectors, range vectors, and scalar values. Counter metrics must be wrapped in rate() or increase() to calculate per-second growth while handling counter resets. PrometheusRules declare alert expressions with a 'for' duration clause (e.g. for: 2m) to prevent alert flapping from transient spikes.",
+      "productionArchitecturePattern": "Always validate alerting rules using promtool check rules before pushing changes to GitOps repositories, and ensure all alert definitions include runbook_url and summary annotations.",
+      "keyCommands": [
+        "promtool check rules <file>",
+        "promql 'histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket[5m])) by (le))'",
+        "kubectl get prometheusrules -A"
+      ]
+    }
+  ],
+  "labs": [
+    {
+      "id": "lab-prom-01-servicemonitor-discovery",
+      "title": "Configuring Declarative ServiceMonitor Target Scraping",
+      "difficulty": "Intermediate",
+      "durationMinutes": 20,
+      "xpReward": 150,
+      "scenario": "Configure automated target scraping for financial transactions: author and apply a ServiceMonitor named payment-servicemonitor in namespace monitoring. Target services labeled app: payment-api, with an endpoint named http-metrics on path /metrics with a scrape interval of 15s.",
+      "productionContext": "ServiceMonitors allow application teams to manage their own metrics endpoints independently without modifying core Prometheus server configurations.",
+      "prerequisites": [
+        "lab-obs-01-red-metrics-sli"
+      ],
+      "objectives": [
+        "Author ServiceMonitor manifest for payment-api in /monitoring/payment-servicemonitor.yaml.",
+        "Apply ServiceMonitor payment-servicemonitor in namespace monitoring.",
+        "Verify selector and endpoint interval configuration."
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "apiVersion: monitoring.coreos.com/v1\nkind: ServiceMonitor\nmetadata:\n  name: payment-servicemonitor\n  namespace: monitoring\nspec:\n  selector:\n    matchLabels:\n      app: payment-api\n  endpoints:\n    - port: http-metrics\n      path: /metrics\n      interval: 15s\n",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Author ServiceMonitor manifest",
+          "instruction": "Save the ServiceMonitor definition to /monitoring/payment-servicemonitor.yaml.",
+          "commandHint": "mkdir -p /monitoring\ncat << 'EOF' > /monitoring/payment-servicemonitor.yaml\n...\nEOF"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Apply ServiceMonitor to monitoring namespace",
+          "instruction": "Apply the manifest to namespace monitoring.",
+          "commandHint": "kubectl apply -f /monitoring/payment-servicemonitor.yaml"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "sm-payment-exists",
+          "description": "ServiceMonitor payment-servicemonitor exists in monitoring namespace",
+          "type": "resource_exists",
+          "kind": "ServiceMonitor",
+          "namespace": "monitoring",
+          "name": "payment-servicemonitor",
+          "remediation": "Apply ServiceMonitor payment-servicemonitor in monitoring namespace"
+        },
+        {
+          "id": "sm-selector-matchlabels-app",
+          "description": "ServiceMonitor selector targets app: payment-api",
+          "type": "resource_field_equals",
+          "kind": "ServiceMonitor",
+          "namespace": "monitoring",
+          "name": "payment-servicemonitor",
+          "fieldPath": "spec.selector.matchLabels.app",
+          "expectedValue": "payment-api",
+          "remediation": "Configure spec.selector.matchLabels.app: payment-api"
+        },
+        {
+          "id": "sm-endpoint-interval",
+          "description": "ServiceMonitor endpoint interval is 15s",
+          "type": "resource_field_equals",
+          "kind": "ServiceMonitor",
+          "namespace": "monitoring",
+          "name": "payment-servicemonitor",
+          "fieldPath": "spec.endpoints[0].interval",
+          "expectedValue": "15s",
+          "remediation": "Set spec.endpoints[0].interval: 15s"
+        }
+      ],
+      "solutionCommands": [
+        "mkdir -p /monitoring",
+        "cat << 'EOF' > /monitoring/payment-servicemonitor.yaml\napiVersion: monitoring.coreos.com/v1\nkind: ServiceMonitor\nmetadata:\n  name: payment-servicemonitor\n  namespace: monitoring\nspec:\n  selector:\n    matchLabels:\n      app: payment-api\n  endpoints:\n    - port: http-metrics\n      path: /metrics\n      interval: 15s\nEOF",
+        "kubectl apply -f /monitoring/payment-servicemonitor.yaml"
+      ],
+      "troubleshootingGuide": [
+        {
+          "problem": "ServiceMonitor not found or selector mismatch.",
+          "cause": "Manifest was not applied or labels did not match payment-api.",
+          "solution": "Verify /monitoring/payment-servicemonitor.yaml contains matchLabels app: payment-api and re-apply."
+        }
+      ]
+    },
+    {
+      "id": "lab-prom-02-prometheusrule-promtool",
+      "title": "Authoring Production PrometheusRules and Validating with promtool",
+      "difficulty": "Intermediate",
+      "durationMinutes": 20,
+      "xpReward": 150,
+      "scenario": "Implement automated incident alerting: write a PrometheusRule manifest to /monitoring/payment-alerts.yaml defining rule group payment.rules with alert PaymentHigh5xxRate triggering when rate(http_requests_total{status=~\"5..\"}[5m]) > 0.05 for 2m with label severity: critical. Validate the alerting rule syntax using promtool check rules /monitoring/payment-alerts.yaml, then apply to namespace monitoring.",
+      "productionContext": "Pre-commit promtool validation prevents broken PromQL syntax and missing labels from disrupting control-plane alerting pipelines in production.",
+      "prerequisites": [
+        "lab-prom-01-servicemonitor-discovery"
+      ],
+      "objectives": [
+        "Author PrometheusRule alerting manifest in /monitoring/payment-alerts.yaml.",
+        "Validate syntax using promtool check rules.",
+        "Apply PrometheusRule payment-alerts in namespace monitoring."
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "apiVersion: monitoring.coreos.com/v1\nkind: PrometheusRule\nmetadata:\n  name: payment-alerts\n  namespace: monitoring\nspec:\n  groups:\n    - name: payment.rules\n      rules:\n        - alert: PaymentHigh5xxRate\n          expr: rate(http_requests_total{status=~\"5..\"}[5m]) > 0.05\n          for: 2m\n          labels:\n            severity: critical\n          annotations:\n            summary: Payment service 5xx error rate exceeds 5 percent\n",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Author alerting rule manifest",
+          "instruction": "Save the alert rule to /monitoring/payment-alerts.yaml.",
+          "commandHint": "cat << 'EOF' > /monitoring/payment-alerts.yaml\n...\nEOF"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Validate rule with promtool",
+          "instruction": "Execute promtool check rules to verify syntax.",
+          "commandHint": "promtool check rules /monitoring/payment-alerts.yaml"
+        },
+        {
+          "stepNumber": 3,
+          "title": "Apply rule to cluster",
+          "instruction": "Apply the PrometheusRule to namespace monitoring.",
+          "commandHint": "kubectl apply -f /monitoring/payment-alerts.yaml"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "vfs-alerts-yaml-exists",
+          "description": "/monitoring/payment-alerts.yaml contains PaymentHigh5xxRate",
+          "type": "vfs_file_contains",
+          "path": "/monitoring/payment-alerts.yaml",
+          "pattern": "PaymentHigh5xxRate",
+          "remediation": "Write alert PaymentHigh5xxRate to /monitoring/payment-alerts.yaml"
+        },
+        {
+          "id": "promtool-check-executed",
+          "description": "promtool check rules executed on payment-alerts.yaml",
+          "type": "command_executed",
+          "commandSubstring": "promtool check rules /monitoring/payment-alerts.yaml",
+          "remediation": "Execute promtool check rules /monitoring/payment-alerts.yaml"
+        },
+        {
+          "id": "promrule-payment-alerts-exists",
+          "description": "PrometheusRule payment-alerts exists in namespace monitoring",
+          "type": "resource_exists",
+          "kind": "PrometheusRule",
+          "namespace": "monitoring",
+          "name": "payment-alerts",
+          "remediation": "Apply PrometheusRule payment-alerts in namespace monitoring"
+        }
+      ],
+      "solutionCommands": [
+        "mkdir -p /monitoring",
+        "cat << 'EOF' > /monitoring/payment-alerts.yaml\napiVersion: monitoring.coreos.com/v1\nkind: PrometheusRule\nmetadata:\n  name: payment-alerts\n  namespace: monitoring\nspec:\n  groups:\n    - name: payment.rules\n      rules:\n        - alert: PaymentHigh5xxRate\n          expr: rate(http_requests_total{status=~\"5..\"}[5m]) > 0.05\n          for: 2m\n          labels:\n            severity: critical\n          annotations:\n            summary: Payment service 5xx error rate exceeds 5 percent\nEOF",
+        "promtool check rules /monitoring/payment-alerts.yaml",
+        "kubectl apply -f /monitoring/payment-alerts.yaml"
+      ],
+      "troubleshootingGuide": [
+        {
+          "problem": "promtool reports syntax error or PrometheusRule missing.",
+          "cause": "Indentation errors in YAML or rule was not applied to monitoring namespace.",
+          "solution": "Verify spec.groups[0].rules structure and apply via kubectl apply -f /monitoring/payment-alerts.yaml."
+        }
+      ]
+    }
+  ],
+  "assessmentQuestions": [
+    {
+      "id": "q-prom-01",
+      "question": "Why must rate() or increase() be applied to Prometheus counter metrics before calculating thresholds or aggregations?",
+      "options": [
+        "Because counters cannot be indexed in TSDB without a mathematical wrapper.",
+        "Counters are monotonically increasing values that reset to zero on process restart; rate() handles resets automatically and calculates the per-second rate of increase over the specified time window.",
+        "Counters only store negative numbers in Prometheus.",
+        "Counters are deprecated in favor of gauge metrics."
+      ],
+      "correctIndex": 1,
+      "explanation": "Counters only increase and reset upon application restart. Applying rate(v[5m]) calculates the per-second average rate of change over 5 minutes while intelligently detecting and correcting for counter resets."
+    },
+    {
+      "id": "q-prom-02",
+      "question": "In a Prometheus alerting rule, what is the purpose of the 'for' duration clause (e.g. for: 5m)?",
+      "options": [
+        "It dictates how many minutes the alert will stay silenced after resolution.",
+        "It requires the alerting condition to evaluate to true continuously for that duration before transitioning from PENDING to FIRING, preventing alert fatigue caused by transient spikes.",
+        "It defines the TLS handshake timeout for scraping the target.",
+        "It specifies how frequently the target endpoint must be pinged."
+      ],
+      "correctIndex": 1,
+      "explanation": "The 'for' clause ensures an alert enters a PENDING state first and only fires if the condition persists for the full duration, effectively filtering out temporary network blips or bursty requests."
+    }
+  ]
+}

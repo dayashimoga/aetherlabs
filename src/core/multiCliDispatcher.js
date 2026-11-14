@@ -5570,7 +5570,7 @@ spec:
         });
         return { stdout: lines.join('\n') + '\n', stderr: '', code: 0 };
       }
-      return { stdout: `promql query result: 0 series matched.\n`, stderr: '', code: 0 };
+      return { stdout: `promql query result [${expr}]: 0 series matched.\n`, stderr: '', code: 0 };
     }
     return { stdout: `up{instance="192.168.1.10:9100",job="node-exporter"} => 1\n`, stderr: '', code: 0 };
   }

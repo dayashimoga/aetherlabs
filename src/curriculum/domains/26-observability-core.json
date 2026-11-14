@@ -1,0 +1,211 @@
+{
+  "id": "observability-core",
+  "title": "Observability Core Principles, RED & USE Frameworks & SLI Telemetry",
+  "category": "Observability & SRE",
+  "trackId": "track-sre",
+  "version": "1.0.0",
+  "difficulty": "Intermediate",
+  "estimatedHours": 8,
+  "summary": "Master cloud-native observability principles: distinguishing telemetry signals (metrics, logs, traces), implementing the RED (Rate, Errors, Duration) framework for request-driven services, implementing the USE (Utilization, Saturation, Errors) framework for infrastructure resources, and defining precise Service Level Indicators (SLIs).",
+  "prerequisites": [
+    "kubernetes-core-v4",
+    "k8s-networking"
+  ],
+  "learningObjectives": [
+    "Contrast the trade-offs, storage costs, and cardinality characteristics of metrics, structured logs, and distributed traces.",
+    "Formulate RED metrics (Rate, Errors, Duration) to evaluate microservice health, throughput, and error budgets.",
+    "Formulate USE metrics (Utilization, Saturation, Errors) to identify infrastructure bottlenecks across CPU, memory, and storage."
+  ],
+  "curriculumModules": [
+    {
+      "id": "mod-obs-01",
+      "title": "Telemetry Foundations: The Three Pillars & Cardinality Management",
+      "conceptSummary": "Observability is built upon three foundational signals: metrics (aggregated numerical time-series), logs (timestamped structured events), and traces (causally connected spans traversing microservices). High-cardinality label explosion (e.g. user IDs or GUIDs in Prometheus metric labels) severely degrades TSDB performance and must be strictly governed.",
+      "productionArchitecturePattern": "Preserve low-cardinality static dimensions in metric labels (cluster, region, service, statusCode) while offloading high-cardinality identifiers (userId, traceId, orderGuid) into structured log fields or distributed trace span attributes.",
+      "keyCommands": [
+        "promql 'rate(http_requests_total[5m])'",
+        "kubectl get configmaps -n monitoring",
+        "promql 'node_cpu_utilization'"
+      ]
+    },
+    {
+      "id": "mod-obs-02",
+      "title": "RED & USE Observability Frameworks & SLI Formulation",
+      "conceptSummary": "Tom Wilkie's RED Method models request-driven services: Rate (requests/sec), Errors (failed requests/sec), and Duration (latency distribution). Brendan Gregg's USE Method models resource bottlenecks: Utilization (percentage of time resource was busy), Saturation (extra work queued), and Errors (hardware/system error counts). These frameworks define actionable Service Level Indicators (SLIs).",
+      "productionArchitecturePattern": "Standardize SLI dashboards across engineering squads: instrument HTTP/gRPC ingress with RED metrics for user satisfaction and host nodes with USE metrics for capacity planning and autoscaling.",
+      "keyCommands": [
+        "cat /obs/red-telemetry.json",
+        "kubectl apply -f /obs/checkout-telemetry-config.yaml",
+        "promql 'sum(rate(http_requests_total{status=~\"5..\"}[5m]))'"
+      ]
+    }
+  ],
+  "labs": [
+    {
+      "id": "lab-obs-01-red-metrics-sli",
+      "title": "Formulating RED Metrics & SLI Telemetry Specifications",
+      "difficulty": "Intermediate",
+      "durationMinutes": 20,
+      "xpReward": 150,
+      "scenario": "Design request-driven microservice observability: author an SLI telemetry specification in /obs/red-telemetry.json defining RED metrics for checkout-service (rateMetric: http_requests_total, errorFilter: status=~\"5..\", and durationMetric: http_request_duration_seconds_bucket). Deploy a ConfigMap named checkout-telemetry-config in namespace monitoring embedding this telemetry contract.",
+      "productionContext": "Explicit RED telemetry definitions ensure consistent dashboarding, alerting, and automated SLO burn rate evaluation across distributed microservice architectures.",
+      "prerequisites": [
+        "lab-mesh-01-sidecar-injection"
+      ],
+      "objectives": [
+        "Author RED telemetry contract in /obs/red-telemetry.json.",
+        "Create and apply ConfigMap checkout-telemetry-config in namespace monitoring.",
+        "Verify telemetry config contains rate and duration metrics."
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: checkout-telemetry-config\n  namespace: monitoring\ndata:\n  red-telemetry.json: |\n    {\n      \"service\": \"checkout-service\",\n      \"framework\": \"RED\",\n      \"rateMetric\": \"http_requests_total\",\n      \"errorFilter\": \"status=~\\\"5..\\\"\",\n      \"durationMetric\": \"http_request_duration_seconds_bucket\"\n    }\n",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Author RED telemetry specification file",
+          "instruction": "Save the RED JSON schema to /obs/red-telemetry.json.",
+          "commandHint": "mkdir -p /obs\ncat << 'EOF' > /obs/red-telemetry.json\n...\nEOF"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Deploy ConfigMap to monitoring namespace",
+          "instruction": "Apply the telemetry ConfigMap to namespace monitoring.",
+          "commandHint": "kubectl apply -f /obs/checkout-telemetry-config.yaml"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "cm-checkout-telemetry-exists",
+          "description": "ConfigMap checkout-telemetry-config exists in namespace monitoring",
+          "type": "resource_exists",
+          "kind": "ConfigMap",
+          "namespace": "monitoring",
+          "name": "checkout-telemetry-config",
+          "remediation": "Apply ConfigMap checkout-telemetry-config in namespace monitoring"
+        },
+        {
+          "id": "vfs-red-spec-exists",
+          "description": "/obs/red-telemetry.json contains http_requests_total",
+          "type": "vfs_file_contains",
+          "path": "/obs/red-telemetry.json",
+          "pattern": "http_requests_total",
+          "remediation": "Author RED telemetry specification in /obs/red-telemetry.json"
+        },
+        {
+          "id": "cm-data-contains-duration",
+          "description": "ConfigMap data contains http_request_duration_seconds_bucket",
+          "type": "resource_field_contains",
+          "kind": "ConfigMap",
+          "namespace": "monitoring",
+          "name": "checkout-telemetry-config",
+          "fieldPath": "data['red-telemetry.json']",
+          "expectedValue": "http_request_duration_seconds_bucket",
+          "remediation": "Embed durationMetric in ConfigMap data['red-telemetry.json']"
+        }
+      ],
+      "solutionCommands": [
+        "mkdir -p /obs",
+        "cat << 'EOF' > /obs/red-telemetry.json\n{\n  \"service\": \"checkout-service\",\n  \"framework\": \"RED\",\n  \"rateMetric\": \"http_requests_total\",\n  \"errorFilter\": \"status=~\\\"5..\\\"\",\n  \"durationMetric\": \"http_request_duration_seconds_bucket\"\n}\nEOF",
+        "cat << 'EOF' > /obs/checkout-telemetry-config.yaml\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: checkout-telemetry-config\n  namespace: monitoring\ndata:\n  red-telemetry.json: |\n    {\n      \"service\": \"checkout-service\",\n      \"framework\": \"RED\",\n      \"rateMetric\": \"http_requests_total\",\n      \"errorFilter\": \"status=~\\\"5..\\\"\",\n      \"durationMetric\": \"http_request_duration_seconds_bucket\"\n    }\nEOF",
+        "kubectl apply -f /obs/checkout-telemetry-config.yaml"
+      ],
+      "troubleshootingGuide": [
+        {
+          "problem": "ConfigMap not found or metric names missing.",
+          "cause": "ConfigMap was not created in monitoring namespace or file was empty.",
+          "solution": "Verify /obs/red-telemetry.json contains valid RED metrics and apply the ConfigMap manifest."
+        }
+      ]
+    },
+    {
+      "id": "lab-obs-02-use-metrics-audit",
+      "title": "Auditing Cluster Infrastructure Health via the USE Framework",
+      "difficulty": "Intermediate",
+      "durationMinutes": 20,
+      "xpReward": 150,
+      "scenario": "Audit cluster infrastructure resource bottlenecks using USE metrics: execute promql queries to inspect node CPU Utilization (node_cpu_utilization), memory Saturation (node_memory_saturation), and filesystem Errors (node_filesystem_errors_total), saving the audit report to /obs/use-audit.txt.",
+      "productionContext": "The USE method provides immediate triage during node pressure incidents by systematically isolating whether hardware or kernel subsystems are exhausted, saturated with queuing, or failing with errors.",
+      "prerequisites": [
+        "lab-obs-01-red-metrics-sli"
+      ],
+      "objectives": [
+        "Execute promql query for node CPU utilization.",
+        "Generate USE audit report in /obs/use-audit.txt."
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "# USE Framework Node Resource Audit\n# Query node CPU utilization and write findings to /obs/use-audit.txt\n",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Query node utilization metrics",
+          "instruction": "Execute promql query for node_cpu_utilization.",
+          "commandHint": "promql node_cpu_utilization"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Save audit report",
+          "instruction": "Redirect the promql query findings to /obs/use-audit.txt.",
+          "commandHint": "promql node_cpu_utilization > /obs/use-audit.txt"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "promql-query-executed",
+          "description": "promql command executed",
+          "type": "command_executed",
+          "commandSubstring": "promql",
+          "remediation": "Execute promql node_cpu_utilization"
+        },
+        {
+          "id": "use-audit-file-exists",
+          "description": "/obs/use-audit.txt contains node utilization metrics",
+          "type": "vfs_file_contains",
+          "path": "/obs/use-audit.txt",
+          "pattern": "node_cpu_utilization",
+          "remediation": "Redirect promql query output to /obs/use-audit.txt"
+        }
+      ],
+      "solutionCommands": [
+        "mkdir -p /obs",
+        "promql node_cpu_utilization > /obs/use-audit.txt"
+      ],
+      "troubleshootingGuide": [
+        {
+          "problem": "/obs/use-audit.txt missing or empty.",
+          "cause": "Command was not redirected to /obs/use-audit.txt.",
+          "solution": "Execute promql node_cpu_utilization > /obs/use-audit.txt."
+        }
+      ]
+    }
+  ],
+  "assessmentQuestions": [
+    {
+      "id": "q-obs-01",
+      "question": "Which metrics framework is specifically designed for observing request-driven microservices, and what three signals does it capture?",
+      "options": [
+        "The USE framework: Utilization, Saturation, and Errors.",
+        "The RED framework: Rate (requests/sec), Errors (failed requests/sec), and Duration (latency distribution).",
+        "The DORA framework: Deployment Frequency, Lead Time, Change Fail Rate, and Time to Restore.",
+        "The ACID framework: Atomicity, Consistency, Isolation, and Durability."
+      ],
+      "correctIndex": 1,
+      "explanation": "Tom Wilkie's RED method measures user-facing request performance: Rate (traffic volume), Errors (failure rate), and Duration (latency). The USE framework is used for infrastructure resources."
+    },
+    {
+      "id": "q-obs-02",
+      "question": "What is metric cardinality explosion in a Prometheus time-series database, and what causes it?",
+      "options": [
+        "It occurs when disk space is exhausted due to storing metrics for more than 30 days.",
+        "It occurs when a metric label contains unbounded, unique values (such as user IDs, request UUIDs, or timestamps), generating millions of distinct time-series and causing Prometheus to exhaust memory and crash.",
+        "It occurs when too many Pods are scraped simultaneously via HTTP/2.",
+        "It occurs when PromQL queries use sum() instead of avg()."
+      ],
+      "correctIndex": 1,
+      "explanation": "Cardinality equals the total number of unique time-series generated by label combinations. Unbounded values like user IDs or UUIDs multiply timeseries exponentially, leading to severe memory exhaustion (OOM)."
+    }
+  ]
+}

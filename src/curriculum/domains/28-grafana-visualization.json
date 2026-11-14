@@ -1,0 +1,230 @@
+{
+  "id": "grafana-visualization",
+  "title": "Grafana Visualization, Golden Signal Dashboards & Alertmanager Routing",
+  "category": "Observability & SRE",
+  "trackId": "track-sre",
+  "version": "1.0.0",
+  "difficulty": "Intermediate",
+  "estimatedHours": 8,
+  "summary": "Master production observability visualization and alert routing: building modular Grafana dashboards for RED/USE metrics, provisioning dashboards as code via Kubernetes ConfigMaps, configuring Alertmanager routing trees with receiver inhibition and grouping, and silencing alert storms.",
+  "prerequisites": [
+    "prometheus-monitoring",
+    "observability-core"
+  ],
+  "learningObjectives": [
+    "Design production Grafana dashboards visualizing microservice golden signals (latency percentiles, error rates, RPS).",
+    "Deploy declarative Grafana dashboards as code using Kubernetes ConfigMaps with grafana_dashboard discovery labels.",
+    "Configure Alertmanager routing trees with grouping, inhibition, and deduplication to prevent notification fatigue."
+  ],
+  "curriculumModules": [
+    {
+      "id": "mod-graf-01",
+      "title": "Grafana Dashboards as Code & Golden Signal Visualizations",
+      "conceptSummary": "Modern production teams manage Grafana dashboards as declarative code rather than manual UI point-and-click. The Grafana sidecar operator watches for Kubernetes ConfigMaps carrying label grafana_dashboard: '1', dynamically mounting the enclosed JSON dashboard into Grafana's filesystem and hot-reloading panel layouts without server restarts.",
+      "productionArchitecturePattern": "Store all production Grafana dashboard JSON models in Git repositories and deploy via GitOps using labeled ConfigMaps to eliminate snowflake dashboards and enforce peer-reviewed visual standards.",
+      "keyCommands": [
+        "kubectl get configmaps -l grafana_dashboard=1 -n monitoring",
+        "cat /grafana/golden-signals-dashboard.json",
+        "kubectl apply -f /grafana/dashboard-configmap.yaml"
+      ]
+    },
+    {
+      "id": "mod-graf-02",
+      "title": "Alertmanager Routing Trees, Deduplication & Silencing",
+      "conceptSummary": "Alertmanager handles alerts emitted by Prometheus, deduplicating, grouping, and routing them to external receivers (PagerDuty, Slack, Webhooks). Routing trees evaluate alert labels (severity, team, cluster), while inhibition rules suppress lower-severity alerts (e.g. Warning) if a corresponding higher-severity alert (e.g. Critical) is already firing.",
+      "productionArchitecturePattern": "Configure group_by: ['alertname', 'cluster', 'service'] with group_wait: 30s to aggregate related alert storms into a single actionable PagerDuty incident instead of firing hundreds of individual pages.",
+      "keyCommands": [
+        "kubectl get secret alertmanager-main -n monitoring",
+        "cat /monitoring/alertmanager.yaml",
+        "kubectl apply -f /monitoring/alertmanager-secret.yaml"
+      ]
+    }
+  ],
+  "labs": [
+    {
+      "id": "lab-graf-01-dashboard-as-code",
+      "title": "Provisioning Declarative Grafana Dashboards as Code",
+      "difficulty": "Intermediate",
+      "durationMinutes": 20,
+      "xpReward": 150,
+      "scenario": "Provision a Golden Signals dashboard as code: author /grafana/golden-signals-dashboard.json defining timeseries panels for RPS, Error Rate, and P99 Latency. Create and apply a ConfigMap named grafana-dashboard-golden-signals in namespace monitoring labeled grafana_dashboard=1 embedding the dashboard JSON.",
+      "productionContext": "Declarative dashboard provisioning ensures that observability panels are versioned in Git alongside application code, preventing drift and enabling instant recovery.",
+      "prerequisites": [
+        "lab-prom-01-servicemonitor-discovery"
+      ],
+      "objectives": [
+        "Author dashboard JSON in /grafana/golden-signals-dashboard.json.",
+        "Create and apply ConfigMap grafana-dashboard-golden-signals in namespace monitoring with label grafana_dashboard: '1'.",
+        "Verify ConfigMap contains dashboard data with P99 Latency."
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: grafana-dashboard-golden-signals\n  namespace: monitoring\n  labels:\n    grafana_dashboard: \"1\"\ndata:\n  golden-signals-dashboard.json: |\n    {\n      \"title\": \"API Golden Signals RED/USE\",\n      \"panels\": [\n        {\"title\": \"Request Rate (RPS)\", \"type\": \"timeseries\"},\n        {\"title\": \"Error Rate %\", \"type\": \"timeseries\"},\n        {\"title\": \"Latency P99\", \"type\": \"timeseries\"}\n      ]\n    }\n",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Author dashboard JSON file",
+          "instruction": "Save the dashboard specification to /grafana/golden-signals-dashboard.json.",
+          "commandHint": "mkdir -p /grafana\ncat << 'EOF' > /grafana/golden-signals-dashboard.json\n...\nEOF"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Apply labeled ConfigMap to monitoring namespace",
+          "instruction": "Apply the ConfigMap manifest to namespace monitoring.",
+          "commandHint": "kubectl apply -f /grafana/dashboard-configmap.yaml"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "cm-golden-signals-exists",
+          "description": "ConfigMap grafana-dashboard-golden-signals exists in namespace monitoring",
+          "type": "resource_exists",
+          "kind": "ConfigMap",
+          "namespace": "monitoring",
+          "name": "grafana-dashboard-golden-signals",
+          "remediation": "Apply ConfigMap grafana-dashboard-golden-signals in namespace monitoring"
+        },
+        {
+          "id": "cm-label-grafana-dashboard",
+          "description": "ConfigMap has label grafana_dashboard=1",
+          "type": "resource_field_equals",
+          "kind": "ConfigMap",
+          "namespace": "monitoring",
+          "name": "grafana-dashboard-golden-signals",
+          "fieldPath": "metadata.labels['grafana_dashboard']",
+          "expectedValue": "1",
+          "remediation": "Set metadata.labels.grafana_dashboard: '1'"
+        },
+        {
+          "id": "cm-data-contains-p99",
+          "description": "Dashboard data contains Latency P99",
+          "type": "resource_field_contains",
+          "kind": "ConfigMap",
+          "namespace": "monitoring",
+          "name": "grafana-dashboard-golden-signals",
+          "fieldPath": "data['golden-signals-dashboard.json']",
+          "expectedValue": "Latency P99",
+          "remediation": "Embed Latency P99 panel in golden-signals-dashboard.json"
+        }
+      ],
+      "solutionCommands": [
+        "mkdir -p /grafana",
+        "cat << 'EOF' > /grafana/golden-signals-dashboard.json\n{\n  \"title\": \"API Golden Signals RED/USE\",\n  \"panels\": [\n    {\"title\": \"Request Rate (RPS)\", \"type\": \"timeseries\"},\n    {\"title\": \"Error Rate %\", \"type\": \"timeseries\"},\n    {\"title\": \"Latency P99\", \"type\": \"timeseries\"}\n  ]\n}\nEOF",
+        "cat << 'EOF' > /grafana/dashboard-configmap.yaml\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: grafana-dashboard-golden-signals\n  namespace: monitoring\n  labels:\n    grafana_dashboard: \"1\"\ndata:\n  golden-signals-dashboard.json: |\n    {\n      \"title\": \"API Golden Signals RED/USE\",\n      \"panels\": [\n        {\"title\": \"Request Rate (RPS)\", \"type\": \"timeseries\"},\n        {\"title\": \"Error Rate %\", \"type\": \"timeseries\"},\n        {\"title\": \"Latency P99\", \"type\": \"timeseries\"}\n      ]\n    }\nEOF",
+        "kubectl apply -f /grafana/dashboard-configmap.yaml"
+      ],
+      "troubleshootingGuide": [
+        {
+          "problem": "Dashboard ConfigMap missing or label incorrect.",
+          "cause": "The ConfigMap lacked the grafana_dashboard: '1' label or was in the wrong namespace.",
+          "solution": "Verify metadata.labels contains grafana_dashboard: '1' and apply to namespace monitoring."
+        }
+      ]
+    },
+    {
+      "id": "lab-graf-02-alertmanager-routing",
+      "title": "Configuring Alertmanager Notification Trees & Inhibition Rules",
+      "difficulty": "Intermediate",
+      "durationMinutes": 20,
+      "xpReward": 150,
+      "scenario": "Configure enterprise alert notification routing: write an Alertmanager configuration to /monitoring/alertmanager.yaml defining a routing tree grouping alerts by ['alertname', 'namespace'], with group_wait: 30s, repeat_interval: 4h, and routing critical severity to receiver pagerduty-critical. Store this configuration in Secret alertmanager-main in namespace monitoring.",
+      "productionContext": "Fine-tuned alert routing and grouping prevents on-call alert fatigue by ensuring only actionable, aggregated alerts notify engineers via paging channels.",
+      "prerequisites": [
+        "lab-graf-01-dashboard-as-code"
+      ],
+      "objectives": [
+        "Author Alertmanager routing config in /monitoring/alertmanager.yaml.",
+        "Create and apply Secret alertmanager-main in namespace monitoring.",
+        "Verify repeat_interval and pagerduty-critical receiver are configured."
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "apiVersion: v1\nkind: Secret\nmetadata:\n  name: alertmanager-main\n  namespace: monitoring\ndata:\n  alertmanager.yaml: |\n    global:\n      resolve_timeout: 5m\n    route:\n      group_by: ['alertname', 'namespace']\n      group_wait: 30s\n      group_interval: 5m\n      repeat_interval: 4h\n      receiver: pagerduty-critical\n    receivers:\n      - name: pagerduty-critical\n",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Author Alertmanager YAML file",
+          "instruction": "Save the routing configuration to /monitoring/alertmanager.yaml.",
+          "commandHint": "mkdir -p /monitoring\ncat << 'EOF' > /monitoring/alertmanager.yaml\n...\nEOF"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Apply Alertmanager Secret to monitoring namespace",
+          "instruction": "Apply the Secret manifest to namespace monitoring.",
+          "commandHint": "kubectl apply -f /monitoring/alertmanager-secret.yaml"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "vfs-alertmanager-yaml-exists",
+          "description": "/monitoring/alertmanager.yaml contains pagerduty-critical",
+          "type": "vfs_file_contains",
+          "path": "/monitoring/alertmanager.yaml",
+          "pattern": "pagerduty-critical",
+          "remediation": "Write pagerduty-critical receiver to /monitoring/alertmanager.yaml"
+        },
+        {
+          "id": "secret-alertmanager-main-exists",
+          "description": "Secret alertmanager-main exists in namespace monitoring",
+          "type": "resource_exists",
+          "kind": "Secret",
+          "namespace": "monitoring",
+          "name": "alertmanager-main",
+          "remediation": "Apply Secret alertmanager-main in namespace monitoring"
+        },
+        {
+          "id": "secret-data-contains-repeat-interval",
+          "description": "Secret data contains repeat_interval",
+          "type": "resource_field_contains",
+          "kind": "Secret",
+          "namespace": "monitoring",
+          "name": "alertmanager-main",
+          "fieldPath": "data['alertmanager.yaml']",
+          "expectedValue": "repeat_interval",
+          "remediation": "Configure repeat_interval in alertmanager.yaml"
+        }
+      ],
+      "solutionCommands": [
+        "mkdir -p /monitoring",
+        "cat << 'EOF' > /monitoring/alertmanager.yaml\nglobal:\n  resolve_timeout: 5m\nroute:\n  group_by: ['alertname', 'namespace']\n  group_wait: 30s\n  group_interval: 5m\n  repeat_interval: 4h\n  receiver: pagerduty-critical\nreceivers:\n  - name: pagerduty-critical\nEOF",
+        "cat << 'EOF' > /monitoring/alertmanager-secret.yaml\napiVersion: v1\nkind: Secret\nmetadata:\n  name: alertmanager-main\n  namespace: monitoring\ndata:\n  alertmanager.yaml: |\n    global:\n      resolve_timeout: 5m\n    route:\n      group_by: ['alertname', 'namespace']\n      group_wait: 30s\n      group_interval: 5m\n      repeat_interval: 4h\n      receiver: pagerduty-critical\n    receivers:\n      - name: pagerduty-critical\nEOF",
+        "kubectl apply -f /monitoring/alertmanager-secret.yaml"
+      ],
+      "troubleshootingGuide": [
+        {
+          "problem": "Secret alertmanager-main not found or config invalid.",
+          "cause": "Secret was not applied to monitoring namespace or key was not alertmanager.yaml.",
+          "solution": "Apply /monitoring/alertmanager-secret.yaml with key alertmanager.yaml in namespace monitoring."
+        }
+      ]
+    }
+  ],
+  "assessmentQuestions": [
+    {
+      "id": "q-graf-01",
+      "question": "How does the Grafana Operator / Sidecar dynamically discover and import dashboards in Kubernetes without requiring manual dashboard JSON uploads?",
+      "options": [
+        "It executes a continuous port-scan across the default namespace.",
+        "It watches Kubernetes ConfigMaps across cluster namespaces matching a designated label selector (e.g. grafana_dashboard: '1') and automatically writes the dashboard JSON to Grafana's local provisioning folder.",
+        "It requires all developers to push dashboard JSON directly into Grafana's SQLite database via SSH.",
+        "It generates SVG screenshots from web browser cookies."
+      ],
+      "correctIndex": 1,
+      "explanation": "The Grafana sidecar container uses the Kubernetes API to watch for ConfigMaps with label 'grafana_dashboard: 1', automatically mounting and provisioning them into Grafana in real time."
+    },
+    {
+      "id": "q-graf-02",
+      "question": "In Alertmanager architecture, what is the role of an inhibition rule?",
+      "options": [
+        "It permanently deletes any alert that was not acknowledged within 15 minutes.",
+        "It mutes a target alert if a matching source alert is already firing (e.g. suppressing hundreds of 'InstanceDown' or warning alerts when a 'ClusterNetworkDown' critical alert is already active).",
+        "It stops Prometheus from scraping pods during high CPU usage.",
+        "It routes all alerts directly to email without encryption."
+      ],
+      "correctIndex": 1,
+      "explanation": "Inhibition rules prevent cascading alert noise by muting downstream or warning alerts when a high-priority root-cause alert (such as an entire node or network being down) is already firing."
+    }
+  ]
+}
