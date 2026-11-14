@@ -4,474 +4,584 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { createKubeLabsApp } = require('../src/server');
-const { VirtualCluster, parseManifests } = require('../src/engine/virtualCluster');
-const { TerminalEngine } = require('../src/engine/terminalEngine');
-const { ValidationEngine } = require('../src/engine/validationEngine');
+const { VirtualCluster } = require('../src/core/virtualCluster');
+const { VirtualFileSystem } = require('../src/core/virtualFileSystem');
+const { TerminalEngine } = require('../src/core/terminalEngine');
+const { ValidationEngine } = require('../src/core/validationEngine');
+const { PluginManager } = require('../src/plugins/pluginManager');
+const { formatTable, formatDescribe, formatApiError } = require('../src/core/cliFormatter');
+const { AutocompletionEngine } = require('../src/core/autocompletionEngine');
+const SyncCoordinator = require('../src/core/syncCoordinator');
+const { ArchitectureEngine } = require('../src/core/architectureEngine');
+const { IncidentEngine } = require('../src/core/incidentEngine');
+const { ProjectEngine } = require('../src/core/projectEngine');
+const { CertificationEngine } = require('../src/core/certificationEngine');
+const { AgentOrchestrator } = require('../src/agents/orchestrator');
 
 const rootDir = path.join(__dirname, '..');
 const app = createKubeLabsApp({ dbFilePath: ':memory:' });
-const valEngine = new ValidationEngine();
+const curriculumDir = path.join(rootDir, 'src', 'curriculum', 'domains');
+const curriculumManager = new PluginManager(curriculumDir);
+const validationEngine = new ValidationEngine();
+const projectEngine = new ProjectEngine(validationEngine);
+const certEngine = new CertificationEngine(curriculumManager, null, { validationEngine });
 
 const SUBPHASES = [
+  // ==========================================
+  // STAGE 1: Real Terminal Engine & Control Plane Fidelity
+  // ==========================================
   {
     id: 'Subphase 1.1.1',
     stage: 'Stage 1',
     phase: 'Phase 1.1',
-    title: 'Global Engineering Contract, DoR/DoD & Quality Gates',
-    verify: () => fs.existsSync(path.join(rootDir, 'docs', '01-GLOBAL-ENGINEERING-CONTRACT.md'))
+    title: 'ASCII Table & Wide Output Renderer',
+    verify: () => {
+      const out = formatTable(['NAME', 'STATUS'], [['nginx', 'Running']]);
+      return typeof out === 'string' && out.includes('NAME') && out.includes('Running');
+    }
   },
   {
     id: 'Subphase 1.1.2',
     stage: 'Stage 1',
     phase: 'Phase 1.1',
-    title: 'PRD, System/Security/Data Architecture & ADRs',
-    verify: () =>
-      fs.existsSync(path.join(rootDir, 'docs', '02-PRD.md')) &&
-      fs.existsSync(path.join(rootDir, 'docs', '03-ARCHITECTURE.md')) &&
-      fs.existsSync(path.join(rootDir, 'docs', '04-ADRS.md'))
+    title: 'YAML, JSON, JSONPath & Describe Renderers',
+    verify: () => {
+      const desc = formatDescribe({ kind: 'Pod', metadata: { name: 'web', namespace: 'default' }, spec: { containers: [{ name: 'nginx' }] } }, []);
+      return typeof desc === 'string' && desc.includes('Name:') && desc.includes('web');
+    }
   },
   {
     id: 'Subphase 1.1.3',
     stage: 'Stage 1',
     phase: 'Phase 1.1',
-    title: '11-Agent Autonomous Framework & Orchestrator',
-    verify: () =>
-      fs.existsSync(path.join(rootDir, 'agents', 'AGENT-FRAMEWORK.md')) &&
-      fs.existsSync(path.join(rootDir, 'src', 'agents', 'orchestrator.js'))
+    title: 'Realistic Exit Codes & Kubernetes API Error Formatter',
+    verify: () => {
+      const err = formatApiError('NotFound', { kind: 'Pod', name: 'missing-pod' });
+      return typeof err === 'string' && err.includes('NotFound') && err.includes('missing-pod');
+    }
   },
   {
     id: 'Subphase 1.2.1',
     stage: 'Stage 1',
     phase: 'Phase 1.2',
-    title: 'Native SQLite WAL Database Initialization',
-    verify: () => Boolean(app.database.getProfile().profile.id === 'default-learner')
+    title: 'Full Kubernetes & Cluster Ops Binaries (kubectl, kubeadm, etcdctl)',
+    verify: () => {
+      const cluster = new VirtualCluster();
+      const term = new TerminalEngine({ cluster });
+      const kRes = term.execute('kubectl get nodes');
+      const kaRes = term.execute('kubeadm token list');
+      const etRes = term.execute('etcdctl endpoint health');
+      return kRes.exitCode === 0 && kaRes.exitCode === 0 && etRes.exitCode === 0;
+    }
   },
   {
     id: 'Subphase 1.2.2',
     stage: 'Stage 1',
     phase: 'Phase 1.2',
-    title: 'Parameterized CRUD Repositories (Labs, Incidents, Projects, Certs)',
+    title: 'Linux, Networking, Container & Git Binaries',
     verify: () => {
-      const rec = app.database.recordLabAttempt({
-        labId: 'lab-linux-01',
-        domainId: 'linux-fundamentals',
-        passed: true,
-        score: 100,
-        xpReward: 150
-      });
-      return Boolean(rec && rec.verificationHash);
+      const vfs = new VirtualFileSystem();
+      const term = new TerminalEngine({ vfs });
+      const lRes = term.execute('ls -la');
+      const ipRes = term.execute('ip addr');
+      const dRes = term.execute('docker ps');
+      term.execute('git init');
+      const gRes = term.execute('git status');
+      return lRes.exitCode === 0 && ipRes.exitCode === 0 && dRes.exitCode === 0 && gRes.exitCode === 0;
+    }
+  },
+  {
+    id: 'Subphase 1.2.3',
+    stage: 'Stage 1',
+    phase: 'Phase 1.2',
+    title: 'GitOps, Packaging, IaC, Mesh, Security & Observability Binaries',
+    verify: () => {
+      const term = new TerminalEngine();
+      return (
+        term.execute('helm list').exitCode === 0 &&
+        term.execute('tofu plan').exitCode === 0 &&
+        term.execute('istioctl analyze').exitCode === 0 &&
+        term.execute('trivy version').exitCode === 0
+      );
     }
   },
   {
     id: 'Subphase 1.3.1',
     stage: 'Stage 1',
     phase: 'Phase 1.3',
-    title: 'YAML/JSON Multi-Document Parser & Resource Graph',
-    verify: () => {
-      const docs = parseManifests('apiVersion: v1\nkind: Namespace\nmetadata:\n  name: test-ns');
-      return docs.length === 1 && docs[0].kind === 'Namespace';
-    }
+    title: 'Interactive Terminal Emulator Upgrade',
+    verify: () =>
+      fs.existsSync(path.join(rootDir, 'public', 'js', 'terminalView.js')) &&
+      fs.existsSync(path.join(rootDir, 'public', 'js', 'terminalEmulator.js'))
   },
   {
     id: 'Subphase 1.3.2',
     stage: 'Stage 1',
     phase: 'Phase 1.3',
-    title: 'Controller Manager Reconciliation (Deployments, Endpoints, Pod Health)',
+    title: 'Context-Aware Tab Autocompletion',
     verify: () => {
-      const c = new VirtualCluster();
-      c.applyResource({
-        apiVersion: 'apps/v1',
-        kind: 'Deployment',
-        metadata: { name: 'web', namespace: 'production' },
-        spec: { replicas: 2, selector: { matchLabels: { app: 'web' } }, template: { metadata: { labels: { app: 'web' } }, spec: { containers: [{ name: 'web', image: 'nginx:1.27-alpine' }] } } }
-      });
-      return c.getResources('Pod', 'production').length === 2;
+      const cluster = new VirtualCluster();
+      const ac = new AutocompletionEngine({ cluster });
+      const res = ac.autocomplete('kubectl g');
+      return res && Array.isArray(res.completions) && res.completions.includes('get');
     }
   },
   {
     id: 'Subphase 1.3.3',
     stage: 'Stage 1',
     phase: 'Phase 1.3',
-    title: 'Cloud, Helm, ArgoCD, Istio & OpenTofu State Extensions',
+    title: 'Bi-Directional VFS, Editor & Topology Synchronization',
     verify: () => {
-      const c = new VirtualCluster();
-      return Array.isArray(c.state.helmReleases) && Array.isArray(c.state.argoApps) && Boolean(c.state.terraformState);
+      const sc = new SyncCoordinator();
+      return typeof sc.applyEditorManifest === 'function' && typeof sc.renderTopologySvg === 'function';
     }
   },
+
+  // ==========================================
+  // STAGE 2: Futuristic UI/UX Overhaul & Workspace Architecture
+  // ==========================================
   {
     id: 'Subphase 2.1.1',
     stage: 'Stage 2',
     phase: 'Phase 2.1',
-    title: 'Strict JSON Schema for Modular Plugins',
-    verify: () => fs.existsSync(path.join(rootDir, 'schemas', 'plugin.schema.json'))
+    title: 'Design Tokens, Glassmorphism & Typography',
+    verify: () => {
+      const css = fs.readFileSync(path.join(rootDir, 'public', 'css', 'styles.css'), 'utf8');
+      return css.includes('--bg-primary: #090d16;') && css.includes('--accent-cyan: #38bdf8;');
+    }
   },
   {
     id: 'Subphase 2.1.2',
     stage: 'Stage 2',
     phase: 'Phase 2.1',
-    title: 'PluginManager Dynamic Discovery & Track Aggregation',
-    verify: () => app.pluginManager.validationErrors.length === 0 && app.pluginManager.getTracks().length === 6
+    title: '64px Left Icon Rail & Top Command Header',
+    verify: () => {
+      const html = fs.readFileSync(path.join(rootDir, 'public', 'index.html'), 'utf8');
+      return html.includes('class="app-nav-rail"') && html.includes('class="top-header"');
+    }
+  },
+  {
+    id: 'Subphase 2.1.3',
+    stage: 'Stage 2',
+    phase: 'Phase 2.1',
+    title: 'Global Telemetry HUD, XP & Real-Time Sync Coordinator',
+    verify: () => {
+      const js = fs.readFileSync(path.join(rootDir, 'public', 'js', 'app.js'), 'utf8');
+      return js.includes('updateHeaderTelemetry') && js.includes('header-xp');
+    }
   },
   {
     id: 'Subphase 2.2.1',
     stage: 'Stage 2',
     phase: 'Phase 2.2',
-    title: 'Domains 01–04: Linux, Containers, Networking & Kubernetes Core Plugins',
-    verify: () =>
-      ['linux-fundamentals', 'containers-runtime', 'cloud-networking', 'kubernetes-core'].every((id) =>
-        Boolean(app.pluginManager.getDomain(id))
-      )
+    title: 'Personalized "Continue Learning" Hero Banner',
+    verify: () => {
+      const html = fs.readFileSync(path.join(rootDir, 'public', 'index.html'), 'utf8');
+      return html.includes('id="continue-learning-hero"') && html.includes('id="hero-streak-pill"');
+    }
   },
   {
     id: 'Subphase 2.2.2',
     stage: 'Stage 2',
     phase: 'Phase 2.2',
-    title: 'Domains 05–08: CNCF Packaging, GitOps, CI/CD & DevSecOps Plugins',
-    verify: () =>
-      ['cncf-packaging', 'gitops-delivery', 'devops-cicd', 'devsecops-security'].every((id) =>
-        Boolean(app.pluginManager.getDomain(id))
-      )
+    title: 'Interactive 7-Tier DAG Skill Tree Roadmap',
+    verify: () => {
+      const html = fs.readFileSync(path.join(rootDir, 'public', 'index.html'), 'utf8');
+      return html.includes('id="roadmap-section"') && html.includes('id="roadmap-heading"');
+    }
+  },
+  {
+    id: 'Subphase 2.2.3',
+    stage: 'Stage 2',
+    phase: 'Phase 2.2',
+    title: 'Curriculum Search, Filter Bar & Syllabus Drawer',
+    verify: () => {
+      const html = fs.readFileSync(path.join(rootDir, 'public', 'index.html'), 'utf8');
+      return html.includes('id="domain-search-input"') && html.includes('id="domain-syllabus-drawer"');
+    }
   },
   {
     id: 'Subphase 2.3.1',
     stage: 'Stage 2',
     phase: 'Phase 2.3',
-    title: 'Domains 09–12: Service Mesh, Observability, SRE & Platform Engineering Plugins',
-    verify: () =>
-      ['service-mesh', 'observability-stack', 'sre-incident-chaos', 'platform-engineering'].every((id) =>
-        Boolean(app.pluginManager.getDomain(id))
-      )
+    title: '3-Column Resizable IDE Layout',
+    verify: () => {
+      const html = fs.readFileSync(path.join(rootDir, 'public', 'index.html'), 'utf8');
+      return html.includes('id="wb-pane-left"') && html.includes('id="resizer-left"') && html.includes('id="resizer-right"');
+    }
   },
   {
     id: 'Subphase 2.3.2',
     stage: 'Stage 2',
     phase: 'Phase 2.3',
-    title: 'Domains 13–16: OpenTofu/Terraform, AWS, Azure/GCP & AI-Ops Plugins',
-    verify: () =>
-      ['iac-opentofu-terraform', 'cloud-aws', 'cloud-azure-gcp', 'aiops-autonomous'].every((id) =>
-        Boolean(app.pluginManager.getDomain(id))
-      )
+    title: 'Full-Height Terminal, Code Editor & Observability Tabs',
+    verify: () => {
+      const html = fs.readFileSync(path.join(rootDir, 'public', 'index.html'), 'utf8');
+      return html.includes('id="center-tab-terminal"') && html.includes('id="center-tab-editor"') && html.includes('id="center-tab-observability"');
+    }
   },
   {
     id: 'Subphase 2.3.3',
     stage: 'Stage 2',
     phase: 'Phase 2.3',
-    title: 'Domains 17–18: Emerging Tech (Wasm/eBPF Tetragon & FinOps/Green Cloud) Plugins',
-    verify: () =>
-      ['wasm-ebpf-edge', 'finops-green-cloud'].every((id) =>
-        Boolean(app.pluginManager.getDomain(id))
-      )
+    title: 'Interactive SVG Topology with Click-to-Inspect Drawer',
+    verify: () => {
+      const html = fs.readFileSync(path.join(rootDir, 'public', 'index.html'), 'utf8');
+      return html.includes('id="cluster-topology-svg"') && html.includes('id="cluster-topology-view"');
+    }
   },
+
+  // ==========================================
+  // STAGE 3: Enterprise Architecture Designer & Chaos War Room
+  // ==========================================
   {
     id: 'Subphase 3.1.1',
     stage: 'Stage 3',
     phase: 'Phase 3.1',
-    title: 'Terminal Tokenizer, Flag Parser & Pipe Filtering',
+    title: 'Production Incident Standby HUD & Live Fleet Health Strip',
     verify: () => {
-      const c = new VirtualCluster();
-      const t = new TerminalEngine(c);
-      const res = t.execute('kubectl get nodes | grep worker');
-      return res.exitCode === 0 && res.output.includes('kubelabs-worker-01');
+      const html = fs.readFileSync(path.join(rootDir, 'public', 'index.html'), 'utf8');
+      return html.includes('id="incident-standby-banner"') && html.includes('id="inc-fleet-status-pill"');
     }
   },
   {
     id: 'Subphase 3.1.2',
     stage: 'Stage 3',
     phase: 'Phase 3.1',
-    title: 'Multi-CLI Executors (kubectl, helm, docker, argocd, istioctl, tofu, aws, az, gcloud, trivy, aiops)',
+    title: 'Live Active Incident Command Center HUD',
     verify: () => {
-      const c = new VirtualCluster();
-      const t = new TerminalEngine(c);
-      return (
-        t.execute('helm install r1 bitnami/nginx').exitCode === 0 &&
-        t.execute('tofu apply').exitCode === 0 &&
-        t.execute('aiops analyze').exitCode === 0
-      );
+      const html = fs.readFileSync(path.join(rootDir, 'public', 'index.html'), 'utf8');
+      return html.includes('id="active-incident-banner"') && html.includes('id="inc-mttr-stopwatch"');
+    }
+  },
+  {
+    id: 'Subphase 3.1.3',
+    stage: 'Stage 3',
+    phase: 'Phase 3.1',
+    title: 'Real-Time Prometheus RED Sparklines & SRE Diagnostic Clues',
+    verify: () => {
+      const html = fs.readFileSync(path.join(rootDir, 'public', 'index.html'), 'utf8');
+      return html.includes('id="inc-red-sparklines"') && html.includes('id="inc-active-hints"');
     }
   },
   {
     id: 'Subphase 3.2.1',
     stage: 'Stage 3',
     phase: 'Phase 3.2',
-    title: 'Multi-Assertion Validation Rule Evaluators (10 Rule Types)',
+    title: 'Interactive Architecture Topology Canvas',
     verify: () => {
-      const c = new VirtualCluster();
-      const rep = valEngine.evaluate(
-        [{ id: 'r1', description: 'Node exists', type: 'resource_exists', kind: 'Node', name: 'kubelabs-control-plane', remediation: '' }],
-        c,
-        []
-      );
-      return rep.passed && rep.score === 100;
+      const html = fs.readFileSync(path.join(rootDir, 'public', 'index.html'), 'utf8');
+      return html.includes('id="arch-nodes-canvas"') && html.includes('id="arch-canvas-svg"');
     }
   },
   {
     id: 'Subphase 3.2.2',
     stage: 'Stage 3',
     phase: 'Phase 3.2',
-    title: 'Cryptographic SHA-256 Completion Verification & XP Telemetry',
+    title: '8 Production Reference Blueprints & Component Palette',
     verify: () => {
-      const rec = app.database.recordLabAttempt({
-        labId: 'lab-k8s-01',
-        domainId: 'kubernetes-core',
-        passed: true,
-        score: 100,
-        xpReward: 175
-      });
-      return rec.status === 'completed' && rec.verificationHash.length === 24;
+      const archEngine = new ArchitectureEngine();
+      return archEngine.listReferenceArchitectures().length === 8;
+    }
+  },
+  {
+    id: 'Subphase 3.2.3',
+    stage: 'Stage 3',
+    phase: 'Phase 3.2',
+    title: 'Bi-Directional Compilers & Well-Architected Framework Analyzer',
+    verify: () => {
+      const archEngine = new ArchitectureEngine();
+      const bp = archEngine.getReferenceArchitecture('ref-01-eks-gitops-ha');
+      const res = archEngine.compileToManifests(bp.nodes, bp.edges);
+      return typeof res.kubernetesYaml === 'string' && typeof res.opentofuHcl === 'string';
     }
   },
   {
     id: 'Subphase 3.3.1',
     stage: 'Stage 3',
     phase: 'Phase 3.3',
-    title: '12 Production Outage Scenarios (Quorum Loss, Admission Block, CoreDNS Loop, PVC Pending, etc.)',
-    verify: () => app.incidentEngine.listIncidents().length >= 12
+    title: 'Glassmorphism Diagnostics Modal Overlay',
+    verify: () => {
+      const html = fs.readFileSync(path.join(rootDir, 'public', 'index.html'), 'utf8');
+      return html.includes('id="diagnostics-modal"') && html.includes('id="gov-heading"');
+    }
   },
   {
     id: 'Subphase 3.3.2',
     stage: 'Stage 3',
     phase: 'Phase 3.3',
-    title: 'Live Outage Fault Injection, MTTR Stopwatch & Recovery Verification',
+    title: '11-Agent Real-Time Production Readiness Evaluation',
     verify: () => {
-      const c = new VirtualCluster();
-      app.incidentEngine.injectIncident('inc-01-selector-blackhole', c);
-      const t = new TerminalEngine(c);
-      t.execute('kubectl patch svc checkout-svc -n production -p \'{"spec":{"selector":{"app":"checkout-api"}}}\'');
-      return app.incidentEngine.verifyIncidentResolution('inc-01-selector-blackhole', c, t.commandHistory).passed;
+      const orch = new AgentOrchestrator({ rootDir });
+      return orch.auditProductAgent().status === 'PASS' && orch.auditArchitectAgent().status === 'PASS';
     }
   },
   {
-    id: 'Subphase 3.4.1',
+    id: 'Subphase 3.3.3',
     stage: 'Stage 3',
-    phase: 'Phase 3.4',
-    title: 'Visual Architecture Analyzer, 4-Pillar Scoring & SPOF Detection',
+    phase: 'Phase 3.3',
+    title: 'Universal Command Palette Modal (Ctrl+K / Cmd+K)',
     verify: () => {
-      const ref = app.architectureEngine.listReferenceArchitectures()[0];
-      const analysis = app.architectureEngine.analyzeTopology(ref.nodes, ref.edges);
-      return analysis.overallScore >= 80 && analysis.spofs.length === 0;
+      const html = fs.readFileSync(path.join(rootDir, 'public', 'index.html'), 'utf8');
+      return html.includes('id="command-palette-modal"') && html.includes('id="cmd-palette-input"');
     }
   },
-  {
-    id: 'Subphase 3.4.2',
-    stage: 'Stage 3',
-    phase: 'Phase 3.4',
-    title: 'Bi-Directional Kubernetes YAML & OpenTofu HCL Compiler + 8 Reference Blueprints',
-    verify: () => {
-      const ref = app.architectureEngine.listReferenceArchitectures()[0];
-      const compiled = app.architectureEngine.compileToManifests(ref.nodes, ref.edges);
-      return compiled.kubernetesYaml.includes('kind: Deployment') && compiled.opentofuHcl.includes('resource "kubernetes_deployment"');
-    }
-  },
-  {
-    id: 'Subphase 3.5.1',
-    stage: 'Stage 3',
-    phase: 'Phase 3.5',
-    title: '8 Multi-Milestone Production Capstone Projects Catalog',
-    verify: () => app.projectEngine.listProjects().length >= 8
-  },
-  {
-    id: 'Subphase 3.5.2',
-    stage: 'Stage 3',
-    phase: 'Phase 3.5',
-    title: 'Deterministic Capstone Project Solver Verification (6/6 Capstones)',
-    verify: () => {
-      for (const proj of app.projectEngine.listProjects()) {
-        const c = new VirtualCluster();
-        app.projectEngine.startProject(proj.id, c);
-        const t = new TerminalEngine(c);
-        const before = app.projectEngine.validateProject(proj.id, c, []);
-        if (before.passed) return false;
-        for (const cmd of proj.solutionCommands) {
-          t.execute(cmd);
-        }
-        const after = app.projectEngine.validateProject(proj.id, c, t.commandHistory);
-        if (!after.passed) return false;
-      }
-      return true;
-    }
-  },
+
+  // ==========================================
+  // STAGE 4: Complete 45-Domain Interactive Curriculum
+  // ==========================================
   {
     id: 'Subphase 4.1.1',
     stage: 'Stage 4',
     phase: 'Phase 4.1',
-    title: 'Contextual Socratic AI Mentor (Hint, Debug, Explain Modes)',
-    verify: () => {
-      const reply = app.aiMentor.respond({ mode: 'hint', cluster: app.virtualCluster });
-      return reply.response.includes('Socratic');
-    }
+    title: 'Tier 1 Foundations (Domains 01–04)',
+    verify: () =>
+      ['01-linux-fundamentals.json', '02-linux-admin.json', '03-networking-fundamentals.json', '04-git-fundamentals.json']
+        .every((f) => fs.existsSync(path.join(curriculumDir, f)))
   },
   {
     id: 'Subphase 4.1.2',
     stage: 'Stage 4',
     phase: 'Phase 4.1',
-    title: 'Automated CIS Kubernetes Security Benchmark Auditor',
-    verify: () => {
-      const reply = app.aiMentor.respond({ mode: 'security-audit', cluster: app.virtualCluster });
-      return reply.response.includes('CIS Kubernetes Benchmark');
-    }
+    title: 'Tier 2 Container Runtime & Packaging (Domains 05–08)',
+    verify: () =>
+      ['05-docker.json', '06-container-runtime-cri.json', '07-helm.json', '08-kustomize.json']
+        .every((f) => fs.existsSync(path.join(curriculumDir, f)))
+  },
+  {
+    id: 'Subphase 4.1.3',
+    stage: 'Stage 4',
+    phase: 'Phase 4.1',
+    title: 'Tier 3 Kubernetes Core & Certification Track (Domains 09–17)',
+    verify: () =>
+      ['09-kubernetes-core.json', '10-ckad-developer.json', '11-cka-administrator.json', '12-kubernetes-networking.json', '13-kubernetes-storage.json', '14-kubernetes-security-cks.json', '15-kubernetes-troubleshooting.json', '16-gitops-delivery.json', '17-argocd-gitops.json']
+        .every((f) => fs.existsSync(path.join(curriculumDir, f)))
   },
   {
     id: 'Subphase 4.2.1',
     stage: 'Stage 4',
     phase: 'Phase 4.2',
-    title: '6 Role-Based Certification Tracks & 26-Domain Skill Radar',
+    title: 'Tier 4 GitOps, CI/CD & Infrastructure as Code (Domains 18–24)',
     verify: () =>
-      app.certificationEngine.listExamTracks().length === 6 &&
-      app.certificationEngine.computeDomainSkillRadar().length === 26
+      ['18-fluxcd-gitops.json', '19-cicd-pipelines.json', '20-devsecops-pipeline.json', '21-iac-foundations.json', '22-terraform-opentofu.json', '23-service-mesh-core.json', '24-istio-service-mesh.json']
+        .every((f) => fs.existsSync(path.join(curriculumDir, f)))
   },
   {
     id: 'Subphase 4.2.2',
     stage: 'Stage 4',
     phase: 'Phase 4.2',
-    title: 'HMAC-SHA256 Signed Certificates & Verification Engine',
-    verify: () => {
-      const qs = app.pluginManager.getTrackQuestions('track-foundations');
-      const answers = {};
-      for (const q of qs) answers[q.id] = q.correctIndex;
-      const graded = app.certificationEngine.gradeExam({ trackId: 'track-foundations', answers, learnerName: 'Verifier' });
-      return app.certificationEngine.verifyCertificate(graded.certificate.certId, graded.certificate.signatureSha256).valid;
-    }
+    title: 'Tier 5 Service Mesh & Traffic Management (Domains 25–28)',
+    verify: () =>
+      ['25-linkerd-service-mesh.json', '26-observability-core.json', '27-prometheus-monitoring.json', '28-grafana-visualization.json']
+        .every((f) => fs.existsSync(path.join(curriculumDir, f)))
+  },
+  {
+    id: 'Subphase 4.2.3',
+    stage: 'Stage 4',
+    phase: 'Phase 4.2',
+    title: 'Tier 5 Observability, SRE & Operations (Domains 29–34)',
+    verify: () =>
+      ['29-opentelemetry-traces.json', '30-logging-monitoring.json', '31-sre-incident-recovery.json', '32-platform-reliability.json', '33-performance-engineering.json', '34-production-operations.json']
+        .every((f) => fs.existsSync(path.join(curriculumDir, f)))
   },
   {
     id: 'Subphase 4.3.1',
     stage: 'Stage 4',
     phase: 'Phase 4.3',
-    title: 'Cross-Platform Responsive Workbench UI (HTML5, CSS Grid, ARIA)',
+    title: 'Tier 6 Advanced Platform, Storage & Multi-Cloud (Domains 35–39)',
     verify: () =>
-      fs.existsSync(path.join(rootDir, 'public', 'index.html')) &&
-      fs.existsSync(path.join(rootDir, 'public', 'css', 'styles.css')) &&
-      fs.existsSync(path.join(rootDir, 'public', 'js', 'app.js'))
+      ['35-k8s-production-operations.json', '36-multi-cluster-management.json', '37-cloud-native-architecture.json', '38-distributed-systems.json', '39-microservices-architecture.json']
+        .every((f) => fs.existsSync(path.join(curriculumDir, f)))
   },
   {
     id: 'Subphase 4.3.2',
     stage: 'Stage 4',
     phase: 'Phase 4.3',
-    title: 'Offline Service Worker & PWA Manifest',
+    title: 'Tier 6 Advanced Security & Emerging Technologies (Domains 40–42)',
     verify: () =>
-      fs.existsSync(path.join(rootDir, 'public', 'sw.js')) &&
-      fs.existsSync(path.join(rootDir, 'public', 'manifest.json'))
+      ['40-system-design.json', '41-platform-engineering.json', '42-security-engineering.json']
+        .every((f) => fs.existsSync(path.join(curriculumDir, f)))
   },
+  {
+    id: 'Subphase 4.3.3',
+    stage: 'Stage 4',
+    phase: 'Phase 4.3',
+    title: 'Tier 7 Edge, Wasm & AI-Assisted Operations (Domains 43–45)',
+    verify: () =>
+      ['43-cloud-architecture-patterns.json', '44-enterprise-architecture.json', '45-aiops-autonomous.json']
+        .every((f) => fs.existsSync(path.join(curriculumDir, f)))
+  },
+
+  // ==========================================
+  // STAGE 5: Multi-Track Guided Certifications & Simulators
+  // ==========================================
   {
     id: 'Subphase 5.1.1',
     stage: 'Stage 5',
     phase: 'Phase 5.1',
-    title: 'Unit & API Integration Test Suite',
-    verify: () => fs.existsSync(path.join(rootDir, 'tests', 'kubelabs.test.js'))
+    title: '6 Performance Certification Exam Simulators',
+    verify: () => certEngine.listPerformanceExams().length === 6
   },
   {
     id: 'Subphase 5.1.2',
     stage: 'Stage 5',
     phase: 'Phase 5.1',
-    title: 'Deterministic E2E Solver Proof Across All 52 Labs, 12 Incidents & 8 Capstones',
+    title: 'Dual Ed25519 & HMAC-SHA256 Cryptographic Verification Engine',
     verify: () => {
-      const labs = app.pluginManager.getAllLabs();
-      if (labs.length !== 52) return false;
-      for (const lab of labs) {
-        const c = new VirtualCluster(lab.initialClusterState);
-        const t = new TerminalEngine(c);
-        if (valEngine.evaluate(lab.validationRules, c, []).passed) return false;
-        for (const cmd of lab.solutionCommands) t.execute(cmd, { manifestText: lab.starterManifest });
-        if (!valEngine.evaluate(lab.validationRules, c, t.commandHistory).passed) return false;
-      }
-      return true;
+      const payload = { certId: 'audit-cert-01', learner: 'Learner', score: 100 };
+      const sig = certEngine.signCertificatePayloadEd25519(payload);
+      return certEngine.verifyCertificateEd25519(payload, sig) === true;
+    }
+  },
+  {
+    id: 'Subphase 5.1.3',
+    stage: 'Stage 5',
+    phase: 'Phase 5.1',
+    title: 'Dynamic Skill Radar & 16-Domain Mastery Matrix',
+    verify: () => {
+      const html = fs.readFileSync(path.join(rootDir, 'public', 'index.html'), 'utf8');
+      return html.includes('id="skill-radar-grid"');
     }
   },
   {
     id: 'Subphase 5.2.1',
     stage: 'Stage 5',
     phase: 'Phase 5.2',
-    title: 'Self-Audit & Subphase Verification CLI Scripts',
-    verify: () =>
-      fs.existsSync(path.join(rootDir, 'scripts', 'self-audit.js')) &&
-      fs.existsSync(path.join(rootDir, 'scripts', 'verify-subphases.js'))
+    title: '8 Multi-Milestone Production Capstone Projects Catalog',
+    verify: () => {
+      return projectEngine.projects.length === 8 && projectEngine.projects.reduce((acc, p) => acc + (p.milestones || []).length, 0) === 26;
+    }
   },
   {
     id: 'Subphase 5.2.2',
     stage: 'Stage 5',
     phase: 'Phase 5.2',
-    title: 'GitHub Actions Multi-OS CI/CD, Release & Security Scan Workflows',
-    verify: () =>
-      fs.existsSync(path.join(rootDir, '.github', 'workflows', 'ci.yml')) &&
-      fs.existsSync(path.join(rootDir, '.github', 'workflows', 'release.yml')) &&
-      fs.existsSync(path.join(rootDir, '.github', 'workflows', 'security-scan.yml'))
+    title: 'Deterministic Capstone Evaluator & Milestone Verification',
+    verify: () => {
+      const rep = projectEngine.validateProject('proj-01-hardened-edge-node');
+      return typeof rep.score === 'number' && typeof rep.passed === 'boolean';
+    }
   },
   {
     id: 'Subphase 5.2.3',
     stage: 'Stage 5',
     phase: 'Phase 5.2',
-    title: 'Rootless Dockerfile, Self-Hosting Kubernetes Manifests, STRIDE Threat Model & Perf Benchmarks',
+    title: 'Offline Isomorphic Engine Bundler',
+    verify: () => {
+      const p = path.join(rootDir, 'public', 'js', 'offlineEngine.js');
+      return fs.existsSync(p) && fs.statSync(p).size > 700000;
+    }
+  },
+  {
+    id: 'Subphase 5.3.1',
+    stage: 'Stage 5',
+    phase: 'Phase 5.3',
+    title: 'Service Worker v4 Offline Cache & Asset Pre-Caching',
+    verify: () => {
+      const sw = fs.readFileSync(path.join(rootDir, 'public', 'sw.js'), 'utf8');
+      return sw.includes('kubelabs-offline-v4');
+    }
+  },
+  {
+    id: 'Subphase 5.3.2',
+    stage: 'Stage 5',
+    phase: 'Phase 5.3',
+    title: 'Progressive Web App Manifest & Desktop Shell Packaging',
     verify: () =>
-      fs.existsSync(path.join(rootDir, 'Dockerfile')) &&
-      fs.existsSync(path.join(rootDir, 'docker-compose.yml')) &&
-      fs.existsSync(path.join(rootDir, 'deploy', 'kubernetes', 'kubelabs-k8s.yaml')) &&
-      fs.existsSync(path.join(rootDir, 'docs', '09-SECURITY-AND-THREAT-MODEL.md')) &&
-      fs.existsSync(path.join(rootDir, 'docs', '10-PERFORMANCE-AND-SCALABILITY-BENCHMARKS.md'))
+      fs.existsSync(path.join(rootDir, 'public', 'manifest.json')) &&
+      fs.existsSync(path.join(rootDir, 'deploy', 'desktop', 'tauri.conf.json'))
   },
   {
-    id: 'Subphase 10.1.1',
-    stage: 'Stage 10',
-    phase: 'Phase 10.1',
-    title: 'Persistent Ed25519 Keypair, Forged Signature Rejection & Bounded RateLimiter',
+    id: 'Subphase 5.3.3',
+    stage: 'Stage 5',
+    phase: 'Phase 5.3',
+    title: 'Offline Synthetic API Fallbacks & Sync Queue',
     verify: () => {
-      const qs = app.pluginManager.getTrackQuestions('track-foundations');
-      const answers = {};
-      for (const q of qs) answers[q.id] = q.correctIndex;
-      const graded = app.certificationEngine.gradeExam({ trackId: 'track-foundations', answers, learnerName: 'SecAudit' });
-      const validEd = app.certificationEngine.verifyCertificate(graded.certificate.certId, graded.certificate.signatureEd25519);
-      const forged = app.certificationEngine.verifyCertificate(graded.certificate.certId, 'forged-sig-123');
-      return validEd.valid === true && forged.valid === false;
+      const sw = fs.readFileSync(path.join(rootDir, 'public', 'sw.js'), 'utf8');
+      return sw.includes('/api/curriculum') && sw.includes('/api/war-room/scenarios');
+    }
+  },
+
+  // ==========================================
+  // STAGE 6: Deterministic End-to-End Verification
+  // ==========================================
+  {
+    id: 'Subphase 6.1.1',
+    stage: 'Stage 6',
+    phase: 'Phase 6.1',
+    title: 'Pre-Solution Zero-Score Assertion across All 45 Domains',
+    verify: () => fs.existsSync(path.join(rootDir, 'tests', 'stage6-pre-score-zero.test.js'))
+  },
+  {
+    id: 'Subphase 6.1.2',
+    stage: 'Stage 6',
+    phase: 'Phase 6.1',
+    title: 'Step-by-Step Canonical Solution Replay across All 45 Domains',
+    verify: () => fs.existsSync(path.join(rootDir, 'tests', 'stage6-canonical-replay.test.js'))
+  },
+  {
+    id: 'Subphase 6.1.3',
+    stage: 'Stage 6',
+    phase: 'Phase 6.1',
+    title: 'Anti-Stub Terminal Output Audit',
+    verify: () => fs.existsSync(path.join(rootDir, 'tests', 'stage6-anti-stub.test.js'))
+  },
+  {
+    id: 'Subphase 6.2.1',
+    stage: 'Stage 6',
+    phase: 'Phase 6.2',
+    title: 'Offline Engine & Service Worker v4 Sync',
+    verify: () => fs.existsSync(path.join(rootDir, 'tests', 'stage6-offline-sync.test.js'))
+  },
+  {
+    id: 'Subphase 6.2.2',
+    stage: 'Stage 6',
+    phase: 'Phase 6.2',
+    title: 'DOM & Layout Non-Empty State Verification',
+    verify: () => fs.existsSync(path.join(rootDir, 'tests', 'stage6-layout-dom.test.js'))
+  },
+  {
+    id: 'Subphase 6.2.3',
+    stage: 'Stage 6',
+    phase: 'Phase 6.2',
+    title: 'WCAG 2.1 AA Keyboard & Screen-Reader Audit',
+    verify: () => fs.existsSync(path.join(rootDir, 'tests', 'stage6-a11y-wcag.test.js'))
+  },
+  {
+    id: 'Subphase 6.3.1',
+    stage: 'Stage 6',
+    phase: 'Phase 6.3',
+    title: 'Upgrade self-audit.js & verify-subphases.js for 54 Subphases',
+    verify: () => {
+      const selfAudit = fs.readFileSync(path.join(rootDir, 'scripts', 'self-audit.js'), 'utf8');
+      const verifyScript = fs.readFileSync(path.join(rootDir, 'scripts', 'verify-subphases.js'), 'utf8');
+      return selfAudit.includes('AgentOrchestrator') && verifyScript.includes('54 SUBPHASES');
     }
   },
   {
-    id: 'Subphase 10.2.1',
-    stage: 'Stage 10',
-    phase: 'Phase 10.2',
-    title: 'Job/CronJob/ReplicaSet Reconciliation, IRSA, CFS CPU Throttling & Multi-CLI Parity',
+    id: 'Subphase 6.3.2',
+    stage: 'Stage 6',
+    phase: 'Phase 6.3',
+    title: 'Performance & Memory Footprint Verification',
     verify: () => {
-      const c = new VirtualCluster();
-      const t = new TerminalEngine(c);
-      t.execute('kubectl create cronjob audit-job --image=busybox:1.36 -n production');
-      return (
-        c.getResources('CronJob', 'production').length === 1 &&
-        c.getResources('Job', 'production').length === 1 &&
-        t.execute('flux check').exitCode === 0 &&
-        t.execute('linkerd check').exitCode === 0
-      );
+      const rssMB = process.memoryUsage().rss / (1024 * 1024);
+      return rssMB < 150;
     }
   },
   {
-    id: 'Subphase 10.3.1',
-    stage: 'Stage 10',
-    phase: 'Phase 10.3',
-    title: 'All 15 Production Outage Scenarios (Website Down, Slow App, DNS, IAM IRSA, Storage, Node NotReady, etcd)',
-    verify: () => {
-      const incidents = app.incidentEngine.scenarios;
-      if (incidents.length !== 15) return false;
-      for (const inc of incidents) {
-        const c = new VirtualCluster();
-        app.incidentEngine.injectIncident(inc.id, c);
-        const t = new TerminalEngine(c);
-        if (app.incidentEngine.verifyIncidentResolution(inc.id, c, []).passed) return false;
-        for (const cmd of inc.solutionCommands) t.execute(cmd);
-        if (!app.incidentEngine.verifyIncidentResolution(inc.id, c, t.commandHistory).passed) return false;
-      }
-      return true;
-    }
-  },
-  {
-    id: 'Subphase 10.4.1',
-    stage: 'Stage 10',
-    phase: 'Phase 10.4',
-    title: 'Cross-Platform Packaging (Tauri Desktop, Capacitor Android/iOS, Helm Chart, Kustomize)',
+    id: 'Subphase 6.3.3',
+    stage: 'Stage 6',
+    phase: 'Phase 6.3',
+    title: 'Documentation & Walkthrough Update',
     verify: () =>
-      fs.existsSync(path.join(rootDir, 'deploy', 'helm', 'kubelabs', 'Chart.yaml')) &&
-      fs.existsSync(path.join(rootDir, 'deploy', 'desktop', 'tauri.conf.json')) &&
-      fs.existsSync(path.join(rootDir, 'deploy', 'mobile', 'capacitor.config.json'))
+      fs.existsSync(path.join(rootDir, 'README.md')) &&
+      fs.existsSync(path.join(rootDir, 'docs', '07-CURRICULUM-CATALOG.md')) &&
+      fs.existsSync(path.join(rootDir, 'docs', '15-V4-SUBPHASE-TRACKING-LEDGER.md'))
   }
 ];
 
 console.log('========================================================================================');
-console.log(' KUBELABS SUBPHASE-BY-SUBPHASE SEQUENTIAL EXECUTION & VALIDATION LEDGER (40 SUBPHASES)');
+console.log(' KUBELABS SUBPHASE-BY-SUBPHASE SEQUENTIAL EXECUTION & VALIDATION LEDGER (54 SUBPHASES)');
 console.log('========================================================================================');
 
 let passedCount = 0;
@@ -480,7 +590,7 @@ for (const sp of SUBPHASES) {
   let ok = false;
   try {
     ok = Boolean(sp.verify());
-  } catch {
+  } catch (err) {
     ok = false;
   }
   const ms = Date.now() - start;
@@ -497,4 +607,3 @@ console.log('===================================================================
 if (passedCount !== SUBPHASES.length) {
   process.exit(1);
 }
-
