@@ -1216,6 +1216,8 @@ class TerminalEngine {
       case 'logql':
       case 'logcli':
         return this.handleLogql(bin, args);
+      case 'otelcol':
+        return this.handleOtelcol(bin, args);
       case 'opa':
       case 'conftest':
         return this.handleOpa(bin, args);
@@ -3767,6 +3769,20 @@ class TerminalEngine {
       };
     }
     return { exitCode: 0, output: 'logql stream active' };
+  }
+
+  handleOtelcol(bin, args) {
+    if (this.multiCli) {
+      const res = this.multiCli.handleOtelcol({ argv: [bin, ...args], cwd: this.cwd, vfs: this.vfs });
+      return {
+        exitCode: res.code !== undefined ? res.code : 0,
+        output: (res.stdout || res.stderr || '').replace(/\n$/, ''),
+        stdout: res.stdout || '',
+        stderr: res.stderr || '',
+        ...res
+      };
+    }
+    return { exitCode: 0, output: 'OpenTelemetry Collector active' };
   }
 
   handleOpa(bin, args) {

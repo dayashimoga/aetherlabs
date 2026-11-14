@@ -1,0 +1,212 @@
+{
+  "id": "logging-monitoring",
+  "title": "Cloud-Native Logging Architecture, Vector Aggregation & Grafana Loki LogQL",
+  "category": "Observability & SRE",
+  "trackId": "track-sre",
+  "version": "1.0.0",
+  "difficulty": "Intermediate",
+  "estimatedHours": 8,
+  "summary": "Master scalable cloud-native logging: building low-latency log pipelines using Vector / Fluent Bit, high-throughput log aggregation with Grafana Loki, PII redaction and structured JSON parsing, and executing advanced stream and line filter LogQL queries.",
+  "prerequisites": [
+    "observability-core",
+    "kubernetes-core-v4"
+  ],
+  "learningObjectives": [
+    "Configure high-throughput log shipping and aggregation using Vector / Fluent Bit DaemonSets with multiline parsing.",
+    "Implement privacy compliance and security filters in Vector pipelines to redact sensitive PII (credit cards, tokens) before storage.",
+    "Formulate Grafana Loki LogQL queries using stream selectors, line filters (|=, !~), and JSON line unwrapping (| json)."
+  ],
+  "curriculumModules": [
+    {
+      "id": "mod-log-01",
+      "title": "Log Pipeline Architecture, Vector Shipping & PII Redaction",
+      "conceptSummary": "Modern cloud-native logging separates collection (node-level DaemonSets scraping /var/log/pods), transformation (Vector/FluentBit parsing JSON, adding Kubernetes metadata, and scrubbing PII), and long-term storage (Grafana Loki or Object Storage). Unindexed, label-only indexing in Loki avoids memory-heavy inverted indexes like Elasticsearch.",
+      "productionArchitecturePattern": "Deploy Vector agents on each node to scrub JWT tokens and credit card numbers via regex transforms before shipping compressed streams to Loki, fulfilling GDPR and PCI-DSS compliance.",
+      "keyCommands": [
+        "kubectl get daemonsets -n logging",
+        "cat /logging/vector.yaml",
+        "logql '{namespace=\"production\"} |= \"error\"'"
+      ]
+    },
+    {
+      "id": "mod-log-02",
+      "title": "Grafana Loki Stream Indexing & Advanced LogQL Analysis",
+      "conceptSummary": "Grafana Loki indexes metadata labels (e.g. {app='payment', env='prod'}) rather than full log text. LogQL extends this with line filters (|= 'error', != 'timeout'), pattern parsers (| json, | logfmt), and metric queries (rate({app='payment'} |= '500'[5m])). This enables rapid troubleshooting without prohibitive indexing storage costs.",
+      "productionArchitecturePattern": "Keep Loki stream label cardinality low ({app, namespace, environment}); use LogQL | json or | pattern during queries to extract dynamic fields (userId, status, latencyMs) on-the-fly.",
+      "keyCommands": [
+        "logql '{app=\"payment-api\"} |= \"failed\" | json'",
+        "logcli query '{namespace=\"monitoring\"}'",
+        "kubectl get configmaps -n logging"
+      ]
+    }
+  ],
+  "labs": [
+    {
+      "id": "lab-log-01-vector-pii-scrub",
+      "title": "Configuring Vector Log Pipelines with Automated PII Redaction",
+      "difficulty": "Intermediate",
+      "durationMinutes": 20,
+      "xpReward": 150,
+      "scenario": "Implement automated PII scrubbing in log collection: author a Vector configuration in /logging/vector.yaml defining a kubernetes_logs source, a remap transform redacting credit card numbers with [REDACTED_CC], and a loki sink. Apply this configuration as ConfigMap vector-config in namespace logging.",
+      "productionContext": "Automated inline PII redaction ensures application logs can be analyzed by engineers without violating security policies or exposing customer payment credentials.",
+      "prerequisites": [
+        "lab-prom-01-servicemonitor-discovery"
+      ],
+      "objectives": [
+        "Create namespace logging.",
+        "Author Vector pipeline with remap transform in /logging/vector.yaml.",
+        "Deploy ConfigMap vector-config in namespace logging."
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: vector-config\n  namespace: logging\ndata:\n  vector.yaml: |\n    sources:\n      k8s_logs:\n        type: kubernetes_logs\n    transforms:\n      redact_pii:\n        type: remap\n        inputs: [k8s_logs]\n        source: .message = replace(.message, r'[0-9]{4}-[0-9]{4}-[0-9]{4}-[0-9]{4}', \"[REDACTED_CC]\")\n    sinks:\n      loki:\n        type: loki\n        inputs: [redact_pii]\n        endpoint: \"http://loki.logging.svc:3100\"\n",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Create logging namespace and author Vector YAML",
+          "instruction": "Create namespace logging and save the Vector pipeline config to /logging/vector.yaml.",
+          "commandHint": "kubectl create namespace logging\ncat << 'EOF' > /logging/vector.yaml\n...\nEOF"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Deploy ConfigMap to logging namespace",
+          "instruction": "Apply the ConfigMap manifest to namespace logging.",
+          "commandHint": "kubectl apply -f /logging/vector-configmap.yaml"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "vfs-vector-yaml-exists",
+          "description": "/logging/vector.yaml contains REDACTED_CC",
+          "type": "vfs_file_contains",
+          "path": "/logging/vector.yaml",
+          "pattern": "REDACTED_CC",
+          "remediation": "Write PII redaction transform in /logging/vector.yaml"
+        },
+        {
+          "id": "cm-vector-config-exists",
+          "description": "ConfigMap vector-config exists in namespace logging",
+          "type": "resource_exists",
+          "kind": "ConfigMap",
+          "namespace": "logging",
+          "name": "vector-config",
+          "remediation": "Apply ConfigMap vector-config in namespace logging"
+        },
+        {
+          "id": "cm-vector-data-contains-redaction",
+          "description": "ConfigMap vector data contains REDACTED_CC",
+          "type": "resource_field_contains",
+          "kind": "ConfigMap",
+          "namespace": "logging",
+          "name": "vector-config",
+          "fieldPath": "data['vector.yaml']",
+          "expectedValue": "REDACTED_CC",
+          "remediation": "Embed REDACTED_CC remap rule in data['vector.yaml']"
+        }
+      ],
+      "solutionCommands": [
+        "mkdir -p /logging",
+        "kubectl create namespace logging",
+        "cat << 'EOF' > /logging/vector.yaml\nsources:\n  k8s_logs:\n    type: kubernetes_logs\ntransforms:\n  redact_pii:\n    type: remap\n    inputs: [k8s_logs]\n    source: .message = replace(.message, r'[0-9]{4}-[0-9]{4}-[0-9]{4}-[0-9]{4}', \"[REDACTED_CC]\")\nsinks:\n  loki:\n    type: loki\n    inputs: [redact_pii]\n    endpoint: \"http://loki.logging.svc:3100\"\nEOF",
+        "cat << 'EOF' > /logging/vector-configmap.yaml\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: vector-config\n  namespace: logging\ndata:\n  vector.yaml: |\n    sources:\n      k8s_logs:\n        type: kubernetes_logs\n    transforms:\n      redact_pii:\n        type: remap\n        inputs: [k8s_logs]\n        source: .message = replace(.message, r'[0-9]{4}-[0-9]{4}-[0-9]{4}-[0-9]{4}', \"[REDACTED_CC]\")\n    sinks:\n      loki:\n        type: loki\n        inputs: [redact_pii]\n        endpoint: \"http://loki.logging.svc:3100\"\nEOF",
+        "kubectl apply -f /logging/vector-configmap.yaml"
+      ],
+      "troubleshootingGuide": [
+        {
+          "problem": "ConfigMap vector-config missing or PII redaction missing.",
+          "cause": "ConfigMap was not created in logging namespace or remap rule was omitted.",
+          "solution": "Verify /logging/vector.yaml contains REDACTED_CC and apply to namespace logging."
+        }
+      ]
+    },
+    {
+      "id": "lab-log-02-loki-logql",
+      "title": "Querying Distributed Log Streams with Grafana Loki LogQL",
+      "difficulty": "Intermediate",
+      "durationMinutes": 20,
+      "xpReward": 150,
+      "scenario": "Perform root-cause log diagnostics during an incident: execute logql queries filtering stream {app=\"payment-api\"} for failed payment events using |= \"payment failed\", saving the extracted error stream into /logging/error-audit.log.",
+      "productionContext": "LogQL stream selectors with line filter expressions allow rapid log triage across thousands of container pods without downloading gigabytes of irrelevant log text.",
+      "prerequisites": [
+        "lab-log-01-vector-pii-scrub"
+      ],
+      "objectives": [
+        "Execute logql query filtering {app=\"payment-api\"} |= \"payment failed\".",
+        "Save output stream to /logging/error-audit.log."
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "# Loki LogQL Incident Query Diagnostic\n# Query: logql '{app=\"payment-api\"} |= \"payment failed\"'\n# Output target: /logging/error-audit.log\n",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Execute LogQL query",
+          "instruction": "Query Loki stream {app=\"payment-api\"} with line filter |= \"payment failed\".",
+          "commandHint": "logql '{app=\"payment-api\"} |= \"payment failed\"'"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Save output to audit log file",
+          "instruction": "Redirect the query output to /logging/error-audit.log.",
+          "commandHint": "logql '{app=\"payment-api\"} |= \"payment failed\"' > /logging/error-audit.log"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "logql-query-executed",
+          "description": "logql query executed",
+          "type": "command_executed",
+          "commandSubstring": "logql",
+          "remediation": "Execute logql query"
+        },
+        {
+          "id": "error-audit-file-exists",
+          "description": "/logging/error-audit.log contains stream results",
+          "type": "vfs_file_contains",
+          "path": "/logging/error-audit.log",
+          "pattern": "log event stream active",
+          "remediation": "Redirect logql output to /logging/error-audit.log"
+        }
+      ],
+      "solutionCommands": [
+        "mkdir -p /logging",
+        "logql '{app=\"payment-api\"} |= \"payment failed\"' > /logging/error-audit.log"
+      ],
+      "troubleshootingGuide": [
+        {
+          "problem": "/logging/error-audit.log missing or empty.",
+          "cause": "Command was not redirected to /logging/error-audit.log.",
+          "solution": "Execute logql '{app=\"payment-api\"} |= \"payment failed\"' > /logging/error-audit.log."
+        }
+      ]
+    }
+  ],
+  "assessmentQuestions": [
+    {
+      "id": "q-log-01",
+      "question": "What is the key architectural difference between Grafana Loki and traditional log indexing systems like Elasticsearch?",
+      "options": [
+        "Loki compresses all logs into zip archives on local hard drives.",
+        "Loki only indexes metadata labels for log streams (e.g. {app='web', env='prod'}) rather than the full-text log payload, drastically reducing memory usage, storage costs, and index maintenance overhead while querying payloads on-demand with LogQL.",
+        "Loki requires application code to be written exclusively in Golang.",
+        "Loki only stores logs for 5 minutes before discarding them."
+      ],
+      "correctIndex": 1,
+      "explanation": "By indexing only labels rather than building an inverted index of every word, Loki requires orders of magnitude less memory and storage than Elasticsearch, making it economical to retain petabytes of logs in object storage."
+    },
+    {
+      "id": "q-log-02",
+      "question": "In a LogQL query, what is the purpose of the '| json' pipeline stage?",
+      "options": [
+        "It converts the entire server response to HTML.",
+        "It parses structured JSON log lines at query time, extracting JSON properties into temporary labels that can be filtered, formatted, or aggregated in subsequent pipeline stages.",
+        "It encrypts the log payload using AES-256.",
+        "It forces the query to fail if any log line contains numbers."
+      ],
+      "correctIndex": 1,
+      "explanation": "The '| json' parser extracts fields from JSON log entries into labels, allowing users to query against dynamic fields (e.g. | status >= 500) without having indexed those fields upfront."
+    }
+  ]
+}

@@ -1,0 +1,230 @@
+{
+  "id": "opentelemetry-traces",
+  "title": "OpenTelemetry Distributed Tracing, Collector Pipelines & Context Propagation",
+  "category": "Observability & SRE",
+  "trackId": "track-sre",
+  "version": "1.0.0",
+  "difficulty": "Intermediate",
+  "estimatedHours": 8,
+  "summary": "Master cloud-native distributed tracing with OpenTelemetry (OTel): configuring OTel Collector pipelines (receivers, processors, exporters), W3C tracecontext distributed header propagation across microservices, tail-based sampling, and validating collector configs using otelcol.",
+  "prerequisites": [
+    "observability-core",
+    "kubernetes-core-v4"
+  ],
+  "learningObjectives": [
+    "Understand W3C TraceContext standards (traceparent, tracestate) and distributed context propagation across asynchronous boundaries.",
+    "Configure OpenTelemetry Collector pipelines with memory_limiter and batch processors, validating configs with otelcol.",
+    "Implement tail-based sampling strategies in OTel Collector to capture error and high-latency traces while dropping mundane traffic."
+  ],
+  "curriculumModules": [
+    {
+      "id": "mod-otel-01",
+      "title": "Distributed Tracing Foundations & W3C TraceContext Propagation",
+      "conceptSummary": "Distributed tracing correlates operations across microservice boundaries. The W3C TraceContext standard defines the traceparent header: version, 16-byte trace-id, 8-byte parent-span-id, and trace-flags. Passing this header across HTTP/gRPC requests allows backends (Jaeger, Tempo) to reconstruct end-to-end DAG execution trees.",
+      "productionArchitecturePattern": "Mandate W3C TraceContext propagation across internal service meshes and API gateways, ensuring asynchronous message queues (Kafka, RabbitMQ) forward trace headers in message metadata.",
+      "keyCommands": [
+        "kubectl get deployments -l app.kubernetes.io/name=otel-collector -n monitoring",
+        "cat /otel/trace-context.json",
+        "otelcol validate --config=/otel/collector-config.yaml"
+      ]
+    },
+    {
+      "id": "mod-otel-02",
+      "title": "OpenTelemetry Collector Architecture & Pipeline Engineering",
+      "conceptSummary": "The OpenTelemetry Collector receives telemetry in multiple formats (OTLP, Zipkin, Jaeger), processes it through ordered pipeline processors (memory_limiter, batch, transform), and exports to backends. Ordering is critical: memory_limiter must precede the batch processor to prevent out-of-memory crashes during traffic surges.",
+      "productionArchitecturePattern": "Deploy OTel Collector in dual-tier architecture: node-level DaemonSets for lightweight agent forwarding, sending to an autoscaled Gateway deployment for tail-sampling, enrichment, and egress fan-out.",
+      "keyCommands": [
+        "otelcol validate --config=/otel/collector-config.yaml",
+        "kubectl apply -f /otel/collector-configmap.yaml",
+        "kubectl get pods -n monitoring -l app=otel-collector"
+      ]
+    }
+  ],
+  "labs": [
+    {
+      "id": "lab-otel-01-collector-pipeline",
+      "title": "Authoring and Validating OTel Collector Pipelines with otelcol",
+      "difficulty": "Intermediate",
+      "durationMinutes": 20,
+      "xpReward": 150,
+      "scenario": "Configure enterprise telemetry ingestion: author an OpenTelemetry Collector configuration in /otel/collector-config.yaml defining otlp receiver (protocols: grpc, http), memory_limiter and batch processors, and otlp exporter pointing to tempo:4317. Wire these under service.pipelines.traces. Validate the configuration using otelcol validate --config=/otel/collector-config.yaml, then deploy as ConfigMap otel-collector-config in namespace monitoring.",
+      "productionContext": "Pre-validating OTel Collector configurations prevents invalid processor orderings or missing receiver definitions from crashing the collector fleet in production.",
+      "prerequisites": [
+        "lab-prom-01-servicemonitor-discovery"
+      ],
+      "objectives": [
+        "Author OpenTelemetry Collector YAML in /otel/collector-config.yaml.",
+        "Validate configuration using otelcol validate --config=/otel/collector-config.yaml.",
+        "Deploy ConfigMap otel-collector-config in namespace monitoring."
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "receivers:\n  otlp:\n    protocols:\n      grpc:\n      http:\nprocessors:\n  memory_limiter:\n    check_interval: 1s\n    limit_percentage: 75\n  batch:\n    timeout: 1s\nexporters:\n  otlp:\n    endpoint: \"tempo.monitoring.svc.cluster.local:4317\"\n    tls:\n      insecure: true\nservice:\n  pipelines:\n    traces:\n      receivers: [otlp]\n      processors: [memory_limiter, batch]\n      exporters: [otlp]\n",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Write OTel Collector configuration file",
+          "instruction": "Save the pipeline definition to /otel/collector-config.yaml.",
+          "commandHint": "mkdir -p /otel\ncat << 'EOF' > /otel/collector-config.yaml\n...\nEOF"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Validate configuration syntax using otelcol CLI",
+          "instruction": "Run otelcol validate to verify the processor order and pipelines.",
+          "commandHint": "otelcol validate --config=/otel/collector-config.yaml"
+        },
+        {
+          "stepNumber": 3,
+          "title": "Deploy ConfigMap to monitoring namespace",
+          "instruction": "Apply the collector ConfigMap to namespace monitoring.",
+          "commandHint": "kubectl apply -f /otel/collector-configmap.yaml"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "vfs-collector-yaml-exists",
+          "description": "/otel/collector-config.yaml contains memory_limiter",
+          "type": "vfs_file_contains",
+          "path": "/otel/collector-config.yaml",
+          "pattern": "memory_limiter",
+          "remediation": "Write memory_limiter processor in /otel/collector-config.yaml"
+        },
+        {
+          "id": "otelcol-validate-executed",
+          "description": "otelcol validate executed on collector-config.yaml",
+          "type": "command_executed",
+          "commandSubstring": "otelcol validate",
+          "remediation": "Execute otelcol validate --config=/otel/collector-config.yaml"
+        },
+        {
+          "id": "cm-otel-collector-exists",
+          "description": "ConfigMap otel-collector-config exists in namespace monitoring",
+          "type": "resource_exists",
+          "kind": "ConfigMap",
+          "namespace": "monitoring",
+          "name": "otel-collector-config",
+          "remediation": "Apply ConfigMap otel-collector-config in namespace monitoring"
+        }
+      ],
+      "solutionCommands": [
+        "mkdir -p /otel",
+        "cat << 'EOF' > /otel/collector-config.yaml\nreceivers:\n  otlp:\n    protocols:\n      grpc:\n      http:\nprocessors:\n  memory_limiter:\n    check_interval: 1s\n    limit_percentage: 75\n  batch:\n    timeout: 1s\nexporters:\n  otlp:\n    endpoint: \"tempo.monitoring.svc.cluster.local:4317\"\n    tls:\n      insecure: true\nservice:\n  pipelines:\n    traces:\n      receivers: [otlp]\n      processors: [memory_limiter, batch]\n      exporters: [otlp]\nEOF",
+        "otelcol validate --config=/otel/collector-config.yaml",
+        "cat << 'EOF' > /otel/collector-configmap.yaml\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: otel-collector-config\n  namespace: monitoring\ndata:\n  collector.yaml: |\n    receivers:\n      otlp:\n        protocols:\n          grpc:\n          http:\n    processors:\n      memory_limiter:\n        check_interval: 1s\n        limit_percentage: 75\n      batch:\n        timeout: 1s\n    exporters:\n      otlp:\n        endpoint: \"tempo.monitoring.svc.cluster.local:4317\"\n        tls:\n          insecure: true\n    service:\n      pipelines:\n        traces:\n          receivers: [otlp]\n          processors: [memory_limiter, batch]\n          exporters: [otlp]\nEOF",
+        "kubectl apply -f /otel/collector-configmap.yaml"
+      ],
+      "troubleshootingGuide": [
+        {
+          "problem": "otelcol reports configuration validation failed or ConfigMap missing.",
+          "cause": "Receivers, processors, or exporters were referenced in service.pipelines but omitted from root definitions.",
+          "solution": "Verify receivers.otlp, processors.memory_limiter, and exporters.otlp are defined in /otel/collector-config.yaml."
+        }
+      ]
+    },
+    {
+      "id": "lab-otel-02-trace-context",
+      "title": "Implementing W3C TraceContext Propagation Specifications",
+      "difficulty": "Intermediate",
+      "durationMinutes": 20,
+      "xpReward": 150,
+      "scenario": "Define distributed context propagation standards: write a JSON specification to /otel/trace-context.json defining W3C traceparent structure (version: '00', sample trace_id: '4bf92f3577b34da6a3ce929d0e0e4736', parent_id: '00f067aa0ba902b7', flags: '01'). Deploy this contract in Secret trace-context-contract in namespace default.",
+      "productionContext": "Standardized W3C traceparent headers allow polyglot microservice fleets (Go, Java, Node, Python) to pass distributed context seamlessly across HTTP gateways.",
+      "prerequisites": [
+        "lab-otel-01-collector-pipeline"
+      ],
+      "objectives": [
+        "Author trace context JSON in /otel/trace-context.json.",
+        "Apply Secret trace-context-contract in default namespace.",
+        "Verify trace_id and traceparent header presence."
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "apiVersion: v1\nkind: Secret\nmetadata:\n  name: trace-context-contract\n  namespace: default\ndata:\n  trace-context.json: |\n    {\n      \"header\": \"traceparent\",\n      \"version\": \"00\",\n      \"trace_id\": \"4bf92f3577b34da6a3ce929d0e0e4736\",\n      \"parent_id\": \"00f067aa0ba902b7\",\n      \"flags\": \"01\"\n    }\n",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Author trace context specification",
+          "instruction": "Save trace context parameters to /otel/trace-context.json.",
+          "commandHint": "cat << 'EOF' > /otel/trace-context.json\n...\nEOF"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Apply Secret to default namespace",
+          "instruction": "Apply the Secret manifest to namespace default.",
+          "commandHint": "kubectl apply -f /otel/trace-context-secret.yaml"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "vfs-trace-spec-exists",
+          "description": "/otel/trace-context.json contains 4bf92f3577b34da6a3ce929d0e0e4736",
+          "type": "vfs_file_contains",
+          "path": "/otel/trace-context.json",
+          "pattern": "4bf92f3577b34da6a3ce929d0e0e4736",
+          "remediation": "Write W3C trace_id 4bf92f3577b34da6a3ce929d0e0e4736 in /otel/trace-context.json"
+        },
+        {
+          "id": "secret-trace-contract-exists",
+          "description": "Secret trace-context-contract exists in namespace default",
+          "type": "resource_exists",
+          "kind": "Secret",
+          "namespace": "default",
+          "name": "trace-context-contract",
+          "remediation": "Apply Secret trace-context-contract in namespace default"
+        },
+        {
+          "id": "secret-data-contains-traceparent",
+          "description": "Secret data contains traceparent",
+          "type": "resource_field_contains",
+          "kind": "Secret",
+          "namespace": "default",
+          "name": "trace-context-contract",
+          "fieldPath": "data['trace-context.json']",
+          "expectedValue": "traceparent",
+          "remediation": "Configure traceparent header in data['trace-context.json']"
+        }
+      ],
+      "solutionCommands": [
+        "mkdir -p /otel",
+        "cat << 'EOF' > /otel/trace-context.json\n{\n  \"header\": \"traceparent\",\n  \"version\": \"00\",\n  \"trace_id\": \"4bf92f3577b34da6a3ce929d0e0e4736\",\n  \"parent_id\": \"00f067aa0ba902b7\",\n  \"flags\": \"01\"\n}\nEOF",
+        "cat << 'EOF' > /otel/trace-context-secret.yaml\napiVersion: v1\nkind: Secret\nmetadata:\n  name: trace-context-contract\n  namespace: default\ndata:\n  trace-context.json: |\n    {\n      \"header\": \"traceparent\",\n      \"version\": \"00\",\n      \"trace_id\": \"4bf92f3577b34da6a3ce929d0e0e4736\",\n      \"parent_id\": \"00f067aa0ba902b7\",\n      \"flags\": \"01\"\n    }\nEOF",
+        "kubectl apply -f /otel/trace-context-secret.yaml"
+      ],
+      "troubleshootingGuide": [
+        {
+          "problem": "Secret trace-context-contract missing or trace_id mismatch.",
+          "cause": "Secret was applied in wrong namespace or trace_id string was truncated.",
+          "solution": "Verify /otel/trace-context.json contains 32-hex trace_id and apply to namespace default."
+        }
+      ]
+    }
+  ],
+  "assessmentQuestions": [
+    {
+      "id": "q-otel-01",
+      "question": "In OpenTelemetry Collector pipeline configuration, why is processor ordering critical, specifically regarding memory_limiter and batch processors?",
+      "options": [
+        "Processors are executed in alphabetical order regardless of YAML definition.",
+        "The memory_limiter processor must precede the batch processor so that incoming telemetry batches are dropped or backpressured before memory is allocated for batch queues, preventing OOM crashes.",
+        "The batch processor must always run first to decompress gzip payloads.",
+        "Processor order only matters when exporting metrics to Prometheus."
+      ],
+      "correctIndex": 1,
+      "explanation": "Processors execute in the exact order listed in service.pipelines. Placing memory_limiter first ensures memory checks occur before large batches are queued into memory, shielding the collector process from OOM crashes."
+    },
+    {
+      "id": "q-otel-02",
+      "question": "What four fields compose the W3C traceparent HTTP header (e.g. 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01)?",
+      "options": [
+        "timestamp, cluster-id, pod-name, container-id",
+        "version (00), 16-byte trace-id, 8-byte parent-span-id, and 8-bit trace-flags (e.g. 01 recorded).",
+        "protocol, hostname, port, uri",
+        "sha256-hash, signature, public-key, expiration"
+      ],
+      "correctIndex": 1,
+      "explanation": "W3C traceparent standard format is 'version-traceid-parentid-traceflags'. Version is '00', trace ID is 32 hex chars (16 bytes), parent span ID is 16 hex chars (8 bytes), and trace flags bit 0 indicates if the trace was sampled."
+    }
+  ]
+}
