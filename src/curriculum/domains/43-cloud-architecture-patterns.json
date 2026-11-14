@@ -1,0 +1,285 @@
+{
+  "id": "cloud-architecture-patterns",
+  "title": "Cloud Architecture Patterns, CQRS, Event Sourcing & Resilient Systems",
+  "category": "Architecture & System Design",
+  "trackId": "track-platform",
+  "version": "1.0.0",
+  "difficulty": "Advanced",
+  "estimatedHours": 8,
+  "summary": "Master high-scale cloud-native architecture patterns: Command Query Responsibility Segregation (CQRS), Event Sourcing append-only transaction ledgers, asynchronous Queue-Based Load Leveling to protect downstream stateful bottlenecks, and resilient transient fault recovery using Exponential Backoff with Decorrelated Jitter.",
+  "prerequisites": [
+    "system-design",
+    "microservices-architecture"
+  ],
+  "learningObjectives": [
+    "Architect decoupled CQRS and Event Sourcing data models separating high-throughput immutable command journals from materialized read projections.",
+    "Implement Queue-Based Load Leveling buffers that smooth erratic ingress traffic spikes and decouple high-frequency producers from rate-constrained consumers.",
+    "Apply Exponential Backoff with Decorrelated Jitter retry algorithms to avoid thundering herd contention and downstream database lockouts during recovery."
+  ],
+  "curriculumModules": [
+    {
+      "id": "mod-cap-01",
+      "title": "CQRS & Event Sourcing Transactional Ledgers",
+      "conceptSummary": "Command Query Responsibility Segregation (CQRS) splits data operations into distinct read and write models. Instead of mutating relational tables in place, Event Sourcing records all state mutations as an immutable, append-only chronological journal of domain events. Asynchronous background projection handlers materialize these events into optimized, read-only cache views (Elasticsearch, Redis, or read replicas) providing sub-millisecond query performance without cross-table joins or relational write contention.",
+      "productionArchitecturePattern": "Publish append-only domain events to an event journal topic, decoupling writes from async denormalized query projections.",
+      "keyCommands": [
+        "cat /arch/cqrs-event-stream.yaml",
+        "kubectl apply -f /arch/cqrs-event-stream.yaml"
+      ]
+    },
+    {
+      "id": "mod-cap-02",
+      "title": "Queue-Based Load Leveling, Circuit Breakers & Backoff with Jitter",
+      "conceptSummary": "Heavy traffic bursts frequently overwhelm synchronous microservice APIs and backend database connections. The Queue-Based Load Leveling pattern inserts an intermediate message buffer (RabbitMQ, SQS, or Kafka) between clients and workers, allowing consumers to process requests at a steady, sustainable pace regardless of ingress spikes. When downstream dependencies fail, callers must execute Exponential Backoff with full decorrelated jitter (t = min(max_interval, base * 2^attempt) + uniform_random) to desynchronize concurrent retries and avoid crashing recovered services (thundering herd).",
+      "productionArchitecturePattern": "Insert priority FIFO queue buffers ahead of fragile legacy databases, governing consumer concurrency and executing jittered retry loops.",
+      "keyCommands": [
+        "cat /arch/queue-load-leveling.yaml",
+        "kubectl apply -f /arch/queue-load-leveling.yaml"
+      ]
+    }
+  ],
+  "labs": [
+    {
+      "id": "lab-cap-01-cqrs-event-sourcing",
+      "title": "CQRS Event Store Specification & Materialized Read Projection",
+      "difficulty": "Advanced",
+      "durationMinutes": 20,
+      "xpReward": 150,
+      "scenario": "Separate high-frequency write operations from query workloads. Author manifest /arch/cqrs-event-stream.yaml in namespace production defining ConfigMap cqrs-event-stream-spec with data keys: streamName: 'order-events-stream', partitionKey: 'orderId', retentionDays: '30', and projectionStore: 'order-summary-read-view'. In addition, author Deployment order-command-handler running 2 replicas in namespace production with image order-command-service:v1.0. Apply both manifests to namespace production.",
+      "productionContext": "High-throughput transactional systems prevent relational table lock escalations by streaming immutable state transitions to decoupled materialized read views.",
+      "prerequisites": [
+        "lab-sys-02-token-bucket-ratelimit"
+      ],
+      "objectives": [
+        "Create namespace production if not present.",
+        "Author manifest /arch/cqrs-event-stream.yaml defining ConfigMap cqrs-event-stream-spec.",
+        "Configure ConfigMap data keys: streamName, partitionKey, retentionDays, and projectionStore.",
+        "Author Deployment order-command-handler with 2 replicas in namespace production.",
+        "Apply manifest to namespace production."
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: cqrs-event-stream-spec\n  namespace: production\ndata:\n  streamName: \"order-events-stream\"\n  partitionKey: \"orderId\"\n  retentionDays: \"30\"\n  projectionStore: \"order-summary-read-view\"\n---\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: order-command-handler\n  namespace: production\nspec:\n  replicas: 2\n  selector:\n    matchLabels:\n      app: order-command-handler\n  template:\n    metadata:\n      labels:\n        app: order-command-handler\n    spec:\n      containers:\n        - name: handler\n          image: order-command-service:v1.0\n",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Create production namespace",
+          "instruction": "Create namespace production if not present.",
+          "commandHint": "kubectl create namespace production"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Author CQRS and Event Sourcing manifest",
+          "instruction": "Author manifest /arch/cqrs-event-stream.yaml defining ConfigMap cqrs-event-stream-spec and Deployment order-command-handler.",
+          "commandHint": "cat << 'EOF' > /arch/cqrs-event-stream.yaml\n...\nEOF"
+        },
+        {
+          "stepNumber": 3,
+          "title": "Apply manifest to production",
+          "instruction": "Apply manifest to namespace production.",
+          "commandHint": "kubectl apply -f /arch/cqrs-event-stream.yaml"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "cm-cqrs-exists",
+          "description": "ConfigMap cqrs-event-stream-spec exists in namespace production",
+          "type": "resource_exists",
+          "kind": "ConfigMap",
+          "namespace": "production",
+          "name": "cqrs-event-stream-spec",
+          "remediation": "Apply ConfigMap cqrs-event-stream-spec in namespace production"
+        },
+        {
+          "id": "cm-cqrs-stream",
+          "description": "ConfigMap streamName is order-events-stream",
+          "type": "resource_field_equals",
+          "kind": "ConfigMap",
+          "namespace": "production",
+          "name": "cqrs-event-stream-spec",
+          "fieldPath": "data.streamName",
+          "expectedValue": "order-events-stream",
+          "remediation": "Set streamName: \"order-events-stream\" in ConfigMap cqrs-event-stream-spec"
+        },
+        {
+          "id": "cm-cqrs-projection",
+          "description": "ConfigMap projectionStore is order-summary-read-view",
+          "type": "resource_field_equals",
+          "kind": "ConfigMap",
+          "namespace": "production",
+          "name": "cqrs-event-stream-spec",
+          "fieldPath": "data.projectionStore",
+          "expectedValue": "order-summary-read-view",
+          "remediation": "Set projectionStore: \"order-summary-read-view\" in ConfigMap cqrs-event-stream-spec"
+        },
+        {
+          "id": "deploy-cqrs-exists",
+          "description": "Deployment order-command-handler exists in namespace production",
+          "type": "resource_exists",
+          "kind": "Deployment",
+          "namespace": "production",
+          "name": "order-command-handler",
+          "remediation": "Deploy order-command-handler in namespace production"
+        },
+        {
+          "id": "deploy-cqrs-replicas",
+          "description": "Deployment order-command-handler has 2 replicas",
+          "type": "resource_field_equals",
+          "kind": "Deployment",
+          "namespace": "production",
+          "name": "order-command-handler",
+          "fieldPath": "spec.replicas",
+          "expectedValue": 2,
+          "remediation": "Set spec.replicas to 2 in Deployment order-command-handler"
+        }
+      ],
+      "solutionCommands": [
+        "kubectl create namespace production",
+        "cat << 'EOF' > /arch/cqrs-event-stream.yaml\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: cqrs-event-stream-spec\n  namespace: production\ndata:\n  streamName: \"order-events-stream\"\n  partitionKey: \"orderId\"\n  retentionDays: \"30\"\n  projectionStore: \"order-summary-read-view\"\n---\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: order-command-handler\n  namespace: production\nspec:\n  replicas: 2\n  selector:\n    matchLabels:\n      app: order-command-handler\n  template:\n    metadata:\n      labels:\n        app: order-command-handler\n    spec:\n      containers:\n        - name: handler\n          image: order-command-service:v1.0\nEOF",
+        "kubectl apply -f /arch/cqrs-event-stream.yaml"
+      ],
+      "troubleshootingGuide": [
+        {
+          "problem": "ConfigMap or Deployment missing or fields do not match.",
+          "cause": "ConfigMap must specify streamName and projectionStore, and Deployment must declare 2 replicas.",
+          "solution": "Apply /arch/cqrs-event-stream.yaml to namespace production."
+        }
+      ]
+    },
+    {
+      "id": "lab-cap-02-queue-load-leveling-backoff",
+      "title": "Queue-Based Load Leveling & Exponential Backoff Jitter Policy",
+      "difficulty": "Advanced",
+      "durationMinutes": 20,
+      "xpReward": 150,
+      "scenario": "Protect database bottlenecks against unpredictable bursts. Author manifest /arch/queue-load-leveling.yaml in namespace production defining ConfigMap queue-load-leveling-policy with data keys: queueType: 'priority-fifo', maxConcurrency: '10', and retryPolicy: 'exponential-backoff-full-jitter'. Next, deploy Deployment load-leveling-worker with 3 replicas in namespace production running image queue-worker:v2.0 with resource requests cpu: '200m' and memory: '256Mi'. Apply both manifests to namespace production.",
+      "productionContext": "Queue load leveling prevents downstream service degradation during flash crowds, while exponential backoff with jitter prevents thundering herd retry storms.",
+      "prerequisites": [
+        "lab-cap-01-cqrs-event-sourcing"
+      ],
+      "objectives": [
+        "Create namespace production if not present.",
+        "Author manifest /arch/queue-load-leveling.yaml defining ConfigMap queue-load-leveling-policy and Deployment load-leveling-worker.",
+        "Configure ConfigMap with queueType priority-fifo and retryPolicy exponential-backoff-full-jitter.",
+        "Configure Deployment load-leveling-worker with 3 replicas and resource requests.",
+        "Apply manifest to namespace production."
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: queue-load-leveling-policy\n  namespace: production\ndata:\n  queueType: \"priority-fifo\"\n  maxConcurrency: \"10\"\n  retryPolicy: \"exponential-backoff-full-jitter\"\n---\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: load-leveling-worker\n  namespace: production\nspec:\n  replicas: 3\n  selector:\n    matchLabels:\n      app: load-leveling-worker\n  template:\n    metadata:\n      labels:\n        app: load-leveling-worker\n    spec:\n      containers:\n        - name: worker\n          image: queue-worker:v2.0\n          resources:\n            requests:\n              cpu: \"200m\"\n              memory: \"256Mi\"\n",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Create production namespace",
+          "instruction": "Create namespace production if not present.",
+          "commandHint": "kubectl create namespace production"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Author queue load leveling policy",
+          "instruction": "Author manifest /arch/queue-load-leveling.yaml defining ConfigMap queue-load-leveling-policy and Deployment load-leveling-worker.",
+          "commandHint": "cat << 'EOF' > /arch/queue-load-leveling.yaml\n...\nEOF"
+        },
+        {
+          "stepNumber": 3,
+          "title": "Apply manifest to production",
+          "instruction": "Apply manifest to namespace production.",
+          "commandHint": "kubectl apply -f /arch/queue-load-leveling.yaml"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "cm-queue-exists",
+          "description": "ConfigMap queue-load-leveling-policy exists in namespace production",
+          "type": "resource_exists",
+          "kind": "ConfigMap",
+          "namespace": "production",
+          "name": "queue-load-leveling-policy",
+          "remediation": "Apply ConfigMap queue-load-leveling-policy in namespace production"
+        },
+        {
+          "id": "cm-queue-policy",
+          "description": "ConfigMap retryPolicy is exponential-backoff-full-jitter",
+          "type": "resource_field_equals",
+          "kind": "ConfigMap",
+          "namespace": "production",
+          "name": "queue-load-leveling-policy",
+          "fieldPath": "data.retryPolicy",
+          "expectedValue": "exponential-backoff-full-jitter",
+          "remediation": "Set retryPolicy: \"exponential-backoff-full-jitter\" in ConfigMap queue-load-leveling-policy"
+        },
+        {
+          "id": "deploy-worker-exists",
+          "description": "Deployment load-leveling-worker exists in namespace production",
+          "type": "resource_exists",
+          "kind": "Deployment",
+          "namespace": "production",
+          "name": "load-leveling-worker",
+          "remediation": "Deploy load-leveling-worker in namespace production"
+        },
+        {
+          "id": "deploy-worker-replicas",
+          "description": "Deployment load-leveling-worker has 3 replicas",
+          "type": "resource_field_equals",
+          "kind": "Deployment",
+          "namespace": "production",
+          "name": "load-leveling-worker",
+          "fieldPath": "spec.replicas",
+          "expectedValue": 3,
+          "remediation": "Scale Deployment load-leveling-worker to 3 replicas"
+        },
+        {
+          "id": "deploy-worker-mem-req",
+          "description": "Deployment load-leveling-worker specifies memory request 256Mi",
+          "type": "resource_field_equals",
+          "kind": "Deployment",
+          "namespace": "production",
+          "name": "load-leveling-worker",
+          "fieldPath": "spec.template.spec.containers[0].resources.requests.memory",
+          "expectedValue": "256Mi",
+          "remediation": "Set container resources.requests.memory to \"256Mi\" in Deployment load-leveling-worker"
+        }
+      ],
+      "solutionCommands": [
+        "kubectl create namespace production",
+        "cat << 'EOF' > /arch/queue-load-leveling.yaml\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: queue-load-leveling-policy\n  namespace: production\ndata:\n  queueType: \"priority-fifo\"\n  maxConcurrency: \"10\"\n  retryPolicy: \"exponential-backoff-full-jitter\"\n---\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: load-leveling-worker\n  namespace: production\nspec:\n  replicas: 3\n  selector:\n    matchLabels:\n      app: load-leveling-worker\n  template:\n    metadata:\n      labels:\n        app: load-leveling-worker\n    spec:\n      containers:\n        - name: worker\n          image: queue-worker:v2.0\n          resources:\n            requests:\n              cpu: \"200m\"\n              memory: \"256Mi\"\nEOF",
+        "kubectl apply -f /arch/queue-load-leveling.yaml"
+      ],
+      "troubleshootingGuide": [
+        {
+          "problem": "ConfigMap or Deployment missing or memory request mismatch.",
+          "cause": "ConfigMap must specify retryPolicy and Deployment must run 3 replicas with 256Mi memory request.",
+          "solution": "Apply /arch/queue-load-leveling.yaml to namespace production."
+        }
+      ]
+    }
+  ],
+  "assessmentQuestions": [
+    {
+      "id": "q-cap-01",
+      "question": "In high-throughput event-driven microservices, what fundamental advantage does Command Query Responsibility Segregation (CQRS) combined with Event Sourcing provide over traditional CRUD relational architectures?",
+      "options": [
+        "It replaces all microservices with a single monolithic SQL stored procedure.",
+        "It eliminates database contention by appending state changes as an immutable chronological sequence of events, allowing writes to proceed at disk sequential speed while independent asynchronous projection workers build read-optimized views without locks or expensive multi-table joins.",
+        "It guarantees that all queries execute synchronously across every database replica with zero latency.",
+        "It deletes older records automatically every 10 seconds to save disk space."
+      ],
+      "correctIndex": 1,
+      "explanation": "CQRS with Event Sourcing decouples write scalability from query optimization. Writes are append-only event logs, while queries read denormalized materialized views, eliminating database locking contention and supporting time-travel auditing."
+    },
+    {
+      "id": "q-cap-02",
+      "question": "Why must retries against overloaded downstream cloud services incorporate 'Decorrelated Jitter' in addition to exponential backoff?",
+      "options": [
+        "Jitter accelerates retry frequency to force the downstream service to respond faster.",
+        "Pure exponential backoff without jitter causes all failed clients to retry in synchronized harmonic waves (thundering herd), repeatedly overwhelming the recovering service; adding random jitter breaks the synchronization and distributes load evenly across time.",
+        "Jitter bypasses network firewall rules by encrypting TCP packet headers.",
+        "Jitter disables HTTP keep-alive timeouts."
+      ],
+      "correctIndex": 1,
+      "explanation": "Without jitter, synchronized clients retry in lockstep pulses (the thundering herd problem). Adding randomized jitter desynchronizes the retry attempts, spreading traffic smoothly over the recovery window."
+    }
+  ]
+}

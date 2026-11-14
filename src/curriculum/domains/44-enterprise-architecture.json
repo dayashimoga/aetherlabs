@@ -1,0 +1,292 @@
+{
+  "id": "enterprise-architecture",
+  "title": "Enterprise Architecture, C4 Modeling, Landing Zones & FinOps Governance",
+  "category": "Architecture & System Design",
+  "trackId": "track-platform",
+  "version": "1.0.0",
+  "difficulty": "Advanced",
+  "estimatedHours": 8,
+  "summary": "Master enterprise cloud governance and strategic system architecture: C4 hierarchical architectural modeling (Context, Container, Component, Code), multi-account cloud Landing Zones (AWS Control Tower / SCPs), FinOps unit economics (cost allocation tags, amortized container pricing, resource elasticity), and cross-organizational Architecture Decision Records (ADRs).",
+  "prerequisites": [
+    "cloud-architecture-patterns",
+    "platform-engineering"
+  ],
+  "learningObjectives": [
+    "Model complex enterprise ecosystems using the C4 architectural abstraction framework to clearly articulate system context, boundaries, and dependencies.",
+    "Establish multi-account cloud Landing Zone governance enforcing security guardrails and Service Control Policies (SCPs).",
+    "Implement FinOps unit economics, mandatory cost-allocation tagging taxonomies, and multi-tenant compute quotas to optimize cloud ROI."
+  ],
+  "curriculumModules": [
+    {
+      "id": "mod-ea-01",
+      "title": "C4 Architectural Modeling & System Context Governance",
+      "conceptSummary": "Enterprise architecture requires clear communication across both technical and executive stakeholders. Simon Brown's C4 model provides four zoom levels: System Context (people and software systems), Containers (applications, datastores, microservices), Components (internal modules and controllers), and Code (classes and functions). Declarative C4 blueprints align cross-functional teams on domain boundaries, prevent accidental architectural drift, and standardize Architecture Decision Records (ADRs).",
+      "productionArchitecturePattern": "Publish declarative C4 container boundary blueprints and architecture decision records in centralized repositories to govern enterprise microservice interactions.",
+      "keyCommands": [
+        "cat /enterprise/c4-system-context.yaml",
+        "kubectl apply -f /enterprise/c4-system-context.yaml"
+      ]
+    },
+    {
+      "id": "mod-ea-02",
+      "title": "Multi-Account Landing Zones & FinOps Unit Economics Guardrails",
+      "conceptSummary": "Enterprise cloud adoption requires multi-account organizational Landing Zones (AWS Organizations, Azure Management Groups, GCP Folders) that enforce centralized security guardrails via Service Control Policies (SCPs) and prevent unapproved region usage or public bucket exposure. Concurrently, FinOps practices establish financial accountability by enforcing mandatory cost-allocation tags (environment, cost-center, owner, service-id) and capping multi-tenant Kubernetes namespace budgets with strict ResourceQuotas.",
+      "productionArchitecturePattern": "Deploy automated Landing Zone compliance controllers enforcing mandatory FinOps cost-allocation labels and non-negotiable compute resource quotas across enterprise namespaces.",
+      "keyCommands": [
+        "cat /enterprise/landing-zone-finops.yaml",
+        "kubectl apply -f /enterprise/landing-zone-finops.yaml"
+      ]
+    }
+  ],
+  "labs": [
+    {
+      "id": "lab-ea-01-c4-model-enterprise-blueprint",
+      "title": "C4 Enterprise Architecture Blueprint & System Context Specification",
+      "difficulty": "Advanced",
+      "durationMinutes": 20,
+      "xpReward": 150,
+      "scenario": "Formalize enterprise architecture boundaries for the core financial platform. Author manifest /enterprise/c4-system-context.yaml defining namespace enterprise-governance. Inside enterprise-governance, create ConfigMap c4-system-context-spec with data keys: systemName: 'core-banking-platform', boundaryType: 'enterprise', c4Level: 'Container', and primaryPersonas: 'retail-customer,compliance-officer'. Additionally, create ServiceAccount enterprise-architect-sa in namespace enterprise-governance. Apply the manifest.",
+      "productionContext": "C4 context specifications establish explicit organizational domain boundaries, ensuring that microservice expansions comply with corporate security perimeters and architectural standards.",
+      "prerequisites": [
+        "lab-cap-01-cqrs-event-sourcing"
+      ],
+      "objectives": [
+        "Create namespace enterprise-governance if not present.",
+        "Author manifest /enterprise/c4-system-context.yaml defining ConfigMap c4-system-context-spec and ServiceAccount enterprise-architect-sa.",
+        "Configure ConfigMap data keys systemName, boundaryType, c4Level, and primaryPersonas.",
+        "Apply the manifest to the cluster."
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "apiVersion: v1\nkind: Namespace\nmetadata:\n  name: enterprise-governance\n---\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: c4-system-context-spec\n  namespace: enterprise-governance\ndata:\n  systemName: \"core-banking-platform\"\n  boundaryType: \"enterprise\"\n  c4Level: \"Container\"\n  primaryPersonas: \"retail-customer,compliance-officer\"\n---\napiVersion: v1\nkind: ServiceAccount\nmetadata:\n  name: enterprise-architect-sa\n  namespace: enterprise-governance\n",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Create enterprise-governance namespace",
+          "instruction": "Create namespace enterprise-governance if not present.",
+          "commandHint": "kubectl create namespace enterprise-governance"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Author C4 architecture blueprint manifest",
+          "instruction": "Author manifest /enterprise/c4-system-context.yaml defining ConfigMap c4-system-context-spec and ServiceAccount enterprise-architect-sa.",
+          "commandHint": "cat << 'EOF' > /enterprise/c4-system-context.yaml\n...\nEOF"
+        },
+        {
+          "stepNumber": 3,
+          "title": "Apply manifest to cluster",
+          "instruction": "Apply manifest to namespace enterprise-governance.",
+          "commandHint": "kubectl apply -f /enterprise/c4-system-context.yaml"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "ns-ea-exists",
+          "description": "Namespace enterprise-governance exists",
+          "type": "resource_exists",
+          "kind": "Namespace",
+          "name": "enterprise-governance",
+          "remediation": "Create namespace enterprise-governance"
+        },
+        {
+          "id": "cm-c4-exists",
+          "description": "ConfigMap c4-system-context-spec exists in namespace enterprise-governance",
+          "type": "resource_exists",
+          "kind": "ConfigMap",
+          "namespace": "enterprise-governance",
+          "name": "c4-system-context-spec",
+          "remediation": "Apply ConfigMap c4-system-context-spec in namespace enterprise-governance"
+        },
+        {
+          "id": "cm-c4-level",
+          "description": "ConfigMap c4Level is Container",
+          "type": "resource_field_equals",
+          "kind": "ConfigMap",
+          "namespace": "enterprise-governance",
+          "name": "c4-system-context-spec",
+          "fieldPath": "data.c4Level",
+          "expectedValue": "Container",
+          "remediation": "Set c4Level: \"Container\" in ConfigMap c4-system-context-spec"
+        },
+        {
+          "id": "cm-c4-system",
+          "description": "ConfigMap systemName is core-banking-platform",
+          "type": "resource_field_equals",
+          "kind": "ConfigMap",
+          "namespace": "enterprise-governance",
+          "name": "c4-system-context-spec",
+          "fieldPath": "data.systemName",
+          "expectedValue": "core-banking-platform",
+          "remediation": "Set systemName: \"core-banking-platform\" in ConfigMap c4-system-context-spec"
+        },
+        {
+          "id": "sa-ea-exists",
+          "description": "ServiceAccount enterprise-architect-sa exists in namespace enterprise-governance",
+          "type": "resource_exists",
+          "kind": "ServiceAccount",
+          "namespace": "enterprise-governance",
+          "name": "enterprise-architect-sa",
+          "remediation": "Apply ServiceAccount enterprise-architect-sa in namespace enterprise-governance"
+        }
+      ],
+      "solutionCommands": [
+        "kubectl create namespace enterprise-governance",
+        "cat << 'EOF' > /enterprise/c4-system-context.yaml\napiVersion: v1\nkind: Namespace\nmetadata:\n  name: enterprise-governance\n---\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: c4-system-context-spec\n  namespace: enterprise-governance\ndata:\n  systemName: \"core-banking-platform\"\n  boundaryType: \"enterprise\"\n  c4Level: \"Container\"\n  primaryPersonas: \"retail-customer,compliance-officer\"\n---\napiVersion: v1\nkind: ServiceAccount\nmetadata:\n  name: enterprise-architect-sa\n  namespace: enterprise-governance\nEOF",
+        "kubectl apply -f /enterprise/c4-system-context.yaml"
+      ],
+      "troubleshootingGuide": [
+        {
+          "problem": "ConfigMap or ServiceAccount missing or fields do not match.",
+          "cause": "ConfigMap must specify c4Level and systemName in namespace enterprise-governance.",
+          "solution": "Apply /enterprise/c4-system-context.yaml to namespace enterprise-governance."
+        }
+      ]
+    },
+    {
+      "id": "lab-ea-02-landing-zone-finops-guardrails",
+      "title": "Landing Zone Governance & FinOps Cost-Allocation Guardrails",
+      "difficulty": "Advanced",
+      "durationMinutes": 20,
+      "xpReward": 150,
+      "scenario": "Establish cloud landing zone governance and cost optimization. Author manifest /enterprise/landing-zone-finops.yaml defining ConfigMap landing-zone-finops-spec in namespace enterprise-governance with data keys: scpEnforcement: 'deny-unapproved-regions', costCenter: 'cc-fintech-9401', and finopsTier: 'tier-1-mission-critical'. In addition, author ResourceQuota enterprise-governance-quota in namespace enterprise-governance with hard requests.cpu: '8000m' and requests.memory: '16Gi'. Apply both manifests.",
+      "productionContext": "Automated landing zone governance prevents compliance violations by blocking unapproved regions, while FinOps tagging and quotas guarantee multi-tenant cost accountability.",
+      "prerequisites": [
+        "lab-ea-01-c4-model-enterprise-blueprint"
+      ],
+      "objectives": [
+        "Create namespace enterprise-governance if not present.",
+        "Author manifest /enterprise/landing-zone-finops.yaml defining ConfigMap landing-zone-finops-spec and ResourceQuota enterprise-governance-quota.",
+        "Configure ConfigMap data keys scpEnforcement, costCenter, and finopsTier.",
+        "Configure ResourceQuota with hard requests.cpu: 8000m and requests.memory: 16Gi.",
+        "Apply manifest to namespace enterprise-governance."
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: landing-zone-finops-spec\n  namespace: enterprise-governance\ndata:\n  scpEnforcement: \"deny-unapproved-regions\"\n  costCenter: \"cc-fintech-9401\"\n  finopsTier: \"tier-1-mission-critical\"\n---\napiVersion: v1\nkind: ResourceQuota\nmetadata:\n  name: enterprise-governance-quota\n  namespace: enterprise-governance\nspec:\n  hard:\n    requests.cpu: \"8000m\"\n    requests.memory: \"16Gi\"\n",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Create enterprise-governance namespace",
+          "instruction": "Create namespace enterprise-governance if not present.",
+          "commandHint": "kubectl create namespace enterprise-governance"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Author landing zone and FinOps guardrails manifest",
+          "instruction": "Author manifest /enterprise/landing-zone-finops.yaml defining ConfigMap landing-zone-finops-spec and ResourceQuota enterprise-governance-quota.",
+          "commandHint": "cat << 'EOF' > /enterprise/landing-zone-finops.yaml\n...\nEOF"
+        },
+        {
+          "stepNumber": 3,
+          "title": "Apply manifest to enterprise-governance",
+          "instruction": "Apply manifest to namespace enterprise-governance.",
+          "commandHint": "kubectl apply -f /enterprise/landing-zone-finops.yaml"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "cm-finops-exists",
+          "description": "ConfigMap landing-zone-finops-spec exists in namespace enterprise-governance",
+          "type": "resource_exists",
+          "kind": "ConfigMap",
+          "namespace": "enterprise-governance",
+          "name": "landing-zone-finops-spec",
+          "remediation": "Apply ConfigMap landing-zone-finops-spec in namespace enterprise-governance"
+        },
+        {
+          "id": "cm-finops-scp",
+          "description": "ConfigMap scpEnforcement is deny-unapproved-regions",
+          "type": "resource_field_equals",
+          "kind": "ConfigMap",
+          "namespace": "enterprise-governance",
+          "name": "landing-zone-finops-spec",
+          "fieldPath": "data.scpEnforcement",
+          "expectedValue": "deny-unapproved-regions",
+          "remediation": "Set scpEnforcement: \"deny-unapproved-regions\" in ConfigMap landing-zone-finops-spec"
+        },
+        {
+          "id": "cm-finops-tier",
+          "description": "ConfigMap finopsTier is tier-1-mission-critical",
+          "type": "resource_field_equals",
+          "kind": "ConfigMap",
+          "namespace": "enterprise-governance",
+          "name": "landing-zone-finops-spec",
+          "fieldPath": "data.finopsTier",
+          "expectedValue": "tier-1-mission-critical",
+          "remediation": "Set finopsTier: \"tier-1-mission-critical\" in ConfigMap landing-zone-finops-spec"
+        },
+        {
+          "id": "rq-finops-exists",
+          "description": "ResourceQuota enterprise-governance-quota exists in namespace enterprise-governance",
+          "type": "resource_exists",
+          "kind": "ResourceQuota",
+          "namespace": "enterprise-governance",
+          "name": "enterprise-governance-quota",
+          "remediation": "Apply ResourceQuota enterprise-governance-quota in namespace enterprise-governance"
+        },
+        {
+          "id": "rq-finops-cpu",
+          "description": "ResourceQuota specifies hard requests.cpu 8000m",
+          "type": "resource_field_equals",
+          "kind": "ResourceQuota",
+          "namespace": "enterprise-governance",
+          "name": "enterprise-governance-quota",
+          "fieldPath": "spec.hard['requests.cpu']",
+          "expectedValue": "8000m",
+          "remediation": "Set spec.hard['requests.cpu'] to \"8000m\" in ResourceQuota enterprise-governance-quota"
+        },
+        {
+          "id": "rq-finops-mem",
+          "description": "ResourceQuota specifies hard requests.memory 16Gi",
+          "type": "resource_field_equals",
+          "kind": "ResourceQuota",
+          "namespace": "enterprise-governance",
+          "name": "enterprise-governance-quota",
+          "fieldPath": "spec.hard['requests.memory']",
+          "expectedValue": "16Gi",
+          "remediation": "Set spec.hard['requests.memory'] to \"16Gi\" in ResourceQuota enterprise-governance-quota"
+        }
+      ],
+      "solutionCommands": [
+        "kubectl create namespace enterprise-governance",
+        "cat << 'EOF' > /enterprise/landing-zone-finops.yaml\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: landing-zone-finops-spec\n  namespace: enterprise-governance\ndata:\n  scpEnforcement: \"deny-unapproved-regions\"\n  costCenter: \"cc-fintech-9401\"\n  finopsTier: \"tier-1-mission-critical\"\n---\napiVersion: v1\nkind: ResourceQuota\nmetadata:\n  name: enterprise-governance-quota\n  namespace: enterprise-governance\nspec:\n  hard:\n    requests.cpu: \"8000m\"\n    requests.memory: \"16Gi\"\nEOF",
+        "kubectl apply -f /enterprise/landing-zone-finops.yaml"
+      ],
+      "troubleshootingGuide": [
+        {
+          "problem": "ResourceQuota or ConfigMap missing or quota values mismatch.",
+          "cause": "ResourceQuota must specify requests.cpu: 8000m and requests.memory: 16Gi.",
+          "solution": "Apply /enterprise/landing-zone-finops.yaml to namespace enterprise-governance."
+        }
+      ]
+    }
+  ],
+  "assessmentQuestions": [
+    {
+      "id": "q-ea-01",
+      "question": "In enterprise systems architecture, how does the C4 model address architectural visualization across varying organizational audiences?",
+      "options": [
+        "It requires every architecture diagram to be written in assembly language.",
+        "It provides a hierarchical zoom model (Context, Container, Component, Code), allowing executive stakeholders to review system boundaries at the Context level, engineering managers to assess tech stacks at the Container level, and developers to inspect module interactions at the Component/Code levels without unnecessary noise.",
+        "It automatically converts all legacy databases into in-memory Redis caches.",
+        "It restricts teams from deploying more than 4 containers per node."
+      ],
+      "correctIndex": 1,
+      "explanation": "The C4 model structures diagrams like Google Maps, providing appropriate levels of abstraction for distinct audiences from high-level system context down to concrete components and code."
+    },
+    {
+      "id": "q-ea-02",
+      "question": "Why do enterprise cloud Landing Zones enforce Service Control Policies (SCPs) at the organizational root level rather than delegating IAM permissions entirely to individual account administrators?",
+      "options": [
+        "SCPs disable billing alerts across all member accounts.",
+        "SCPs define immutable guardrails that set the maximum permissions boundary for member accounts, ensuring that even root users or account admins within an individual account cannot disable security logging, leave approved regions, or bypass compliance boundaries.",
+        "SCPs allow untrusted external users to access production databases without authentication.",
+        "SCPs delete idle EC2 instances every hour."
+      ],
+      "correctIndex": 1,
+      "explanation": "Service Control Policies (SCPs) act as organizational guardrails that even account administrators cannot override, enforcing non-negotiable security baselines across all member accounts."
+    }
+  ]
+}
