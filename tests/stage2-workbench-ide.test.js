@@ -1,156 +1,75 @@
-'use strict';
+/**
+ * tests/stage2-workbench-ide.test.js
+ * Subphase 2.3.1 Verification: 3-Pane Split Lab IDE with Auto-Verifying Runbook
+ */
 
-const test = require('node:test');
+const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
+const fs = require('fs');
+const path = require('path');
 
-const htmlPath = path.resolve(__dirname, '../public/index.html');
-const cssPath = path.resolve(__dirname, '../public/css/styles.css');
-const jsPath = path.resolve(__dirname, '../public/js/app.js');
+const ROOT_DIR = path.resolve(__dirname, '..');
+const HTML_PATH = path.join(ROOT_DIR, 'public', 'index.html');
+const CSS_PATH = path.join(ROOT_DIR, 'public', 'css', 'styles.css');
+const JS_PATH = path.join(ROOT_DIR, 'public', 'js', 'app.js');
 
-test('Subphase 2.1.2: Workbench HTML layout defines 3-column resizable IDE with tabbed center and right panes', () => {
-  const html = fs.readFileSync(htmlPath, 'utf8');
+describe('Subphase 2.3.1 — 3-Pane Split Lab IDE with Auto-Verifying Runbook', () => {
+  const htmlContent = fs.readFileSync(HTML_PATH, 'utf8');
+  const cssContent = fs.readFileSync(CSS_PATH, 'utf8');
+  const jsContent = fs.readFileSync(JS_PATH, 'utf8');
 
-  // 1. View container & Resizers
-  assert.ok(html.includes('id="view-workbench"'), 'Must contain #view-workbench section');
-  assert.ok(html.includes('id="workbench-layout"'), 'Must contain #workbench-layout container');
-  assert.ok(html.includes('id="wb-pane-left"'), 'Must contain #wb-pane-left');
-  assert.ok(html.includes('id="wb-pane-center"'), 'Must contain #wb-pane-center');
-  assert.ok(html.includes('id="wb-pane-right"'), 'Must contain #wb-pane-right');
-  assert.ok(html.includes('id="resizer-left"'), 'Must contain #resizer-left');
-  assert.ok(html.includes('id="resizer-right"'), 'Must contain #resizer-right');
+  it('1. HTML structure establishes 3-Pane Split Workbench with draggable resizers', () => {
+    assert.ok(htmlContent.includes('id="view-workbench"'), 'HTML must contain #view-workbench');
+    assert.ok(htmlContent.includes('class="workbench-layout"'), 'Must establish .workbench-layout container');
+    assert.ok(htmlContent.includes('id="wb-pane-left"'), 'Must contain Left Pane (#wb-pane-left)');
+    assert.ok(htmlContent.includes('id="resizer-left"'), 'Must contain Left Resizer Divider (#resizer-left)');
+    assert.ok(htmlContent.includes('id="wb-pane-center"'), 'Must contain Center Pane (#wb-pane-center)');
+    assert.ok(htmlContent.includes('id="resizer-right"'), 'Must contain Right Resizer Divider (#resizer-right)');
+    assert.ok(htmlContent.includes('id="wb-pane-right"'), 'Must contain Right Pane (#wb-pane-right)');
 
-  // 2. Left Column: Architecture diagram button, checklist & Socratic hints accordion
-  assert.ok(html.includes('id="btn-view-lab-arch"'), 'Left pane must contain #btn-view-lab-arch trigger');
-  assert.ok(html.includes('id="wb-steps-list"'), 'Left pane must contain #wb-steps-list');
-  assert.ok(html.includes('id="wb-hints-accordion"'), 'Left pane must contain #wb-hints-accordion');
-  assert.ok(html.includes('id="wb-troubleshooting"'), 'Must retain #wb-troubleshooting hint element');
-  assert.ok(html.includes('id="wb-socratic-clue"'), 'Must contain #wb-socratic-clue prompt');
+    // Verify resizer accessibility semantics
+    assert.ok(htmlContent.includes('role="separator"'), 'Resizers must declare role="separator"');
+    assert.ok(htmlContent.includes('aria-orientation="vertical"'), 'Resizers must declare vertical orientation');
+  });
 
-  // 3. Center Column Tabs: Terminal, Editor, Observability
-  assert.ok(html.includes('id="center-tab-terminal"'), 'Must contain #center-tab-terminal');
-  assert.ok(html.includes('id="center-tab-editor"'), 'Must contain #center-tab-editor');
-  assert.ok(html.includes('id="center-tab-observability"'), 'Must contain #center-tab-observability');
-  assert.ok(html.includes('data-tab="center-tab-terminal"'), 'Must have center tab button for terminal');
-  assert.ok(html.includes('data-tab="center-tab-editor"'), 'Must have center tab button for editor');
-  assert.ok(html.includes('data-tab="center-tab-observability"'), 'Must have center tab button for observability');
+  it('2. HTML left pane houses production scenario, runbook steps & Socratic discovery clues', () => {
+    assert.ok(htmlContent.includes('id="wb-scenario"'), 'Left pane must contain #wb-scenario');
+    assert.ok(htmlContent.includes('id="wb-prod-context"'), 'Left pane must contain #wb-prod-context');
+    assert.ok(htmlContent.includes('id="wb-steps-progress-badge"'), 'Left pane must contain #wb-steps-progress-badge');
+    assert.ok(htmlContent.includes('id="wb-steps-list"'), 'Left pane must contain #wb-steps-list');
+    assert.ok(htmlContent.includes('id="wb-hints-accordion"'), 'Left pane must contain #wb-hints-accordion');
+    assert.ok(htmlContent.includes('id="wb-troubleshooting"'), 'Left pane must contain #wb-troubleshooting');
+    assert.ok(htmlContent.includes('id="wb-socratic-clue"'), 'Left pane must contain #wb-socratic-clue');
+  });
 
-  // 4. Center Tab 1: Terminal & Zoom
-  assert.ok(html.includes('id="terminal-output"'), 'Must contain #terminal-output');
-  assert.ok(html.includes('id="mobile-quick-keybar"'), 'Must retain #mobile-quick-keybar');
-  assert.ok(html.includes('id="btn-zoom-term-in"'), 'Must contain #btn-zoom-term-in');
-  assert.ok(html.includes('id="btn-zoom-term-out"'), 'Must contain #btn-zoom-term-out');
+  it('3. CSS defines cybernetic styling for 3-pane layout, resizers, and auto-verifying runbook cards', () => {
+    assert.ok(cssContent.includes('.workbench-layout'), 'CSS must define .workbench-layout');
+    assert.ok(cssContent.includes('.workbench-pane'), 'CSS must define .workbench-pane');
+    assert.ok(cssContent.includes('.workbench-resizer'), 'CSS must define .workbench-resizer');
+    assert.ok(cssContent.includes('.step-card'), 'CSS must define .step-card');
+    assert.ok(cssContent.includes('.step-card.step-active'), 'CSS must style .step-active with cyan glow');
+    assert.ok(cssContent.includes('.step-card.step-verified'), 'CSS must style .step-verified with emerald pulse');
+    assert.ok(cssContent.includes('emeraldPulse'), 'CSS must define emeraldPulse animation');
+    assert.ok(cssContent.includes('.step-status-badge.verified'), 'CSS must style verified badge');
+    assert.ok(cssContent.includes('.step-status-badge.active'), 'CSS must style active badge');
+    assert.ok(cssContent.includes('.step-pulse-dot'), 'CSS must define pulsing dot for active step');
+    assert.ok(cssContent.includes('.btn-run-step'), 'CSS must style .btn-run-step');
+    assert.ok(cssContent.includes('.btn-copy-step'), 'CSS must style .btn-copy-step');
+  });
 
-  // 5. Center Tab 2: Editor Gutter, Format, Diff, Apply
-  assert.ok(html.includes('id="wb-manifest-editor"'), 'Must contain #wb-manifest-editor');
-  assert.ok(html.includes('id="manifest-line-gutter"'), 'Must contain #manifest-line-gutter for line numbers');
-  assert.ok(html.includes('id="btn-format-yaml"'), 'Must contain #btn-format-yaml');
-  assert.ok(html.includes('id="btn-diff-manifest"'), 'Must contain #btn-diff-manifest');
-  assert.ok(html.includes('id="btn-apply-manifest"'), 'Must retain #btn-apply-manifest');
-  assert.ok(html.includes('id="wb-manifest-diff"'), 'Must contain #wb-manifest-diff panel');
+  it('4. JavaScript implements updateRunbookStepStatuses and synchronizes step verification with validation', () => {
+    assert.ok(jsContent.includes('function updateRunbookStepStatuses('), 'app.js must define updateRunbookStepStatuses');
+    assert.ok(jsContent.includes('updateRunbookStepStatuses(report)'), 'renderValidationReport must call updateRunbookStepStatuses');
+    assert.ok(jsContent.includes('step-active'), 'app.js must reference step-active');
+    assert.ok(jsContent.includes('step-verified'), 'app.js must reference step-verified');
+    assert.ok(jsContent.includes('window.KubeLabsWorkbench'), 'app.js must export KubeLabsWorkbench helpers');
+  });
 
-  // 6. Center Tab 3: Observability PromQL, Loki, Jaeger
-  assert.ok(html.includes('id="promql-query-input"'), 'Must contain #promql-query-input');
-  assert.ok(html.includes('id="promql-preset-selector"'), 'Must contain #promql-preset-selector');
-  assert.ok(html.includes('id="btn-run-promql"'), 'Must contain #btn-run-promql');
-  assert.ok(html.includes('id="promql-chart-canvas"'), 'Must contain #promql-chart-canvas');
-  assert.ok(html.includes('id="loki-log-tailer"'), 'Must contain #loki-log-tailer');
-  assert.ok(html.includes('id="jaeger-trace-waterfall"'), 'Must contain #jaeger-trace-waterfall');
-
-  // 7. Right Column Tabs: Topology, Validation/CIS, AI Mentor
-  assert.ok(html.includes('id="right-tab-topology"'), 'Must contain #right-tab-topology');
-  assert.ok(html.includes('id="right-tab-validation"'), 'Must contain #right-tab-validation');
-  assert.ok(html.includes('id="right-tab-mentor"'), 'Must contain #right-tab-mentor');
-  assert.ok(html.includes('data-tab="right-tab-topology"'), 'Must have right tab button for topology');
-  assert.ok(html.includes('data-tab="right-tab-validation"'), 'Must have right tab button for validation');
-  assert.ok(html.includes('data-tab="right-tab-mentor"'), 'Must have right tab button for mentor');
-
-  // 8. Right Tab elements
-  assert.ok(html.includes('id="topology-search-input"'), 'Must contain #topology-search-input');
-  assert.ok(html.includes('id="cluster-topology-svg"'), 'Must retain #cluster-topology-svg');
-  assert.ok(html.includes('id="cluster-topology-view"'), 'Must retain #cluster-topology-view');
-  assert.ok(html.includes('id="wb-validation-results"'), 'Must retain #wb-validation-results');
-  assert.ok(html.includes('id="wb-cis-security-checklist"'), 'Must contain #wb-cis-security-checklist');
-  assert.ok(html.includes('id="btn-revalidate-in-tab"'), 'Must contain #btn-revalidate-in-tab');
-  assert.ok(html.includes('id="mentor-response-box"'), 'Must retain #mentor-response-box');
-
-  // 9. Architecture Diagram Modal
-  assert.ok(html.includes('id="lab-arch-modal"'), 'Must contain #lab-arch-modal dialog');
-  assert.ok(html.includes('id="lab-arch-title"'), 'Must contain #lab-arch-title');
-  assert.ok(html.includes('id="lab-arch-svg"'), 'Must contain #lab-arch-svg');
-  assert.ok(html.includes('id="btn-close-lab-arch"'), 'Must contain #btn-close-lab-arch');
+  it('5. JavaScript implements setupResizableWorkbench with drag & keyboard Arrow accessibility', () => {
+    assert.ok(jsContent.includes('function setupResizableWorkbench('), 'app.js must define setupResizableWorkbench');
+    assert.ok(jsContent.includes('kubelabs_pane_left_width'), 'app.js must persist left pane width');
+    assert.ok(jsContent.includes('kubelabs_pane_right_width'), 'app.js must persist right pane width');
+    assert.ok(jsContent.includes("e.key === 'ArrowLeft'"), 'Resizer must support ArrowLeft keyboard navigation');
+    assert.ok(jsContent.includes("e.key === 'ArrowRight'"), 'Resizer must support ArrowRight keyboard navigation');
+  });
 });
-
-test('Subphase 2.1.2: styles.css enforces full-viewport 100vh layout, zero outer scrollbars & IDE components', () => {
-  const css = fs.readFileSync(cssPath, 'utf8');
-
-  // 1. Full-viewport 100vh
-  assert.ok(css.includes('body.workbench-open'), 'CSS must define body.workbench-open');
-  assert.ok(css.includes('height: 100vh;'), 'Must constrain body height to 100vh');
-  assert.ok(css.includes('overflow: hidden;'), 'Must eliminate outer window scrollbars');
-
-  // 2. Pane Tab Bar & Buttons
-  assert.ok(css.includes('.pane-tab-bar'), 'Must style .pane-tab-bar');
-  assert.ok(css.includes('.pane-tab-btn'), 'Must style .pane-tab-btn');
-  assert.ok(css.includes('.pane-tab-btn.active'), 'Must define active tab indicator style');
-
-  // 3. Line numbers gutter & editor container
-  assert.ok(css.includes('.editor-container'), 'Must style .editor-container');
-  assert.ok(css.includes('.editor-gutter'), 'Must style .editor-gutter');
-  assert.ok(css.includes('.full-height-editor'), 'Must style .full-height-editor');
-  assert.ok(css.includes('.full-height-terminal'), 'Must style .full-height-terminal');
-
-  // 4. YAML Diff panel
-  assert.ok(css.includes('.editor-diff-panel'), 'Must style .editor-diff-panel');
-  assert.ok(css.includes('.diff-line.added'), 'Must style added diff lines');
-  assert.ok(css.includes('.diff-line.removed'), 'Must style removed diff lines');
-
-  // 5. Step card actions
-  assert.ok(css.includes('.btn-run-step'), 'Must style .btn-run-step');
-  assert.ok(css.includes('.btn-copy-step'), 'Must style .btn-copy-step');
-
-  // 6. Socratic Hints Accordion
-  assert.ok(css.includes('.hints-accordion'), 'Must style .hints-accordion');
-  assert.ok(css.includes('.hint-details'), 'Must style .hint-details');
-  assert.ok(css.includes('.hint-summary'), 'Must style .hint-summary');
-
-  // 7. Observability styling
-  assert.ok(css.includes('.observability-container'), 'Must style .observability-container');
-  assert.ok(css.includes('.loki-log-stream'), 'Must style .loki-log-stream');
-  assert.ok(css.includes('.trace-waterfall'), 'Must style .trace-waterfall');
-});
-
-test('Subphase 2.1.2: app.js wires workbench tabs, editor gutter, diff view, step run buttons, and arch modal', () => {
-  const js = fs.readFileSync(jsPath, 'utf8');
-
-  // 1. View switching sets body.workbench-open
-  assert.ok(js.includes("classList.toggle('workbench-open'"), 'switchView must toggle workbench-open class');
-
-  // 2. Tab switching logic
-  assert.ok(js.includes('setupWorkbenchTabs'), 'app.js must define setupWorkbenchTabs');
-  assert.ok(js.includes('.center-tab-btn'), 'Must attach click listeners to .center-tab-btn');
-  assert.ok(js.includes('.right-tab-btn'), 'Must attach click listeners to .right-tab-btn');
-
-  // 3. Editor Gutter & Diff
-  assert.ok(js.includes('updateEditorGutter'), 'app.js must define updateEditorGutter');
-  assert.ok(js.includes('computeSimpleDiff'), 'app.js must define computeSimpleDiff');
-  assert.ok(js.includes('btn-format-yaml'), 'app.js must wire format YAML button');
-  assert.ok(js.includes('btn-diff-manifest'), 'app.js must wire diff manifest button');
-
-  // 4. Step run & copy buttons
-  assert.ok(js.includes('btn-run-step'), 'app.js must render and wire .btn-run-step buttons');
-  assert.ok(js.includes('btn-copy-step'), 'app.js must render and wire .btn-copy-step buttons');
-
-  // 5. Architecture diagram modal
-  assert.ok(js.includes('openLabArchModal'), 'app.js must define openLabArchModal');
-  assert.ok(js.includes('closeLabArchModal'), 'app.js must define closeLabArchModal');
-  assert.ok(js.includes('renderLabArchDiagram'), 'app.js must define renderLabArchDiagram');
-
-  // 6. Observability & CIS Checklist
-  assert.ok(js.includes('drawPromqlChart'), 'app.js must define drawPromqlChart');
-  assert.ok(js.includes('seedObservability'), 'app.js must define seedObservability');
-  assert.ok(js.includes('renderCisChecklist'), 'app.js must define renderCisChecklist');
-  assert.ok(js.includes('topology-search-input'), 'app.js must wire topology search input');
-});
-

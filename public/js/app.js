@@ -1519,9 +1519,11 @@
       socraticEl.textContent = `Scenario Clue: Inspect cluster events and container logs before applying manifest fixes. What does kubectl describe indicate?`;
     }
 
+    const steps = data.lab.steps || [];
     const stepsBadge = document.getElementById('wb-steps-progress-badge');
     if (stepsBadge) {
-      stepsBadge.textContent = `${(data.lab.steps || []).length} Steps`;
+      stepsBadge.textContent = `0/${steps.length} Steps Verified`;
+      stepsBadge.className = 'badge badge-cyan';
     }
 
     const editor = document.getElementById('wb-manifest-editor');
@@ -1532,23 +1534,26 @@
 
     const stepsContainer = document.getElementById('wb-steps-list');
     if (stepsContainer) {
-      stepsContainer.innerHTML = (data.lab.steps || [])
-        .map(
-          (s) => `
-          <div class="step-card">
-            <div style="display:flex; justify-content:space-between; align-items:center;">
-              <div style="font-size:0.83rem; font-weight:700;">Step ${s.stepNumber}: ${escapeHtml(s.title)}</div>
-              <span class="step-status-badge" style="font-size:0.72rem; color:var(--text-muted);">&#x25CB; Pending</span>
+      stepsContainer.innerHTML = steps
+        .map((s, idx) => {
+          const isFirst = idx === 0;
+          return `
+            <div class="step-card ${isFirst ? 'step-active' : 'step-pending'}" id="step-card-${s.stepNumber}" data-step-num="${s.stepNumber}">
+              <div style="display:flex; justify-content:space-between; align-items:center;">
+                <div style="font-size:0.84rem; font-weight:700;">Step ${s.stepNumber}: ${escapeHtml(s.title)}</div>
+                <span class="step-status-badge ${isFirst ? 'active' : 'pending'}">
+                  ${isFirst ? '<span class="step-pulse-dot"></span> Active' : '&#x25CB; Pending'}
+                </span>
+              </div>
+              <div style="font-size:0.79rem; color:var(--text-secondary); margin-top:0.25rem; line-height:1.4;">${escapeHtml(s.instruction)}</div>
+              <code class="step-cmd" data-cmd="${escapeHtml(s.commandHint)}" title="Click to execute command in terminal">$ ${escapeHtml(s.commandHint)}</code>
+              <div class="step-actions">
+                <button type="button" class="btn-run-step" data-cmd="${escapeHtml(s.commandHint)}" data-step-num="${s.stepNumber}" title="Execute command directly in terminal">&#x25B6; Run in Terminal</button>
+                <button type="button" class="btn-copy-step" data-cmd="${escapeHtml(s.commandHint)}" title="Copy command to clipboard">&#x1F4CB; Copy</button>
+              </div>
             </div>
-            <div style="font-size:0.79rem; color:var(--text-secondary); margin-top:0.2rem;">${escapeHtml(s.instruction)}</div>
-            <code class="step-cmd" data-cmd="${escapeHtml(s.commandHint)}" title="Click to execute command in terminal">$ ${escapeHtml(s.commandHint)}</code>
-            <div class="step-actions">
-              <button type="button" class="btn-run-step" data-cmd="${escapeHtml(s.commandHint)}" title="Execute command directly in terminal">&#x25B6; Run in Terminal</button>
-              <button type="button" class="btn-copy-step" data-cmd="${escapeHtml(s.commandHint)}" title="Copy command to clipboard">&#x1F4CB; Copy</button>
-            </div>
-          </div>
-        `
-        )
+          `;
+        })
         .join('');
 
       stepsContainer.querySelectorAll('.step-cmd').forEach((codeEl) => {
@@ -1558,13 +1563,21 @@
       stepsContainer.querySelectorAll('.btn-run-step').forEach((btn) => {
         btn.addEventListener('click', async () => {
           const cmd = btn.dataset.cmd;
-          const card = btn.closest('.step-card');
+          const stepNum = parseInt(btn.dataset.stepNum, 10);
+          const card = document.getElementById(`step-card-${stepNum}`);
           const badge = card ? card.querySelector('.step-status-badge') : null;
           if (badge) {
-            badge.textContent = '✓ Executed';
-            badge.style.color = 'var(--accent-green)';
+            badge.className = 'step-status-badge active';
+            badge.innerHTML = '<span class="step-pulse-dot"></span> Running...';
           }
           await executeTerminalCommand(cmd);
+          if (state.activeLab) {
+            try {
+              const res = await apiCall(`/api/labs/${state.activeLab.id}/validate`, { method: 'POST' });
+              renderValidationReport(res);
+              if (res.clusterState) renderClusterTopology(res.clusterState);
+            } catch {}
+          }
         });
       });
 
@@ -1574,9 +1587,9 @@
           if (navigator.clipboard && navigator.clipboard.writeText) {
             try {
               await navigator.clipboard.writeText(cmd);
-              const origText = btn.textContent;
-              btn.textContent = '✓ Copied!';
-              setTimeout(() => { btn.textContent = origText; }, 1500);
+              const origText = btn.innerHTML;
+              btn.innerHTML = '&#x2713; Copied!';
+              setTimeout(() => { btn.innerHTML = origText; }, 1500);
             } catch {}
           }
         });
@@ -1842,6 +1855,7 @@
   }
 
   function renderPendingValidation(lab) {
+    updateRunbookStepStatuses({ passed: false, results: [] });
     const container = document.getElementById('wb-validation-results');
     if (!container || !lab) return;
     const rules = lab.validationRules || [];
@@ -2097,9 +2111,64 @@
     }
   }
 
+  function updateRunbookStepStatuses(report) {
+    if (!state.activeLab || !state.activeLab.steps) return;
+    const steps = state.activeLab.steps;
+    const results = (report && report.results) || [];
+    const isLabSolved = report && report.passed;
+
+    let verifiedCount = 0;
+    let nextActiveAssigned = false;
+
+    steps.forEach((s, idx) => {
+      const card = document.getElementById(`step-card-${s.stepNumber}`);
+      if (!card) return;
+      const badge = card.querySelector('.step-status-badge');
+
+      // Step is verified if whole lab passed or if matching assertion passed
+      const rulePassed = isLabSolved || (results[idx] && results[idx].passed);
+
+      if (rulePassed) {
+        verifiedCount++;
+        card.classList.remove('step-active', 'step-pending');
+        card.classList.add('step-verified');
+        if (badge) {
+          badge.className = 'step-status-badge verified';
+          badge.innerHTML = '&#x2713; Verified';
+        }
+      } else if (!nextActiveAssigned) {
+        nextActiveAssigned = true;
+        card.classList.remove('step-verified', 'step-pending');
+        card.classList.add('step-active');
+        if (badge) {
+          badge.className = 'step-status-badge active';
+          badge.innerHTML = '<span class="step-pulse-dot"></span> Active';
+        }
+      } else {
+        card.classList.remove('step-active', 'step-verified');
+        card.classList.add('step-pending');
+        if (badge) {
+          badge.className = 'step-status-badge pending';
+          badge.innerHTML = '&#x25CB; Pending';
+        }
+      }
+    });
+
+    const stepsBadge = document.getElementById('wb-steps-progress-badge');
+    if (stepsBadge) {
+      stepsBadge.textContent = `${verifiedCount}/${steps.length} Steps Verified`;
+      if (verifiedCount === steps.length && steps.length > 0) {
+        stepsBadge.className = 'badge badge-emerald badge-glow-emerald';
+      } else {
+        stepsBadge.className = 'badge badge-cyan';
+      }
+    }
+  }
+
   function renderValidationReport(report) {
     if (!report || report.isProject || report.contextType === 'project') return;
     if (report.labId && state.activeLab && report.labId !== state.activeLab.id) return;
+    updateRunbookStepStatuses(report);
     const container = document.getElementById('wb-validation-results');
     if (!container) return;
     container.innerHTML = `
@@ -3747,6 +3816,12 @@
       render7TierSkillTree,
       openSyllabusDrawer,
       closeSyllabusDrawer
+    };
+    window.KubeLabsWorkbench = {
+      updateRunbookStepStatuses,
+      validateActiveLab,
+      solveActiveLab,
+      setupResizableWorkbench
     };
   }
 
