@@ -3800,7 +3800,7 @@ class TerminalEngine {
 
   handleChaos(bin, args) {
     const action = args[0] || 'status';
-    if (action === 'inject' || action === 'pod-delete') {
+    if (action === 'inject' || action === 'pod-delete' || action === 'experiment') {
       const ns = args.includes('-n') ? args[args.indexOf('-n') + 1] : 'default';
       this.cluster.reconcile();
       return {

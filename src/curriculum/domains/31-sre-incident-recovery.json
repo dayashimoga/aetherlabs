@@ -1,0 +1,226 @@
+{
+  "id": "sre-incident-recovery",
+  "title": "Site Reliability Engineering (SRE), SLI/SLO Frameworks & Multi-Window Burn Rates",
+  "category": "Site Reliability & Resiliency",
+  "trackId": "track-sre",
+  "version": "1.0.0",
+  "difficulty": "Intermediate",
+  "estimatedHours": 8,
+  "summary": "Master Google SRE principles and practices: Service Level Indicators (SLIs), Service Level Objectives (SLOs), calculating Error Budgets, configuring multi-window multi-burn-rate alerting rules, blameless post-mortem analysis, and managing incident triage lifecycles.",
+  "prerequisites": [
+    "observability-core",
+    "prometheus-monitoring"
+  ],
+  "learningObjectives": [
+    "Formulate precision SLIs and quantitative 99.9% / 99.99% SLO targets to quantify customer happiness.",
+    "Calculate 30-day error budget burn rates and configure multi-window alerting to catch rapid 14.4x vs subtle 1x burn.",
+    "Execute structured incident triage, blameless post-mortems, and verify error budget compliance using slo_burn_rate_within_budget."
+  ],
+  "curriculumModules": [
+    {
+      "id": "mod-sre-01",
+      "title": "SLIs, SLOs & Quantitative Error Budget Governance",
+      "conceptSummary": "An SLI is a measurable indicator of service performance (e.g. ratio of successful requests). An SLO is a target reliability goal agreed with product stakeholders (e.g. 99.9% over 30 days). The Error Budget is the allowed unreliability (100% - SLO = 0.1% or ~43 minutes of downtime per month). Error budgets govern release velocity: when exhausted, feature deployments freeze in favor of reliability fixes.",
+      "productionArchitecturePattern": "Tie CI/CD deployment gates directly to remaining monthly error budgets: automatically halt non-critical releases when remaining budget drops below 20%.",
+      "keyCommands": [
+        "cat /sre/slo-specification.json",
+        "kubectl get prometheusrules -n monitoring -l role=slo-alert",
+        "kubectl apply -f /sre/slo-configmap.yaml"
+      ]
+    },
+    {
+      "id": "mod-sre-02",
+      "title": "Multi-Window Multi-Burn-Rate Alerting & Incident Management",
+      "conceptSummary": "Naive threshold alerting causes either delayed alerts (for subtle 1x burn) or noise (for short spikes). Multi-window multi-burn-rate alerting pairs short windows with long windows (e.g. 1 hour at 14.4x burn consumes 2% budget -> PagerDuty critical page; 6 hours at 6x burn consumes 5% budget -> high priority ticket). Both windows must exceed the threshold before paging.",
+      "productionArchitecturePattern": "Implement dual-window burn rate alerts: a 1h/5m window at 14.4x burn for immediate SEV-1 triage and a 6h/30m window at 6x burn to protect the budget without on-call fatigue.",
+      "keyCommands": [
+        "cat /sre/burn-rate-alerts.yaml",
+        "promtool check rules /sre/burn-rate-alerts.yaml",
+        "kubectl apply -f /sre/burn-rate-alerts.yaml"
+      ]
+    }
+  ],
+  "labs": [
+    {
+      "id": "lab-sre-01-slo-budget-governance",
+      "title": "Defining Microservice SLO Contracts & Error Budget Thresholds",
+      "difficulty": "Intermediate",
+      "durationMinutes": 20,
+      "xpReward": 150,
+      "scenario": "Establish reliability governance for the payments tier: author an SLO definition in /sre/slo-specification.json specifying service 'payment-service', sloTarget 0.999 (99.9%), windowDays 30, and errorBudgetMinutes 43.2. Deploy this contract as ConfigMap payment-slo-contract in namespace monitoring.",
+      "productionContext": "Declarative SLO specifications serve as a binding reliability contract between SREs and product teams, automating deployment freeze triggers.",
+      "prerequisites": [
+        "lab-obs-01-red-metrics-sli"
+      ],
+      "objectives": [
+        "Author SLO contract in /sre/slo-specification.json.",
+        "Deploy ConfigMap payment-slo-contract in namespace monitoring.",
+        "Verify sloTarget and errorBudgetMinutes fields."
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: payment-slo-contract\n  namespace: monitoring\ndata:\n  slo.json: |\n    {\n      \"service\": \"payment-service\",\n      \"sloTarget\": 0.999,\n      \"windowDays\": 30,\n      \"errorBudgetMinutes\": 43.2\n    }\n",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Author SLO specification JSON",
+          "instruction": "Save the SLO parameters to /sre/slo-specification.json.",
+          "commandHint": "mkdir -p /sre\ncat << 'EOF' > /sre/slo-specification.json\n...\nEOF"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Deploy ConfigMap to monitoring namespace",
+          "instruction": "Apply the ConfigMap manifest to namespace monitoring.",
+          "commandHint": "kubectl apply -f /sre/slo-configmap.yaml"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "vfs-slo-spec-exists",
+          "description": "/sre/slo-specification.json contains payment-service",
+          "type": "vfs_file_contains",
+          "path": "/sre/slo-specification.json",
+          "pattern": "payment-service",
+          "remediation": "Write payment-service contract in /sre/slo-specification.json"
+        },
+        {
+          "id": "cm-payment-slo-exists",
+          "description": "ConfigMap payment-slo-contract exists in namespace monitoring",
+          "type": "resource_exists",
+          "kind": "ConfigMap",
+          "namespace": "monitoring",
+          "name": "payment-slo-contract",
+          "remediation": "Apply ConfigMap payment-slo-contract in namespace monitoring"
+        },
+        {
+          "id": "cm-data-contains-error-budget",
+          "description": "ConfigMap data contains errorBudgetMinutes",
+          "type": "resource_field_contains",
+          "kind": "ConfigMap",
+          "namespace": "monitoring",
+          "name": "payment-slo-contract",
+          "fieldPath": "data['slo.json']",
+          "expectedValue": "errorBudgetMinutes",
+          "remediation": "Configure errorBudgetMinutes in data['slo.json']"
+        }
+      ],
+      "solutionCommands": [
+        "mkdir -p /sre",
+        "cat << 'EOF' > /sre/slo-specification.json\n{\n  \"service\": \"payment-service\",\n  \"sloTarget\": 0.999,\n  \"windowDays\": 30,\n  \"errorBudgetMinutes\": 43.2\n}\nEOF",
+        "cat << 'EOF' > /sre/slo-configmap.yaml\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: payment-slo-contract\n  namespace: monitoring\ndata:\n  slo.json: |\n    {\n      \"service\": \"payment-service\",\n      \"sloTarget\": 0.999,\n      \"windowDays\": 30,\n      \"errorBudgetMinutes\": 43.2\n    }\nEOF",
+        "kubectl apply -f /sre/slo-configmap.yaml"
+      ],
+      "troubleshootingGuide": [
+        {
+          "problem": "ConfigMap payment-slo-contract missing or field absent.",
+          "cause": "ConfigMap was not applied to monitoring namespace or key was omitted.",
+          "solution": "Verify /sre/slo-specification.json has valid values and apply /sre/slo-configmap.yaml."
+        }
+      ]
+    },
+    {
+      "id": "lab-sre-02-burn-rate-alerting",
+      "title": "Configuring Multi-Window Multi-Burn-Rate Alerting Rules",
+      "difficulty": "Intermediate",
+      "durationMinutes": 20,
+      "xpReward": 150,
+      "scenario": "Configure automated SLO burn-rate alerting: author a PrometheusRule in /sre/burn-rate-alerts.yaml defining alert PaymentSloBurnRateRapid triggering when burn rate exceeds 14.4 for 2m with severity: critical and alert PaymentSloBurnRateSlow when burn rate exceeds 6.0 for 15m with severity: warning. Apply to namespace monitoring.",
+      "productionContext": "Multi-window multi-burn-rate alerts catch 2% budget consumption in 1 hour while filtering out transient blips, eliminating false positive on-call pages.",
+      "prerequisites": [
+        "lab-sre-01-slo-budget-governance"
+      ],
+      "objectives": [
+        "Author PrometheusRule burn rate alerts in /sre/burn-rate-alerts.yaml.",
+        "Deploy PrometheusRule payment-slo-burn-alerts in namespace monitoring.",
+        "Verify PaymentSloBurnRateRapid alert configuration."
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "apiVersion: monitoring.coreos.com/v1\nkind: PrometheusRule\nmetadata:\n  name: payment-slo-burn-alerts\n  namespace: monitoring\nspec:\n  groups:\n    - name: payment-slo.rules\n      rules:\n        - alert: PaymentSloBurnRateRapid\n          expr: (rate(http_requests_total{status=~\"5..\"}[1h]) / rate(http_requests_total[1h])) / (1 - 0.999) > 14.4\n          for: 2m\n          labels:\n            severity: critical\n        - alert: PaymentSloBurnRateSlow\n          expr: (rate(http_requests_total{status=~\"5..\"}[6h]) / rate(http_requests_total[6h])) / (1 - 0.999) > 6.0\n          for: 15m\n          labels:\n            severity: warning\n",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Author burn-rate PrometheusRule manifest",
+          "instruction": "Save the alert rule to /sre/burn-rate-alerts.yaml.",
+          "commandHint": "cat << 'EOF' > /sre/burn-rate-alerts.yaml\n...\nEOF"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Apply PrometheusRule to monitoring namespace",
+          "instruction": "Apply the alerting rule manifest to namespace monitoring.",
+          "commandHint": "kubectl apply -f /sre/burn-rate-alerts.yaml"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "vfs-burn-alerts-exists",
+          "description": "/sre/burn-rate-alerts.yaml contains PaymentSloBurnRateRapid",
+          "type": "vfs_file_contains",
+          "path": "/sre/burn-rate-alerts.yaml",
+          "pattern": "PaymentSloBurnRateRapid",
+          "remediation": "Write PaymentSloBurnRateRapid alert in /sre/burn-rate-alerts.yaml"
+        },
+        {
+          "id": "promrule-slo-burn-exists",
+          "description": "PrometheusRule payment-slo-burn-alerts exists in namespace monitoring",
+          "type": "resource_exists",
+          "kind": "PrometheusRule",
+          "namespace": "monitoring",
+          "name": "payment-slo-burn-alerts",
+          "remediation": "Apply PrometheusRule payment-slo-burn-alerts in namespace monitoring"
+        },
+        {
+          "id": "promrule-alert-name-matches",
+          "description": "PrometheusRule defines alert PaymentSloBurnRateRapid",
+          "type": "resource_field_equals",
+          "kind": "PrometheusRule",
+          "namespace": "monitoring",
+          "name": "payment-slo-burn-alerts",
+          "fieldPath": "spec.groups[0].rules[0].alert",
+          "expectedValue": "PaymentSloBurnRateRapid",
+          "remediation": "Define alert PaymentSloBurnRateRapid in spec.groups[0].rules[0]"
+        }
+      ],
+      "solutionCommands": [
+        "mkdir -p /sre",
+        "cat << 'EOF' > /sre/burn-rate-alerts.yaml\napiVersion: monitoring.coreos.com/v1\nkind: PrometheusRule\nmetadata:\n  name: payment-slo-burn-alerts\n  namespace: monitoring\nspec:\n  groups:\n    - name: payment-slo.rules\n      rules:\n        - alert: PaymentSloBurnRateRapid\n          expr: (rate(http_requests_total{status=~\"5..\"}[1h]) / rate(http_requests_total[1h])) / (1 - 0.999) > 14.4\n          for: 2m\n          labels:\n            severity: critical\n        - alert: PaymentSloBurnRateSlow\n          expr: (rate(http_requests_total{status=~\"5..\"}[6h]) / rate(http_requests_total[6h])) / (1 - 0.999) > 6.0\n          for: 15m\n          labels:\n            severity: warning\nEOF",
+        "kubectl apply -f /sre/burn-rate-alerts.yaml"
+      ],
+      "troubleshootingGuide": [
+        {
+          "problem": "PrometheusRule missing or alert rule name incorrect.",
+          "cause": "Manifest was not applied or alert name differed from PaymentSloBurnRateRapid.",
+          "solution": "Verify spec.groups[0].rules[0].alert is PaymentSloBurnRateRapid and re-apply."
+        }
+      ]
+    }
+  ],
+  "assessmentQuestions": [
+    {
+      "id": "q-sre-01",
+      "question": "For a service with a 99.9% 30-day availability SLO, what does a burn rate of 14.4 signify?",
+      "options": [
+        "The service is operating at 14.4 times its normal network bandwidth.",
+        "The service is consuming its 30-day error budget at 14.4 times the baseline rate, which will exhaust 2% of the total monthly error budget in exactly 1 hour and deplete the entire budget in ~50 hours if left unchecked.",
+        "The service has crashed 14 times in the past 4 minutes.",
+        "The CPU throttling threshold has increased by 14.4%."
+      ],
+      "correctIndex": 1,
+      "explanation": "A burn rate of 1 consumes the entire error budget in 30 days (720 hours). A burn rate of 14.4 burns budget 14.4x faster, consuming 2% of the 30-day budget in just 1 hour (720 / 14.4 = 50 hours to 100% exhaustion), warranting an immediate critical page."
+    },
+    {
+      "id": "q-sre-02",
+      "question": "In Google SRE methodology, what is the primary purpose of a blameless post-mortem after a major outage?",
+      "options": [
+        "To identify and reassign the engineer who triggered the bug.",
+        "To identify systemic, process, and architectural vulnerabilities that allowed the failure to occur, establishing preventative action items without pointing fingers at human error.",
+        "To recalculate software license fees.",
+        "To replace all Kubernetes worker nodes."
+      ],
+      "correctIndex": 1,
+      "explanation": "Blameless post-mortems assume that engineers act in good faith with the information available. Triage focuses on fixing brittle processes, missing automated tests, and architectural single points of failure rather than punishing individuals."
+    }
+  ]
+}

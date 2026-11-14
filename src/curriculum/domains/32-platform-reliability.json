@@ -1,0 +1,242 @@
+{
+  "id": "platform-reliability",
+  "title": "Platform Reliability, Chaos Engineering & Kubernetes High-Availability Primitives",
+  "category": "Site Reliability & Resiliency",
+  "trackId": "track-sre",
+  "version": "1.0.0",
+  "difficulty": "Intermediate",
+  "estimatedHours": 8,
+  "summary": "Master cloud-native platform resilience: executing automated chaos experiments (pod kills, network latency) with Chaos Mesh, enforcing voluntary disruption protection via PodDisruptionBudgets (PDB), protecting critical system daemons with PriorityClasses, and implementing graceful zero-downtime container lifecycle termination using preStop hooks.",
+  "prerequisites": [
+    "sre-incident-recovery",
+    "kubernetes-core-v4"
+  ],
+  "learningObjectives": [
+    "Configure PodDisruptionBudgets (PDB) to safeguard microservice quorum during voluntary node drains and cluster upgrades.",
+    "Implement PriorityClasses with preemption policies to guarantee critical system workloads schedule over batch jobs.",
+    "Execute chaos injection experiments in the terminal and verify graceful shutdown using container preStop lifecycle hooks."
+  ],
+  "curriculumModules": [
+    {
+      "id": "mod-rel-01",
+      "title": "High-Availability Primitives: PodDisruptionBudgets & PriorityClasses",
+      "conceptSummary": "PodDisruptionBudgets (PDB) declare the minimum percentage or number of replicas that must remain running during voluntary disruptions (e.g. node drains, auto-scaling down). PriorityClasses assign integer scheduling priorities (e.g. 1000000 for critical tiers) and preemption policies (PreemptLowerPriority), ensuring vital services evict lower-priority batch workloads when cluster capacity is saturated.",
+      "productionArchitecturePattern": "Mandate minAvailable: 2 or maxUnavailable: 1 PDBs across all production Deployments with >= 3 replicas, and assign high-priority PriorityClasses to ingress, DNS, and control-plane controllers.",
+      "keyCommands": [
+        "kubectl get pdb -A",
+        "kubectl get priorityclasses",
+        "kubectl apply -f /reliability/checkout-pdb.yaml"
+      ]
+    },
+    {
+      "id": "mod-rel-02",
+      "title": "Chaos Engineering & Graceful Pod Termination with preStop Hooks",
+      "conceptSummary": "Chaos engineering proves system resilience by proactively injecting synthetic failures (pod crashes, packet loss, DNS corruption). When pods terminate, Kubernetes sends SIGTERM, but endpoint deregistration and kube-proxy iptables propagation can take several seconds. A container lifecycle preStop hook (e.g. sleep 15) keeps the container running briefly to drain active connections without dropping requests.",
+      "productionArchitecturePattern": "Always add a preStop sleep hook (sleep 10-15s) paired with an extended terminationGracePeriodSeconds (30-45s) on HTTP services behind Ingress / Service meshes to guarantee zero 502/504 connection resets during rolling deployments.",
+      "keyCommands": [
+        "chaos experiment pod-kill -n production",
+        "cat /reliability/graceful-api.yaml",
+        "kubectl apply -f /reliability/graceful-api.yaml"
+      ]
+    }
+  ],
+  "labs": [
+    {
+      "id": "lab-rel-01-pdb-priorityclass",
+      "title": "Configuring PodDisruptionBudgets & Critical PriorityClasses",
+      "difficulty": "Intermediate",
+      "durationMinutes": 20,
+      "xpReward": 150,
+      "scenario": "Safeguard payment processing from voluntary eviction: author and apply a cluster-scoped PriorityClass named production-critical with value 1000000 and preemptionPolicy PreemptLowerPriority. Next, author and apply a PodDisruptionBudget named payment-pdb in namespace production targeting selector app: payment-api with minAvailable: 2.",
+      "productionContext": "PDBs guarantee that routine node upgrades or automated cluster autoscaler downscaling events never drop service replicas below high-availability quorum.",
+      "prerequisites": [
+        "lab-sre-01-slo-budget-governance"
+      ],
+      "objectives": [
+        "Create namespace production.",
+        "Apply PriorityClass production-critical with value 1000000.",
+        "Apply PodDisruptionBudget payment-pdb in namespace production with minAvailable: 2."
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "apiVersion: scheduling.k8s.io/v1\nkind: PriorityClass\nmetadata:\n  name: production-critical\nvalue: 1000000\nglobalDefault: false\npreemptionPolicy: PreemptLowerPriority\n---\napiVersion: policy/v1\nkind: PodDisruptionBudget\nmetadata:\n  name: payment-pdb\n  namespace: production\nspec:\n  minAvailable: 2\n  selector:\n    matchLabels:\n      app: payment-api\n",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Create production namespace",
+          "instruction": "Create the production namespace.",
+          "commandHint": "kubectl create namespace production"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Apply PriorityClass and PodDisruptionBudget",
+          "instruction": "Save and apply PriorityClass and PDB manifests to cluster.",
+          "commandHint": "cat << 'EOF' > /reliability/ha-primitives.yaml\n...\nEOF\nkubectl apply -f /reliability/ha-primitives.yaml"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "priorityclass-critical-exists",
+          "description": "PriorityClass production-critical exists",
+          "type": "resource_exists",
+          "kind": "PriorityClass",
+          "name": "production-critical",
+          "remediation": "Apply PriorityClass production-critical"
+        },
+        {
+          "id": "priorityclass-value-match",
+          "description": "PriorityClass value is 1000000",
+          "type": "resource_field_equals",
+          "kind": "PriorityClass",
+          "name": "production-critical",
+          "fieldPath": "value",
+          "expectedValue": 1000000,
+          "remediation": "Set value: 1000000 on PriorityClass production-critical"
+        },
+        {
+          "id": "pdb-payment-exists",
+          "description": "PodDisruptionBudget payment-pdb exists in namespace production",
+          "type": "resource_exists",
+          "kind": "PodDisruptionBudget",
+          "namespace": "production",
+          "name": "payment-pdb",
+          "remediation": "Apply PodDisruptionBudget payment-pdb in namespace production"
+        },
+        {
+          "id": "pdb-min-available-match",
+          "description": "PodDisruptionBudget minAvailable is 2",
+          "type": "resource_field_equals",
+          "kind": "PodDisruptionBudget",
+          "namespace": "production",
+          "name": "payment-pdb",
+          "fieldPath": "spec.minAvailable",
+          "expectedValue": 2,
+          "remediation": "Set spec.minAvailable: 2 on PodDisruptionBudget payment-pdb"
+        }
+      ],
+      "solutionCommands": [
+        "mkdir -p /reliability",
+        "kubectl create namespace production",
+        "cat << 'EOF' > /reliability/ha-primitives.yaml\napiVersion: scheduling.k8s.io/v1\nkind: PriorityClass\nmetadata:\n  name: production-critical\nvalue: 1000000\nglobalDefault: false\npreemptionPolicy: PreemptLowerPriority\n---\napiVersion: policy/v1\nkind: PodDisruptionBudget\nmetadata:\n  name: payment-pdb\n  namespace: production\nspec:\n  minAvailable: 2\n  selector:\n    matchLabels:\n      app: payment-api\nEOF",
+        "kubectl apply -f /reliability/ha-primitives.yaml"
+      ],
+      "troubleshootingGuide": [
+        {
+          "problem": "PriorityClass or PodDisruptionBudget missing or minAvailable incorrect.",
+          "cause": "PriorityClass is cluster-scoped; PDB must be in production namespace.",
+          "solution": "Verify /reliability/ha-primitives.yaml has correct YAML structure and re-apply."
+        }
+      ]
+    },
+    {
+      "id": "lab-rel-02-chaos-prestop-hook",
+      "title": "Injecting Chaos Experiments & Validating Graceful preStop Hooks",
+      "difficulty": "Intermediate",
+      "durationMinutes": 20,
+      "xpReward": 150,
+      "scenario": "Validate rolling deployment resilience under chaos: author a Pod manifest in /reliability/graceful-api.yaml in namespace production with a container lifecycle preStop hook executing ['/bin/sh', '-c', 'sleep 15'] and terminationGracePeriodSeconds set to 30. Apply to namespace production, then run chaos experiment pod-kill -n production to test self-healing.",
+      "productionContext": "Container preStop sleep hooks allow in-flight HTTP connections to complete and load balancers to deregister endpoints before the container receives SIGKILL.",
+      "prerequisites": [
+        "lab-rel-01-pdb-priorityclass"
+      ],
+      "objectives": [
+        "Deploy Pod graceful-api in namespace production with preStop hook.",
+        "Execute chaos experiment pod-kill in namespace production."
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "apiVersion: v1\nkind: Pod\nmetadata:\n  name: graceful-api\n  namespace: production\n  labels:\n    app: graceful-api\nspec:\n  terminationGracePeriodSeconds: 30\n  containers:\n    - name: api\n      image: nginx:1.27-alpine\n      lifecycle:\n        preStop:\n          exec:\n            command: [\"/bin/sh\", \"-c\", \"sleep 15\"]\n",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Author Pod manifest with lifecycle preStop hook",
+          "instruction": "Save the Pod definition to /reliability/graceful-api.yaml.",
+          "commandHint": "cat << 'EOF' > /reliability/graceful-api.yaml\n...\nEOF"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Apply Pod to production namespace",
+          "instruction": "Apply the Pod to namespace production.",
+          "commandHint": "kubectl apply -f /reliability/graceful-api.yaml"
+        },
+        {
+          "stepNumber": 3,
+          "title": "Execute chaos experiment",
+          "instruction": "Run chaos experiment pod-kill in namespace production.",
+          "commandHint": "chaos experiment pod-kill -n production"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "pod-graceful-api-exists",
+          "description": "Pod graceful-api exists in namespace production",
+          "type": "resource_exists",
+          "kind": "Pod",
+          "namespace": "production",
+          "name": "graceful-api",
+          "remediation": "Deploy Pod graceful-api in namespace production"
+        },
+        {
+          "id": "pod-grace-period-matches",
+          "description": "Pod terminationGracePeriodSeconds is 30",
+          "type": "resource_field_equals",
+          "kind": "Pod",
+          "namespace": "production",
+          "name": "graceful-api",
+          "fieldPath": "spec.terminationGracePeriodSeconds",
+          "expectedValue": 30,
+          "remediation": "Set spec.terminationGracePeriodSeconds: 30 on Pod graceful-api"
+        },
+        {
+          "id": "chaos-experiment-executed",
+          "description": "chaos command executed",
+          "type": "command_executed",
+          "commandSubstring": "chaos",
+          "remediation": "Execute chaos experiment pod-kill -n production"
+        }
+      ],
+      "solutionCommands": [
+        "mkdir -p /reliability",
+        "kubectl create namespace production",
+        "cat << 'EOF' > /reliability/graceful-api.yaml\napiVersion: v1\nkind: Pod\nmetadata:\n  name: graceful-api\n  namespace: production\n  labels:\n    app: graceful-api\nspec:\n  terminationGracePeriodSeconds: 30\n  containers:\n    - name: api\n      image: nginx:1.27-alpine\n      lifecycle:\n        preStop:\n          exec:\n            command: [\"/bin/sh\", \"-c\", \"sleep 15\"]\nEOF",
+        "kubectl apply -f /reliability/graceful-api.yaml",
+        "chaos experiment pod-kill -n production"
+      ],
+      "troubleshootingGuide": [
+        {
+          "problem": "Pod graceful-api missing or chaos command not run.",
+          "cause": "Pod was not created in production namespace or chaos experiment was omitted.",
+          "solution": "Apply /reliability/graceful-api.yaml to production and execute chaos experiment pod-kill -n production."
+        }
+      ]
+    }
+  ],
+  "assessmentQuestions": [
+    {
+      "id": "q-rel-01",
+      "question": "What is the difference between a voluntary disruption and an involuntary disruption in Kubernetes, and which one does a PodDisruptionBudget (PDB) protect against?",
+      "options": [
+        "PDBs only protect against involuntary hardware power outages.",
+        "Voluntary disruptions are initiated by users or cluster operators (node drains, cluster upgrades, autoscaler scale-down), and PDBs strictly enforce availability limits during these events; involuntary disruptions are unpreventable hardware/kernel crashes.",
+        "Voluntary disruptions happen when containers run out of memory.",
+        "PDBs are used only for batch cronjobs."
+      ],
+      "correctIndex": 1,
+      "explanation": "PodDisruptionBudgets govern voluntary administrative disruptions (kubectl drain, cluster upgrade, cluster autoscaling) to ensure a quorum of pods remains active. Involuntary disruptions (hardware failures, kernel panics) cannot be prevented by PDBs."
+    },
+    {
+      "id": "q-rel-02",
+      "question": "Why should web microservices configure a container lifecycle preStop hook with a brief sleep (e.g. sleep 15) when running in production Kubernetes?",
+      "options": [
+        "To cool down the physical CPU before shutting down the pod.",
+        "When a Pod enters Terminating, endpoint removal and iptables/IPVS rule updates propagate asynchronously across nodes; a preStop sleep delays sending SIGTERM to the process, allowing in-flight requests to complete while new traffic is routed away.",
+        "To force the container to dump its memory heap to disk.",
+        "Kubernetes requires all pods to sleep for 15 seconds before rebooting."
+      ],
+      "correctIndex": 1,
+      "explanation": "Endpoint deregistration takes a few seconds to propagate through the API server, endpoint controller, and kube-proxy. A preStop hook sleep ensures the container keeps servicing requests until it is removed from all load balancing pools, eliminating 502 Bad Gateway errors."
+    }
+  ]
+}
