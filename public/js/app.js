@@ -1568,8 +1568,30 @@
     if (domainsContainer) {
       const filteredDomains = (state.overview.domains || []).filter((d) => isDomainMatchingFilters(d, completedSet));
 
-      domainsContainer.innerHTML = filteredDomains
-        .map((d) => {
+      if (filteredDomains.length === 0) {
+        domainsContainer.innerHTML = `
+          <div class="empty-state-card" role="status">
+            <div style="font-size: 2.2rem; margin-bottom: 0.5rem;" aria-hidden="true">🔍</div>
+            <h3 style="margin: 0 0 0.5rem 0; font-size: 1.1rem; color: var(--text-primary);">No domains match your active filter</h3>
+            <p style="margin: 0 0 1rem 0; font-size: 0.85rem; color: var(--text-muted); max-width: 480px;">Try adjusting your search terms or clearing the difficulty/status filters to view available learning tracks.</p>
+            <button class="btn btn-primary" type="button" id="btn-empty-clear-filters">Clear All Filters</button>
+          </div>
+        `;
+        const clearBtn = domainsContainer.querySelector('#btn-empty-clear-filters');
+        if (clearBtn) {
+          clearBtn.addEventListener('click', () => {
+            curriculumFilterState.search = '';
+            curriculumFilterState.cert = 'all';
+            curriculumFilterState.difficulty = 'all';
+            curriculumFilterState.status = 'all';
+            const searchInput = document.getElementById('domain-search-input');
+            if (searchInput) searchInput.value = '';
+            renderPathsAndDomains();
+          });
+        }
+      } else {
+        domainsContainer.innerHTML = filteredDomains
+          .map((d) => {
           const labsHtml = (d.labs || [])
             .map((lab) => {
               const isDone = completedSet.has(lab.id);
@@ -1615,9 +1637,10 @@
         })
         .join('');
 
-      domainsContainer.querySelectorAll('.launch-lab-btn').forEach((btn) => {
-        btn.addEventListener('click', () => startLab(btn.dataset.labId));
-      });
+        domainsContainer.querySelectorAll('.launch-lab-btn').forEach((btn) => {
+          btn.addEventListener('click', () => startLab(btn.dataset.labId));
+        });
+      }
     }
   }
 
@@ -2676,6 +2699,17 @@
       ? allIncidents
       : allIncidents.filter((inc) => inc.category === filterCat);
 
+    if (filtered.length === 0) {
+      grid.innerHTML = `
+        <div class="empty-state-card" role="status">
+          <div style="font-size: 2.2rem; margin-bottom: 0.5rem;" aria-hidden="true">⚡</div>
+          <h3 style="margin: 0 0 0.5rem 0; font-size: 1.1rem; color: var(--text-primary);">No incidents in category "${escapeHtml(filterCat)}"</h3>
+          <p style="margin: 0 0 1rem 0; font-size: 0.85rem; color: var(--text-muted); max-width: 480px;">Select "All Outages" to view the complete catalog of 25 Chaos War Room scenarios.</p>
+        </div>
+      `;
+      return;
+    }
+
     grid.innerHTML = filtered.map((inc) => {
       const isResolved = resolvedSet.has(inc.id);
       const isCurrentlyActive = state.activeIncident && state.activeIncident.id === inc.id;
@@ -3472,6 +3506,17 @@
     const nodesLayer = document.getElementById('arch-nodes-canvas');
     if (!nodesLayer) return;
 
+    if (!state.activeArch || !state.activeArch.nodes || state.activeArch.nodes.length === 0) {
+      nodesLayer.innerHTML = `
+        <div class="empty-arch-canvas" role="status">
+          <div style="font-size:2.5rem; margin-bottom:0.5rem;" aria-hidden="true">🏗️</div>
+          <div style="font-size:1.1rem; font-weight:600; color:var(--text-secondary);">Empty Architecture Canvas</div>
+          <p style="font-size:0.85rem; margin:0.25rem 0 0 0;">Select a reference blueprint above or drag and drop components to begin designing.</p>
+        </div>
+      `;
+      return;
+    }
+
     // Render HTML Nodes
     nodesLayer.innerHTML = state.activeArch.nodes
       .map((n) => {
@@ -3782,7 +3827,13 @@
     if (!container || !state.overview) return;
     const certs = (state.overview.learner && state.overview.learner.certificates) || [];
     if (certs.length === 0) {
-      container.innerHTML = '';
+      container.innerHTML = `
+        <div class="empty-certs-card" role="status">
+          <div style="font-size: 1.6rem; margin-bottom: 0.35rem;" aria-hidden="true">📜</div>
+          <div style="font-size: 0.88rem; font-weight: 600; color: var(--text-secondary);">No Cryptographic Certificates Earned Yet</div>
+          <p style="font-size: 0.78rem; color: var(--text-muted); margin: 0.25rem 0 0 0; max-width: 440px;">Achieve >= 75% on any Performance Exam Simulator or Track Certification to issue an authentic Ed25519 &amp; HMAC-SHA256 credential.</p>
+        </div>
+      `;
       return;
     }
     container.innerHTML =
