@@ -1,0 +1,242 @@
+{
+  "id": "distributed-systems",
+  "title": "Distributed Systems Theory, Raft Quorum, Fencing Tokens & Saga Transactions",
+  "category": "Architecture & System Design",
+  "trackId": "track-platform",
+  "version": "1.0.0",
+  "difficulty": "Advanced",
+  "estimatedHours": 8,
+  "summary": "Master fundamental distributed systems theory and production fault-tolerant patterns: understanding CAP theorem trade-offs, Raft consensus algorithm quorum mechanics and split-brain resolution, distributed locks with monotonically increasing fencing tokens to prevent dual-primary data corruption, consistent hashing rings for stateless routing, and Saga choreography/orchestration for distributed transactions with compensating actions.",
+  "prerequisites": [
+    "cloud-native-architecture",
+    "platform-reliability"
+  ],
+  "learningObjectives": [
+    "Analyze distributed consensus algorithms (Raft, Paxos) and compute quorum availability under network partition scenarios.",
+    "Implement distributed mutual exclusion using monotonically increasing fencing tokens to prevent zombie process dual-writes.",
+    "Architect Saga distributed transactions with automated compensating rollbacks to maintain eventual consistency across decoupled microservices."
+  ],
+  "curriculumModules": [
+    {
+      "id": "mod-dist-01",
+      "title": "Raft Consensus, Quorum Math & Split-Brain Prevention",
+      "conceptSummary": "Raft ensures linearizable distributed state machine replication using leader election, log replication, and commitment rules. A cluster of N nodes requires a strict majority quorum Q = floor(N/2) + 1 to elect a leader or commit log entries. Under a network partition, the minority partition cannot achieve quorum, preventing split-brain dual-primary divergence and protecting data integrity.",
+      "productionArchitecturePattern": "Deploy odd-numbered consensus topologies (3 or 5 nodes) across separate availability zones to tolerate floor((N-1)/2) node failures without service disruption.",
+      "keyCommands": [
+        "etcdctl endpoint status",
+        "etcdctl member list",
+        "kubectl get nodes"
+      ]
+    },
+    {
+      "id": "mod-dist-02",
+      "title": "Distributed Locking, Fencing Tokens & Saga Choreography",
+      "conceptSummary": "Time-based distributed leases are vulnerable to client pauses (garbage collection, page faults, CPU throttling), allowing expired zombie processes to issue writes concurrently with the new lock holder. Martin Kleppmann's fencing token pattern assigns a strictly monotonic integer on each lock grant; storage nodes reject any write with a token lower than the highest seen. Across microservices, the Saga pattern decomposes multi-service transactions into local ACID transactions paired with compensating rollback actions.",
+      "productionArchitecturePattern": "Enforce fencing token gates on storage operations to prevent dual-primary data corruption, and orchestrate business workflows with Saga state machines to achieve eventual consistency without two-phase commit bottlenecks.",
+      "keyCommands": [
+        "cat /dist/distributed-lock.yaml",
+        "kubectl apply -f /dist/distributed-lock.yaml",
+        "kubectl apply -f /dist/saga-orchestration.yaml"
+      ]
+    }
+  ],
+  "labs": [
+    {
+      "id": "lab-dist-01-fencing-token-lock",
+      "title": "Distributed Mutual Exclusion with Monotonically Increasing Fencing Tokens",
+      "difficulty": "Advanced",
+      "durationMinutes": 20,
+      "xpReward": 150,
+      "scenario": "Configure a distributed mutual exclusion contract protected by monotonic fencing tokens: author ConfigMap order-distributed-lock in namespace production defining lockName: order-processing-lock, currentOwner: worker-pod-01, leaseDurationSeconds: '30', and fencingToken: '1042'. Apply to namespace production.",
+      "productionContext": "Fencing tokens ensure that if a lock owner pauses (e.g. JVM full-GC or network stall) and loses its lease, its subsequent late writes are rejected by downstream storage engines, preventing silent data corruption.",
+      "prerequisites": [
+        "lab-arch-02-custom-operator-crd"
+      ],
+      "objectives": [
+        "Create namespace production if not present.",
+        "Author ConfigMap order-distributed-lock.",
+        "Configure currentOwner to worker-pod-01.",
+        "Configure fencingToken to '1042'.",
+        "Apply ConfigMap to namespace production."
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: order-distributed-lock\n  namespace: production\ndata:\n  lockName: \"order-processing-lock\"\n  currentOwner: \"worker-pod-01\"\n  leaseDurationSeconds: \"30\"\n  fencingToken: \"1042\"\n",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Create production namespace",
+          "instruction": "Create namespace production if not present.",
+          "commandHint": "kubectl create namespace production"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Author distributed lock manifest",
+          "instruction": "Author manifest /dist/distributed-lock.yaml defining ConfigMap order-distributed-lock.",
+          "commandHint": "cat << 'EOF' > /dist/distributed-lock.yaml\n...\nEOF"
+        },
+        {
+          "stepNumber": 3,
+          "title": "Apply distributed lock manifest",
+          "instruction": "Apply manifest to namespace production.",
+          "commandHint": "kubectl apply -f /dist/distributed-lock.yaml"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "cm-order-lock-exists",
+          "description": "ConfigMap order-distributed-lock exists in namespace production",
+          "type": "resource_exists",
+          "kind": "ConfigMap",
+          "namespace": "production",
+          "name": "order-distributed-lock",
+          "remediation": "Apply ConfigMap order-distributed-lock in namespace production"
+        },
+        {
+          "id": "cm-lock-owner",
+          "description": "ConfigMap currentOwner is worker-pod-01",
+          "type": "resource_field_equals",
+          "kind": "ConfigMap",
+          "namespace": "production",
+          "name": "order-distributed-lock",
+          "fieldPath": "data.currentOwner",
+          "expectedValue": "worker-pod-01",
+          "remediation": "Set data.currentOwner: worker-pod-01 on ConfigMap order-distributed-lock"
+        },
+        {
+          "id": "cm-fencing-token",
+          "description": "ConfigMap fencingToken is '1042'",
+          "type": "resource_field_equals",
+          "kind": "ConfigMap",
+          "namespace": "production",
+          "name": "order-distributed-lock",
+          "fieldPath": "data.fencingToken",
+          "expectedValue": "1042",
+          "remediation": "Set data.fencingToken: '1042' on ConfigMap order-distributed-lock"
+        }
+      ],
+      "solutionCommands": [
+        "mkdir -p /dist",
+        "kubectl create namespace production",
+        "cat << 'EOF' > /dist/distributed-lock.yaml\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: order-distributed-lock\n  namespace: production\ndata:\n  lockName: \"order-processing-lock\"\n  currentOwner: \"worker-pod-01\"\n  leaseDurationSeconds: \"30\"\n  fencingToken: \"1042\"\nEOF",
+        "kubectl apply -f /dist/distributed-lock.yaml"
+      ],
+      "troubleshootingGuide": [
+        {
+          "problem": "ConfigMap missing or fencing token mismatch.",
+          "cause": "The ConfigMap must define data.currentOwner as worker-pod-01 and data.fencingToken as '1042'.",
+          "solution": "Apply /dist/distributed-lock.yaml to namespace production."
+        }
+      ]
+    },
+    {
+      "id": "lab-dist-02-saga-orchestration",
+      "title": "Architecting Saga Distributed Transactions with Compensating Rollbacks",
+      "difficulty": "Advanced",
+      "durationMinutes": 20,
+      "xpReward": 150,
+      "scenario": "Implement a resilient Saga distributed transaction workflow with automated compensating rollbacks: author ConfigMap payment-order-saga-definition in namespace production defining sagaId: saga-ecommerce-v1, status: Active, and a JSON specification in sagaDefinition declaring forward steps (AuthorizePayment, ReserveInventory, ShipOrder) and compensating actions (RefundPayment, ReleaseInventory). Apply to namespace production.",
+      "productionContext": "Sagas replace fragile blocking Two-Phase Commit (2PC) protocols across microservices, using compensating transactions to guarantee eventual consistency across network boundaries.",
+      "prerequisites": [
+        "lab-dist-01-fencing-token-lock"
+      ],
+      "objectives": [
+        "Author ConfigMap payment-order-saga-definition in /dist/saga-orchestration.yaml.",
+        "Configure data.sagaId to saga-ecommerce-v1.",
+        "Configure data.status to Active.",
+        "Apply ConfigMap to namespace production."
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: payment-order-saga-definition\n  namespace: production\ndata:\n  sagaId: \"saga-ecommerce-v1\"\n  status: \"Active\"\n  sagaDefinition: \"{\\\"steps\\\":[\\\"AuthorizePayment\\\",\\\"ReserveInventory\\\",\\\"ShipOrder\\\"],\\\"compensations\\\":[\\\"RefundPayment\\\",\\\"ReleaseInventory\\\"]}\"\n",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Author Saga orchestration manifest",
+          "instruction": "Author manifest /dist/saga-orchestration.yaml defining ConfigMap payment-order-saga-definition.",
+          "commandHint": "cat << 'EOF' > /dist/saga-orchestration.yaml\n...\nEOF"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Apply Saga orchestration manifest",
+          "instruction": "Apply manifest to namespace production.",
+          "commandHint": "kubectl apply -f /dist/saga-orchestration.yaml"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "cm-saga-definition-exists",
+          "description": "ConfigMap payment-order-saga-definition exists in namespace production",
+          "type": "resource_exists",
+          "kind": "ConfigMap",
+          "namespace": "production",
+          "name": "payment-order-saga-definition",
+          "remediation": "Apply ConfigMap payment-order-saga-definition in namespace production"
+        },
+        {
+          "id": "cm-saga-id",
+          "description": "ConfigMap sagaId is saga-ecommerce-v1",
+          "type": "resource_field_equals",
+          "kind": "ConfigMap",
+          "namespace": "production",
+          "name": "payment-order-saga-definition",
+          "fieldPath": "data.sagaId",
+          "expectedValue": "saga-ecommerce-v1",
+          "remediation": "Set data.sagaId: saga-ecommerce-v1 on ConfigMap payment-order-saga-definition"
+        },
+        {
+          "id": "cm-saga-status",
+          "description": "ConfigMap status is Active",
+          "type": "resource_field_equals",
+          "kind": "ConfigMap",
+          "namespace": "production",
+          "name": "payment-order-saga-definition",
+          "fieldPath": "data.status",
+          "expectedValue": "Active",
+          "remediation": "Set data.status: Active on ConfigMap payment-order-saga-definition"
+        }
+      ],
+      "solutionCommands": [
+        "mkdir -p /dist",
+        "kubectl create namespace production",
+        "cat << 'EOF' > /dist/saga-orchestration.yaml\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: payment-order-saga-definition\n  namespace: production\ndata:\n  sagaId: \"saga-ecommerce-v1\"\n  status: \"Active\"\n  sagaDefinition: \"{\\\"steps\\\":[\\\"AuthorizePayment\\\",\\\"ReserveInventory\\\",\\\"ShipOrder\\\"],\\\"compensations\\\":[\\\"RefundPayment\\\",\\\"ReleaseInventory\\\"]}\"\nEOF",
+        "kubectl apply -f /dist/saga-orchestration.yaml"
+      ],
+      "troubleshootingGuide": [
+        {
+          "problem": "Saga definition ConfigMap missing or fields incorrect.",
+          "cause": "ConfigMap must contain data.sagaId as saga-ecommerce-v1 and data.status as Active in namespace production.",
+          "solution": "Apply /dist/saga-orchestration.yaml to namespace production."
+        }
+      ]
+    }
+  ],
+  "assessmentQuestions": [
+    {
+      "id": "q-dist-01",
+      "question": "Why does a time-based distributed lease (lock) require a monotonically increasing fencing token to ensure mutual exclusion across network partitions?",
+      "options": [
+        "Fencing tokens encrypt network packets over TLS.",
+        "A client holding a lease may experience an unexpected pause (long garbage collection, CPU throttling, hypervisor descheduling) during which its lease expires and another client acquires the lock; a monotonically increasing fencing token allows the storage layer to reject late writes from the zombie previous holder.",
+        "Leases expire immediately without heartbeats.",
+        "Fencing tokens replace the need for consensus algorithms."
+      ],
+      "correctIndex": 1,
+      "explanation": "As detailed by Martin Kleppmann, an expired lock holder may awaken and perform writes unaware that it lost the lock. Fencing tokens provide a strictly increasing sequence number on every lock grant so storage engines reject any write carrying an older token."
+    },
+    {
+      "id": "q-dist-02",
+      "question": "Why is the Saga pattern preferred over Two-Phase Commit (2PC) in highly available distributed cloud architectures?",
+      "options": [
+        "2PC requires no network communication.",
+        "2PC is a blocking protocol where coordinator failures hold locks across distributed databases indefinitely, creating single points of failure and bottlenecking throughput; Sagas execute local ACID transactions asynchronously and rely on forward execution or compensating rollback transactions to achieve eventual consistency.",
+        "Sagas eliminate the need for databases entirely.",
+        "2PC cannot run in containers."
+      ],
+      "correctIndex": 1,
+      "explanation": "2PC requires all participating nodes to hold exclusive database locks until all participants vote and commit, causing massive lock contention and susceptibility to coordinator failure. Sagas trade immediate linearizability for eventual consistency using non-blocking local transactions and compensating rollbacks."
+    }
+  ]
+}

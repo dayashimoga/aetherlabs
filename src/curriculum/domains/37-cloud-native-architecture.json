@@ -1,0 +1,259 @@
+{
+  "id": "cloud-native-architecture",
+  "title": "Cloud-Native Architecture Patterns, 12/15-Factor Design & Custom Operators",
+  "category": "Architecture & System Design",
+  "trackId": "track-platform",
+  "version": "1.0.0",
+  "difficulty": "Advanced",
+  "estimatedHours": 8,
+  "summary": "Master enterprise cloud-native architecture principles: implementing 12/15-factor application contracts (config separation, stateless execution, disposable concurrency, dev/prod parity), architecting Kubernetes Custom Operators with declarative CustomResourceDefinitions (CRDs), level-triggered state convergence, and composite sidecar/ambassador patterns.",
+  "prerequisites": [
+    "multi-cluster-management",
+    "kubernetes-core-v4"
+  ],
+  "learningObjectives": [
+    "Design and deploy 12/15-factor microservices with strict separation of configuration, secrets, and immutable container runtimes.",
+    "Implement Kubernetes Custom Resource Definitions (CRDs) with OpenAPI v3 validation schemas and declarative Operator reconciliation patterns.",
+    "Architect resilient multi-container pod topology patterns including initContainers, logging sidecars, and ambassador network proxies."
+  ],
+  "curriculumModules": [
+    {
+      "id": "mod-arch-01",
+      "title": "12/15-Factor Cloud-Native Architecture & Workload Decoupling",
+      "conceptSummary": "12-factor and modern 15-factor application architecture requires strict workload decoupling: storing dynamic configuration in environment/ConfigMaps, isolating sensitive credentials in external Secrets, executing stateless and share-nothing processes, binding ports explicitly, scaling horizontally via the process model, maximizing robustness with fast startup and graceful shutdown, and streaming telemetry to stdout/stderr.",
+      "productionArchitecturePattern": "Deploy containerized services with complete environment isolation using envFrom referencing ConfigMaps and Secrets, paired with HTTP /healthz liveness and /readyz readiness probes.",
+      "keyCommands": [
+        "kubectl get deployments -n production",
+        "kubectl get configmaps -n production",
+        "kubectl apply -f /arch/twelve-factor-app.yaml"
+      ]
+    },
+    {
+      "id": "mod-arch-02",
+      "title": "The Kubernetes Operator Pattern & Level-Triggered State Convergence",
+      "conceptSummary": "The Operator pattern pairs Custom Resource Definitions (CRDs) with custom controllers that encode human domain operational knowledge into software. Operators utilize level-triggered reconciliation loops (Reconcile) that continually observe the actual cluster state, compare it against desired CR spec, and execute idempotent corrective actions rather than relying on fragile edge-triggered event notifications.",
+      "productionArchitecturePattern": "Register declarative CRDs with strict OpenAPI v3 schema validation and deploy controllers using optimistic concurrency (resourceVersion) to manage complex stateful database clusters.",
+      "keyCommands": [
+        "kubectl get crds",
+        "kubectl apply -f /arch/database-crd.yaml",
+        "kubectl apply -f /arch/prod-db-cluster.yaml"
+      ]
+    }
+  ],
+  "labs": [
+    {
+      "id": "lab-arch-01-twelve-factor-config",
+      "title": "Config & Secret Decoupling with 12-Factor Workload Parity",
+      "difficulty": "Advanced",
+      "durationMinutes": 20,
+      "xpReward": 150,
+      "scenario": "Architect a 12-factor compliant microservice deployment: author ConfigMap checkout-config with LOG_LEVEL: info and CURRENCY: USD, Secret checkout-secrets with API_KEY: sec-token-99, and Deployment checkout-service in namespace production with replicas: 2. Apply all manifests to namespace production.",
+      "productionContext": "Decoupling config and credentials from container images guarantees identical, immutable container binaries can be promoted safely across dev, staging, and production environments.",
+      "prerequisites": [
+        "lab-mcm-02-cilium-clustermesh-mcs"
+      ],
+      "objectives": [
+        "Create namespace production if not present.",
+        "Author ConfigMap checkout-config.",
+        "Author Secret checkout-secrets.",
+        "Author Deployment checkout-service with 2 replicas.",
+        "Apply all manifests to namespace production."
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: checkout-config\n  namespace: production\ndata:\n  LOG_LEVEL: \"info\"\n  CURRENCY: \"USD\"\n---\napiVersion: v1\nkind: Secret\nmetadata:\n  name: checkout-secrets\n  namespace: production\ntype: Opaque\nstringData:\n  API_KEY: \"sec-token-99\"\n---\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: checkout-service\n  namespace: production\nspec:\n  replicas: 2\n  selector:\n    matchLabels:\n      app: checkout-service\n  template:\n    metadata:\n      labels:\n        app: checkout-service\n    spec:\n      containers:\n        - name: api\n          image: nginx:1.27-alpine\n",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Create production namespace",
+          "instruction": "Create namespace production if not present.",
+          "commandHint": "kubectl create namespace production"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Author 12-factor application manifest",
+          "instruction": "Author /arch/twelve-factor-app.yaml containing ConfigMap, Secret, and Deployment.",
+          "commandHint": "cat << 'EOF' > /arch/twelve-factor-app.yaml\n...\nEOF"
+        },
+        {
+          "stepNumber": 3,
+          "title": "Apply application manifest",
+          "instruction": "Apply the manifest to namespace production.",
+          "commandHint": "kubectl apply -f /arch/twelve-factor-app.yaml"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "cm-checkout-config-exists",
+          "description": "ConfigMap checkout-config exists in namespace production",
+          "type": "resource_exists",
+          "kind": "ConfigMap",
+          "namespace": "production",
+          "name": "checkout-config",
+          "remediation": "Apply ConfigMap checkout-config in namespace production"
+        },
+        {
+          "id": "secret-checkout-secrets-exists",
+          "description": "Secret checkout-secrets exists in namespace production",
+          "type": "resource_exists",
+          "kind": "Secret",
+          "namespace": "production",
+          "name": "checkout-secrets",
+          "remediation": "Apply Secret checkout-secrets in namespace production"
+        },
+        {
+          "id": "deploy-checkout-service-exists",
+          "description": "Deployment checkout-service exists in namespace production",
+          "type": "resource_exists",
+          "kind": "Deployment",
+          "namespace": "production",
+          "name": "checkout-service",
+          "remediation": "Apply Deployment checkout-service in namespace production"
+        },
+        {
+          "id": "deploy-checkout-replicas",
+          "description": "Deployment checkout-service has 2 replicas",
+          "type": "resource_field_equals",
+          "kind": "Deployment",
+          "namespace": "production",
+          "name": "checkout-service",
+          "fieldPath": "spec.replicas",
+          "expectedValue": 2,
+          "remediation": "Set spec.replicas: 2 on Deployment checkout-service"
+        }
+      ],
+      "solutionCommands": [
+        "mkdir -p /arch",
+        "kubectl create namespace production",
+        "cat << 'EOF' > /arch/twelve-factor-app.yaml\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: checkout-config\n  namespace: production\ndata:\n  LOG_LEVEL: \"info\"\n  CURRENCY: \"USD\"\n---\napiVersion: v1\nkind: Secret\nmetadata:\n  name: checkout-secrets\n  namespace: production\ntype: Opaque\nstringData:\n  API_KEY: \"sec-token-99\"\n---\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: checkout-service\n  namespace: production\nspec:\n  replicas: 2\n  selector:\n    matchLabels:\n      app: checkout-service\n  template:\n    metadata:\n      labels:\n        app: checkout-service\n    spec:\n      containers:\n        - name: api\n          image: nginx:1.27-alpine\nEOF",
+        "kubectl apply -f /arch/twelve-factor-app.yaml"
+      ],
+      "troubleshootingGuide": [
+        {
+          "problem": "Deployment missing or ConfigMap/Secret not found.",
+          "cause": "All 3 resources must be applied to namespace production.",
+          "solution": "Apply /arch/twelve-factor-app.yaml to namespace production."
+        }
+      ]
+    },
+    {
+      "id": "lab-arch-02-custom-operator-crd",
+      "title": "Authoring Custom Resource Definitions & Operator Custom Resources",
+      "difficulty": "Advanced",
+      "durationMinutes": 20,
+      "xpReward": 150,
+      "scenario": "Provision a cloud-native database cluster managed by a custom Operator: author a CRD manifest in /arch/database-crd.yaml defining kind DatabaseCluster in group databases.kubelabs.io, and instantiate a custom resource in /arch/prod-db-cluster.yaml named prod-db-cluster in namespace production with engine: postgres, version: '16', and replicas: 3. Apply both manifests to the cluster.",
+      "productionContext": "Custom Operators encapsulate Day-2 stateful database tasks (failover, replication, WAL archiving, schema upgrades) into native declarative Kubernetes APIs.",
+      "prerequisites": [
+        "lab-arch-01-twelve-factor-config"
+      ],
+      "objectives": [
+        "Author CRD databaseclusters.databases.kubelabs.io in /arch/database-crd.yaml.",
+        "Apply CRD to cluster.",
+        "Author Custom Resource prod-db-cluster in /arch/prod-db-cluster.yaml.",
+        "Apply DatabaseCluster prod-db-cluster to namespace production."
+      ],
+      "initialClusterState": {
+        "resources": []
+      },
+      "starterManifest": "apiVersion: apiextensions.k8s.io/v1\nkind: CustomResourceDefinition\nmetadata:\n  name: databaseclusters.databases.kubelabs.io\nspec:\n  group: databases.kubelabs.io\n  names:\n    kind: DatabaseCluster\n    plural: databaseclusters\n    singular: databasecluster\n  scope: Namespaced\n---\napiVersion: databases.kubelabs.io/v1\nkind: DatabaseCluster\nmetadata:\n  name: prod-db-cluster\n  namespace: production\nspec:\n  engine: postgres\n  version: \"16\"\n  replicas: 3\n",
+      "steps": [
+        {
+          "stepNumber": 1,
+          "title": "Author and apply CRD",
+          "instruction": "Author /arch/database-crd.yaml and apply to cluster.",
+          "commandHint": "cat << 'EOF' > /arch/database-crd.yaml\n...\nEOF\nkubectl apply -f /arch/database-crd.yaml"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Author and apply Custom Resource",
+          "instruction": "Author /arch/prod-db-cluster.yaml and apply to namespace production.",
+          "commandHint": "cat << 'EOF' > /arch/prod-db-cluster.yaml\n...\nEOF\nkubectl apply -f /arch/prod-db-cluster.yaml"
+        }
+      ],
+      "validationRules": [
+        {
+          "id": "crd-databaseclusters-exists",
+          "description": "CustomResourceDefinition databaseclusters.databases.kubelabs.io exists",
+          "type": "resource_exists",
+          "kind": "CustomResourceDefinition",
+          "name": "databaseclusters.databases.kubelabs.io",
+          "remediation": "Apply CRD databaseclusters.databases.kubelabs.io to the cluster"
+        },
+        {
+          "id": "cr-prod-db-cluster-exists",
+          "description": "DatabaseCluster prod-db-cluster exists in namespace production",
+          "type": "resource_exists",
+          "kind": "DatabaseCluster",
+          "namespace": "production",
+          "name": "prod-db-cluster",
+          "remediation": "Apply DatabaseCluster prod-db-cluster in namespace production"
+        },
+        {
+          "id": "cr-engine-postgres",
+          "description": "DatabaseCluster engine is postgres",
+          "type": "resource_field_equals",
+          "kind": "DatabaseCluster",
+          "namespace": "production",
+          "name": "prod-db-cluster",
+          "fieldPath": "spec.engine",
+          "expectedValue": "postgres",
+          "remediation": "Set spec.engine: postgres on DatabaseCluster prod-db-cluster"
+        },
+        {
+          "id": "cr-replicas-3",
+          "description": "DatabaseCluster replicas is 3",
+          "type": "resource_field_equals",
+          "kind": "DatabaseCluster",
+          "namespace": "production",
+          "name": "prod-db-cluster",
+          "fieldPath": "spec.replicas",
+          "expectedValue": 3,
+          "remediation": "Set spec.replicas: 3 on DatabaseCluster prod-db-cluster"
+        }
+      ],
+      "solutionCommands": [
+        "mkdir -p /arch",
+        "kubectl create namespace production",
+        "cat << 'EOF' > /arch/database-crd.yaml\napiVersion: apiextensions.k8s.io/v1\nkind: CustomResourceDefinition\nmetadata:\n  name: databaseclusters.databases.kubelabs.io\nspec:\n  group: databases.kubelabs.io\n  names:\n    kind: DatabaseCluster\n    plural: databaseclusters\n    singular: databasecluster\n  scope: Namespaced\nEOF",
+        "kubectl apply -f /arch/database-crd.yaml",
+        "cat << 'EOF' > /arch/prod-db-cluster.yaml\napiVersion: databases.kubelabs.io/v1\nkind: DatabaseCluster\nmetadata:\n  name: prod-db-cluster\n  namespace: production\nspec:\n  engine: postgres\n  version: \"16\"\n  replicas: 3\nEOF",
+        "kubectl apply -f /arch/prod-db-cluster.yaml"
+      ],
+      "troubleshootingGuide": [
+        {
+          "problem": "DatabaseCluster CR rejected or CRD missing.",
+          "cause": "The CustomResourceDefinition must be applied before creating instances of DatabaseCluster.",
+          "solution": "Apply /arch/database-crd.yaml first, then apply /arch/prod-db-cluster.yaml."
+        }
+      ]
+    }
+  ],
+  "assessmentQuestions": [
+    {
+      "id": "q-arch-01",
+      "question": "According to 12-factor app methodology, how should application configuration and secret credentials be handled across environments?",
+      "options": [
+        "Embedded directly into the application Dockerfile and committed to git.",
+        "Strictly separated from the code and injected dynamically at runtime via environment variables, ConfigMaps, and external Secret stores, ensuring identical container image promotion across environments.",
+        "Stored in local text files inside the container root filesystem.",
+        "Retrieved via hardcoded IP addresses."
+      ],
+      "correctIndex": 1,
+      "explanation": "Factor III (Config) dictates that configuration that varies between deployments (staging, prod) must be strictly separated from code and provided via environment variables or decoupled platform objects."
+    },
+    {
+      "id": "q-arch-02",
+      "question": "What is the key difference between level-triggered and edge-triggered architectures in Kubernetes controllers?",
+      "options": [
+        "Level-triggered systems only run on bare-metal servers.",
+        "Level-triggered controllers (like Kubernetes Reconcile) evaluate the current state against the desired state continuously and converge idempotently, self-healing even if individual transition events were lost; edge-triggered systems only react to transition events and can get stuck in desynchronized states if an event is dropped.",
+        "Edge-triggered systems require no memory.",
+        "Level-triggered systems cannot handle network requests."
+      ],
+      "correctIndex": 1,
+      "explanation": "Kubernetes controllers are level-triggered. They don't care how many state changes occurred while they were busy; on every reconciliation loop, they observe current state, compare it to desired spec, and take the steps necessary to make reality match intent."
+    }
+  ]
+}

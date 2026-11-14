@@ -96,7 +96,11 @@ const KIND_ALIASES = {
   serviceimport: 'ServiceImport',
   serviceimports: 'ServiceImport',
   serviceexport: 'ServiceExport',
-  serviceexports: 'ServiceExport'
+  serviceexports: 'ServiceExport',
+  databasecluster: 'DatabaseCluster',
+  databaseclusters: 'DatabaseCluster',
+  dbcluster: 'DatabaseCluster',
+  dbclusters: 'DatabaseCluster'
 };
 
 const CLUSTER_SCOPED_KINDS = new Set([
